@@ -1,8 +1,10 @@
-streamlit
+streamlit>=1.28
 pandas
 openpyxl
-fpdf2
 matplotlib
 pdfplumber
 pypdf
-reportlab
+PyMuPDF
+pytesseract
+Pillow
+fpdf2
