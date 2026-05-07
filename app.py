@@ -292,40 +292,101 @@ def clave_por_linea(linea: str) -> Optional[str]:
 # =========================================================
 
 def extraer_lineas_pdf(uploaded_file) -> List[Dict[str, Any]]:
+    """Extrae líneas de un PDF Z-Logic/CGI.
+
+    Estrategia integrada:
+    1) pdfplumber para PDFs con texto embebido.
+    2) pypdf como respaldo.
+    3) OCR con PyMuPDF + Tesseract para PDFs escaneados o generados como imagen.
+
+    En Streamlit Cloud se requiere además packages.txt con:
+    tesseract-ocr
+    tesseract-ocr-spa
+    """
     nombre_archivo = getattr(uploaded_file, "name", "")
+
+    # Importante: asegurar que el puntero del archivo esté al inicio.
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+
     pdf_bytes = uploaded_file.read()
     registros: List[Dict[str, Any]] = []
+    errores_lectura: List[str] = []
 
-    # 1) pdfplumber: suele leer mejor PDFs técnicos
+    def agregar_lineas(texto: str, pagina: int, motor: str) -> None:
+        """Carga líneas útiles al registro común del parser."""
+        for linea in (texto or "").splitlines():
+            linea = linea.strip()
+            if linea:
+                registros.append({
+                    "pagina_pdf": pagina,
+                    "texto_extraido": linea,
+                    "archivo_origen": nombre_archivo,
+                    "motor_extraccion": motor,
+                })
+
+    # 1) pdfplumber: suele leer mejor PDFs técnicos con texto real.
     try:
         import pdfplumber
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for p, page in enumerate(pdf.pages, start=1):
                 texto = page.extract_text() or ""
-                for linea in texto.splitlines():
-                    linea = linea.strip()
-                    if linea:
-                        registros.append({"pagina_pdf": p, "texto_extraido": linea, "archivo_origen": nombre_archivo})
-    except Exception:
-        pass
+                agregar_lineas(texto, p, "pdfplumber")
+    except Exception as e:
+        errores_lectura.append(f"pdfplumber: {e}")
 
-    # 2) pypdf: respaldo
+    # 2) pypdf: respaldo para PDFs con texto embebido.
     if not registros:
         try:
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(pdf_bytes))
             for p, page in enumerate(reader.pages, start=1):
                 texto = page.extract_text() or ""
-                for linea in texto.splitlines():
-                    linea = linea.strip()
-                    if linea:
-                        registros.append({"pagina_pdf": p, "texto_extraido": linea, "archivo_origen": nombre_archivo})
-        except Exception:
-            pass
+                agregar_lineas(texto, p, "pypdf")
+        except Exception as e:
+            errores_lectura.append(f"pypdf: {e}")
+
+    # 3) OCR: para PDF escaneado / imagen.
+    if not registros:
+        try:
+            import fitz  # PyMuPDF
+            import pytesseract
+            from PIL import Image
+
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            for p in range(len(doc)):
+                page = doc[p]
+
+                # 2.5x mejora OCR sin hacer el archivo excesivamente pesado.
+                pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
+                img = Image.open(io.BytesIO(pix.tobytes("png")))
+
+                try:
+                    texto = pytesseract.image_to_string(img, lang="spa+eng")
+                except Exception:
+                    # Respaldo si el paquete español no está instalado.
+                    texto = pytesseract.image_to_string(img, lang="eng")
+
+                agregar_lineas(texto, p + 1, "ocr_tesseract")
+
+        except Exception as e:
+            errores_lectura.append(f"OCR/Tesseract: {e}")
+            st.error(
+                "No se pudo extraer texto del PDF ni aplicar OCR. "
+                "En Streamlit Cloud agregue un archivo packages.txt con: "
+                "tesseract-ocr y tesseract-ocr-spa. "
+                f"Detalle técnico: {' | '.join(errores_lectura)}"
+            )
+
+    # Recuperar el puntero por si otra parte de la app necesita releer el archivo.
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
 
     return registros
-
-
 
 def limpiar_valor_cts(valor: Any) -> Optional[float]:
     """Z-Logic puede informar CTS como 0,34 o como 34 %. Se normaliza a relación."""
