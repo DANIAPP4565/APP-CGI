@@ -7,7 +7,7 @@ Pillow
 fpdf2
 pdfplumber
 pypdf
-PyMuPDF
+pymupdf
 pytesseract
 gspread
 google-auth
