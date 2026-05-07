@@ -5,6 +5,7 @@ openpyxl
 matplotlib
 Pillow
 fpdf2
+reportlab
 pdfplumber
 pypdf
 pymupdf
