@@ -29,59 +29,236 @@ TITULO_MODULO_NO_EMBARAZADA = "MODULO DE EVALUACION HEMODINAMICA NO INVASIVA POR
 # =========================================================
 
 def aplicar_estilos() -> None:
+    """Diseño profesional - paleta médica, contraste WCAG AA, responsive.
+
+    El bloque va dentro de un único <style> sin tags <link> (algunas versiones
+    de Streamlit filtran <link> y eso rompe el parser, dejando el CSS visible
+    como texto en pantalla). Las fuentes se cargan con @import.
+    """
     st.markdown(
         """
         <style>
-        .main { background-color: #f7f9fc; }
-        .block-container { padding-top: 1.2rem; }
-        h1, h2, h3 { color: #0B4F8A !important; }
-        p, li, div, span, label { color: #111827; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        :root {
+            --brand-900:#062A47;
+            --brand-800:#0B3D6E;
+            --brand-700:#0E4F8A;
+            --brand-600:#1264B0;
+            --brand-500:#2C84D8;
+            --brand-50:#EAF3FB;
+            --accent-600:#0F8F7A;
+            --accent-500:#14B8A6;
+            --ok-700:#065F46;
+            --ok-50:#ECFDF5;
+            --warn-700:#92400E;
+            --warn-50:#FFF7ED;
+            --bad-700:#991B1B;
+            --bad-50:#FEF2F2;
+            --ink-900:#0F172A;
+            --ink-800:#1E293B;
+            --ink-700:#334155;
+            --ink-500:#64748B;
+            --ink-400:#94A3B8;
+            --line:#E2E8F0;
+            --surface:#FFFFFF;
+            --bg:#F4F7FB;
+            --shadow-sm:0 1px 2px rgba(15,23,42,.06);
+            --shadow-md:0 4px 14px rgba(15,23,42,.08);
+            --shadow-lg:0 14px 40px rgba(15,23,42,.10);
+        }
+        html, body, .stApp, .main {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+            color: var(--ink-900);
+        }
+        .stApp {
+            background: linear-gradient(180deg, #EFF5FB 0%, #F4F7FB 100%) !important;
+        }
+        .block-container {
+            padding-top: 1.2rem !important;
+            padding-bottom: 3rem !important;
+            max-width: 1280px;
+        }
+        h1, h2, h3, h4 {
+            color: var(--brand-800) !important;
+            letter-spacing: -0.01em;
+            font-weight: 700 !important;
+        }
+        p, li, div, span, label { color: var(--ink-800); }
+        a { color: var(--brand-700); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
         .card {
-            background: white;
-            border: 1px solid #d9e2ec;
+            background: var(--surface);
+            border: 1px solid var(--line);
             border-radius: 18px;
-            padding: 20px;
-            margin-bottom: 16px;
-            box-shadow: 0 4px 18px rgba(0,0,0,0.05);
+            padding: 22px 24px;
+            margin-bottom: 18px;
+            box-shadow: var(--shadow-md);
         }
+        .card h1, .card h2 { margin-top: 0; }
         .metric-card {
-            background: white;
-            border: 1px solid #d9e2ec;
+            background: var(--surface);
+            border: 1px solid var(--line);
             border-radius: 16px;
-            padding: 16px;
+            padding: 16px 18px;
             min-height: 110px;
+            box-shadow: var(--shadow-sm);
         }
-        .ok { color:#065f46; font-weight:700; }
-        .bad { color:#991b1b; font-weight:700; }
-        .warn { color:#92400e; font-weight:700; }
-        .muted { color:#4b5563; }
-        .stButton>button, .stDownloadButton>button {
-            background-color:#0B4F8A !important;
-            color:#FFFFFF !important;
-            border-radius:12px !important;
-            font-weight:700 !important;
-            border:2px solid #083B66 !important;
+        .metric-card:hover { box-shadow: var(--shadow-md); }
+
+        .ok   { color: var(--ok-700);   font-weight: 700; }
+        .bad  { color: var(--bad-700);  font-weight: 700; }
+        .warn { color: var(--warn-700); font-weight: 700; }
+        .muted { color: var(--ink-500); }
+        .pill {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: .78rem;
+            font-weight: 600;
         }
-        .stButton>button *, .stDownloadButton>button * {
-            color:#FFFFFF !important;
+        .pill-ok   { background: var(--ok-50);   color: var(--ok-700);   border: 1px solid #A7F3D0; }
+        .pill-warn { background: var(--warn-50); color: var(--warn-700); border: 1px solid #FED7AA; }
+        .pill-bad  { background: var(--bad-50);  color: var(--bad-700);  border: 1px solid #FECACA; }
+        .pill-info { background: var(--brand-50);color: var(--brand-700);border: 1px solid #BFDBFE; }
+
+        .stButton>button, .stDownloadButton>button, .stFormSubmitButton>button {
+            background: var(--brand-700) !important;
+            color: #FFFFFF !important;
+            border-radius: 12px !important;
+            font-weight: 700 !important;
+            border: 1px solid var(--brand-900) !important;
+            padding: .55rem 1.1rem !important;
+            box-shadow: var(--shadow-sm);
         }
-        .stTextArea textarea {
-            background-color:#FFFFFF !important;
-            color:#111827 !important;
-            border:1px solid #CBD5E1 !important;
+        .stButton>button:hover, .stDownloadButton>button:hover, .stFormSubmitButton>button:hover {
+            background: var(--brand-800) !important;
+            box-shadow: var(--shadow-md);
         }
+        .stButton>button:focus-visible, .stDownloadButton>button:focus-visible, .stFormSubmitButton>button:focus-visible {
+            outline: 3px solid var(--brand-500) !important;
+            outline-offset: 2px;
+        }
+        .stButton>button *, .stDownloadButton>button *, .stFormSubmitButton>button * { color: #FFFFFF !important; }
+
+        .stTextInput input, .stTextArea textarea, .stNumberInput input {
+            background: #FFFFFF !important;
+            color: var(--ink-900) !important;
+            border: 1.5px solid var(--line) !important;
+            border-radius: 10px !important;
+            padding: .55rem .8rem !important;
+        }
+        .stTextInput input:focus, .stTextArea textarea:focus, .stNumberInput input:focus {
+            border-color: var(--brand-600) !important;
+            box-shadow: 0 0 0 3px rgba(44,132,216,.18) !important;
+            outline: none !important;
+        }
+        .stTextInput label, .stTextArea label, .stSelectbox label, .stNumberInput label, .stCheckbox label {
+            color: var(--ink-800) !important;
+            font-weight: 600 !important;
+        }
+        div[data-baseweb="select"] > div {
+            background: #FFFFFF !important;
+            border: 1.5px solid var(--line) !important;
+            border-radius: 10px !important;
+        }
+
         section[data-testid="stSidebar"] {
-            background-color:#EEF3F8 !important;
+            background: #EEF3F8 !important;
+            border-right: 1px solid var(--line);
         }
-        section[data-testid="stSidebar"] * {
-            color:#0F172A !important;
-        }
+        section[data-testid="stSidebar"] * { color: var(--ink-900) !important; }
+        section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 { color: var(--brand-800) !important; }
+        section[data-testid="stSidebar"] .stButton>button { width: 100%; }
+
         div[data-testid="stFileUploader"] section {
-            background-color:#FFFFFF !important;
-            border:1px solid #CBD5E1 !important;
+            background: #FFFFFF !important;
+            border: 1.5px dashed var(--brand-500) !important;
+            border-radius: 14px !important;
         }
-        div[data-testid="stFileUploader"] * {
-            color:#0F172A !important;
+        div[data-testid="stFileUploader"] * { color: var(--ink-900) !important; }
+        div[data-testid="stFileUploader"] section:hover {
+            border-color: var(--brand-700) !important;
+            background: #F8FBFE !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 4px;
+            background: #FFFFFF;
+            padding: 6px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            box-shadow: var(--shadow-sm);
+        }
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 10px !important;
+            padding: 8px 14px !important;
+            color: var(--ink-700) !important;
+            font-weight: 600 !important;
+        }
+        .stTabs [aria-selected="true"] {
+            background: var(--brand-700) !important;
+            color: #FFFFFF !important;
+        }
+        .stTabs [aria-selected="true"] * { color: #FFFFFF !important; }
+
+        div[data-testid="stAlert"] {
+            border-radius: 12px !important;
+            border: 1px solid var(--line) !important;
+        }
+        .stDataFrame, .stTable {
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--line);
+        }
+        .streamlit-expanderHeader, [data-testid="stExpander"] summary {
+            background: #FFFFFF !important;
+            border-radius: 12px !important;
+            border: 1px solid var(--line) !important;
+            font-weight: 600 !important;
+            color: var(--ink-900) !important;
+        }
+
+        .login-shell {
+            display: flex;
+            justify-content: center;
+            padding: 1.5rem 1rem 1rem;
+        }
+        .login-card {
+            width: 100%;
+            max-width: 460px;
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            padding: 28px 28px 22px;
+            box-shadow: var(--shadow-lg);
+        }
+        .login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+        .login-logo {
+            width: 48px; height: 48px;
+            border-radius: 14px;
+            background: var(--brand-700);
+            color: #FFFFFF;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.1rem; font-weight: 800;
+            box-shadow: var(--shadow-md);
+        }
+        .login-title { font-size: 1.2rem; font-weight: 800; color: var(--brand-800); margin: 0; }
+        .login-sub { font-size: .85rem; color: var(--ink-500); margin: 2px 0 0; }
+        .login-hint { font-size: .82rem; color: var(--ink-500); margin-top: 10px; }
+        .login-divider { height: 1px; background: var(--line); margin: 14px 0; }
+
+        @media (max-width: 720px) {
+            .block-container { padding-left: .8rem !important; padding-right: .8rem !important; }
+            .card { padding: 16px; border-radius: 14px; }
+            .metric-card { min-height: 92px; padding: 14px; }
+            .login-card { padding: 22px 18px; border-radius: 18px; }
+            .stTabs [data-baseweb="tab"] { padding: 6px 10px !important; font-size: .9rem; }
+            h1 { font-size: 1.4rem !important; }
+            h2 { font-size: 1.15rem !important; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            * { transition: none !important; animation: none !important; }
         }
         </style>
         """,
@@ -292,101 +469,40 @@ def clave_por_linea(linea: str) -> Optional[str]:
 # =========================================================
 
 def extraer_lineas_pdf(uploaded_file) -> List[Dict[str, Any]]:
-    """Extrae líneas de un PDF Z-Logic/CGI.
-
-    Estrategia integrada:
-    1) pdfplumber para PDFs con texto embebido.
-    2) pypdf como respaldo.
-    3) OCR con PyMuPDF + Tesseract para PDFs escaneados o generados como imagen.
-
-    En Streamlit Cloud se requiere además packages.txt con:
-    tesseract-ocr
-    tesseract-ocr-spa
-    """
     nombre_archivo = getattr(uploaded_file, "name", "")
-
-    # Importante: asegurar que el puntero del archivo esté al inicio.
-    try:
-        uploaded_file.seek(0)
-    except Exception:
-        pass
-
     pdf_bytes = uploaded_file.read()
     registros: List[Dict[str, Any]] = []
-    errores_lectura: List[str] = []
 
-    def agregar_lineas(texto: str, pagina: int, motor: str) -> None:
-        """Carga líneas útiles al registro común del parser."""
-        for linea in (texto or "").splitlines():
-            linea = linea.strip()
-            if linea:
-                registros.append({
-                    "pagina_pdf": pagina,
-                    "texto_extraido": linea,
-                    "archivo_origen": nombre_archivo,
-                    "motor_extraccion": motor,
-                })
-
-    # 1) pdfplumber: suele leer mejor PDFs técnicos con texto real.
+    # 1) pdfplumber: suele leer mejor PDFs técnicos
     try:
         import pdfplumber
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for p, page in enumerate(pdf.pages, start=1):
                 texto = page.extract_text() or ""
-                agregar_lineas(texto, p, "pdfplumber")
-    except Exception as e:
-        errores_lectura.append(f"pdfplumber: {e}")
+                for linea in texto.splitlines():
+                    linea = linea.strip()
+                    if linea:
+                        registros.append({"pagina_pdf": p, "texto_extraido": linea, "archivo_origen": nombre_archivo})
+    except Exception:
+        pass
 
-    # 2) pypdf: respaldo para PDFs con texto embebido.
+    # 2) pypdf: respaldo
     if not registros:
         try:
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(pdf_bytes))
             for p, page in enumerate(reader.pages, start=1):
                 texto = page.extract_text() or ""
-                agregar_lineas(texto, p, "pypdf")
-        except Exception as e:
-            errores_lectura.append(f"pypdf: {e}")
-
-    # 3) OCR: para PDF escaneado / imagen.
-    if not registros:
-        try:
-            import fitz  # PyMuPDF
-            import pytesseract
-            from PIL import Image
-
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            for p in range(len(doc)):
-                page = doc[p]
-
-                # 2.5x mejora OCR sin hacer el archivo excesivamente pesado.
-                pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
-                img = Image.open(io.BytesIO(pix.tobytes("png")))
-
-                try:
-                    texto = pytesseract.image_to_string(img, lang="spa+eng")
-                except Exception:
-                    # Respaldo si el paquete español no está instalado.
-                    texto = pytesseract.image_to_string(img, lang="eng")
-
-                agregar_lineas(texto, p + 1, "ocr_tesseract")
-
-        except Exception as e:
-            errores_lectura.append(f"OCR/Tesseract: {e}")
-            st.error(
-                "No se pudo extraer texto del PDF ni aplicar OCR. "
-                "En Streamlit Cloud agregue un archivo packages.txt con: "
-                "tesseract-ocr y tesseract-ocr-spa. "
-                f"Detalle técnico: {' | '.join(errores_lectura)}"
-            )
-
-    # Recuperar el puntero por si otra parte de la app necesita releer el archivo.
-    try:
-        uploaded_file.seek(0)
-    except Exception:
-        pass
+                for linea in texto.splitlines():
+                    linea = linea.strip()
+                    if linea:
+                        registros.append({"pagina_pdf": p, "texto_extraido": linea, "archivo_origen": nombre_archivo})
+        except Exception:
+            pass
 
     return registros
+
+
 
 def limpiar_valor_cts(valor: Any) -> Optional[float]:
     """Z-Logic puede informar CTS como 0,34 o como 34 %. Se normaliza a relación."""
@@ -3396,6 +3512,92 @@ def excel_bytes_from_df(df: pd.DataFrame) -> Optional[bytes]:
         return None
 
 
+def construir_fila_paciente_integrada(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+    """Devuelve un DataFrame de UNA SOLA fila con los datos integrados del paciente.
+
+    Toma los datos clinicos (PAS/PAD ficha clinica) y las metricas hemodinamicas
+    (CINTA basal/acostada) ya consolidadas por extraer_resumen_integrado, y
+    agrega las conclusiones diagnosticas. Esta es la fila final por paciente
+    que resulta de la integracion de los uno o dos PDFs cargados.
+    """
+    if df is None or (hasattr(df, "empty") and df.empty):
+        return pd.DataFrame()
+
+    r = extraer_resumen_integrado(df) or {}
+    contexto_embarazo = contexto_embarazo or {}
+
+    fila = {
+        "Paciente": r.get("paciente"),
+        "DNI": sanitizar_dni(r.get("dni")) if "sanitizar_dni" in globals() else r.get("dni"),
+        "Edad": r.get("edad"),
+        "Fecha_nacimiento": r.get("fecha_nacimiento"),
+        "Fecha_estudio": r.get("fecha"),
+        "Obra_social": r.get("obra_social"),
+        "Metodo_referencia": r.get("metodo_referencia"),
+        "Posicion_referencia": r.get("posicion_referencia"),
+        "PAS_mmHg": limpiar_numero(r.get("pas")),
+        "PAD_mmHg": limpiar_numero(r.get("pad")),
+        "FC_lpm": limpiar_numero(r.get("fc")),
+        "IC_L_min_m2": limpiar_numero(r.get("ic")),
+        "IRV_RVS": limpiar_numero(r.get("irv")),
+        "CA": limpiar_numero(r.get("ca")),
+        "CFT": limpiar_numero(r.get("cft")),
+        "CFTnr": limpiar_numero(r.get("cftnr")),
+        "IV": limpiar_numero(r.get("iv")),
+        "IAC": limpiar_numero(r.get("iac")),
+        "CTS": limpiar_numero(r.get("cts")),
+        "EA_Capan": limpiar_numero(r.get("ea")),
+        "EES_Capan": limpiar_numero(r.get("ees")),
+        "EA_EES_AVA": limpiar_numero(r.get("ava")),
+        "DS": limpiar_numero(r.get("ds")),
+        "IDS": limpiar_numero(r.get("ids")),
+        "Z0": limpiar_numero(r.get("z0")),
+        "Perfil_hemodinamico": diagnostico_perfil_hemodinamico(r.get("ic"), r.get("irv")),
+        "Estado_volemico": diagnostico_volemia(r.get("cft"), r.get("cftnr")),
+        "Contractilidad": diagnostico_contractilidad(r.get("iv"), r.get("iac"), r.get("cts")),
+        "Acoplamiento_VA": diagnostico_acoplamiento(r.get("ea"), r.get("ees"), r.get("ava")),
+        "Tiene_registro_de_pie": bool(r.get("df_de_pie_disponible")),
+    }
+
+    if contexto_embarazo.get("embarazada"):
+        fila["Embarazo"] = "SI"
+        fila["Edad_gestacional"] = contexto_embarazo.get("edad_gestacional")
+        fila["HDP_sospecha_PE"] = "SI" if contexto_embarazo.get("hdp") else "NO"
+        fila["Crecimiento_fetal"] = contexto_embarazo.get("crecimiento_fetal")
+        fila["Doppler_uterino"] = contexto_embarazo.get("doppler_uterino")
+        fila["IMC_materno"] = contexto_embarazo.get("imc")
+    else:
+        fila["Embarazo"] = "NO"
+
+    return pd.DataFrame([fila])
+
+
+def excel_bytes_paciente_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> Optional[bytes]:
+    """Genera un Excel con UNA SOLA FILA por paciente, resultado de la integracion.
+
+    La hoja principal 'Paciente_integrado' contiene la fila unica con datos
+    demograficos, metricas hemodinamicas integradas y conclusiones diagnosticas.
+    Se incluye una hoja secundaria 'Datos_crudos' opcional con el detalle por
+    archivo, para auditoria.
+    """
+    try:
+        fila = construir_fila_paciente_integrada(df, contexto_embarazo)
+        if fila is None or fila.empty:
+            return None
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            fila.to_excel(writer, index=False, sheet_name="Paciente_integrado")
+            try:
+                if df is not None and not df.empty:
+                    df.to_excel(writer, index=False, sheet_name="Datos_crudos")
+            except Exception:
+                pass
+        output.seek(0)
+        return output.getvalue()
+    except Exception:
+        return None
+
+
 
 
 # =========================================================
@@ -4899,11 +5101,26 @@ def _asegurar_directorio_app() -> None:
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _normalizar_usuario(usuario: Any) -> str:
+    """Normalización idéntica entre registro y login para evitar desajustes."""
+    return normalizar_txt(str(usuario or "")).replace(" ", "_").strip()
+
+
+def _normalizar_clave(clave: Any) -> str:
+    """Limpia espacios externos pero conserva el contenido."""
+    return str(clave if clave is not None else "").strip()
+
+
 def _hash_clave(clave: str, salt: Optional[str] = None) -> Dict[str, str]:
-    """Hash local de clave. No guarda claves en texto plano."""
+    """Hash local de clave. No guarda claves en texto plano.
+
+    El salt se persiste y se reutiliza en cada autenticación para que el hash
+    sea reproducible. Si el salt almacenado fuera inválido se genera uno nuevo.
+    """
     import hashlib
     import secrets
-    salt = salt or secrets.token_hex(16)
+    if not isinstance(salt, str) or not salt:
+        salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256",
         str(clave).encode("utf-8"),
@@ -4934,60 +5151,143 @@ def guardar_usuarios_app(usuarios: Dict[str, Any]) -> None:
 
 
 def registrar_usuario_app(usuario: str, clave: str, nombre: str = "", matricula: str = "") -> Tuple[bool, str]:
-    usuario = normalizar_txt(usuario).replace(" ", "_")
+    usuario = _normalizar_usuario(usuario)
+    clave = _normalizar_clave(clave)
     if not usuario or len(usuario) < 3:
         return False, "El usuario debe tener al menos 3 caracteres."
     if not clave or len(clave) < 4:
         return False, "La clave debe tener al menos 4 caracteres."
     usuarios = cargar_usuarios_app()
     if usuario in usuarios:
-        return False, "Ese usuario ya existe. Ingrese con su clave o cree otro usuario."
+        return False, "Ese usuario ya existe. Ingrese con su clave o use 'Restablecer clave'."
     hp = _hash_clave(clave)
     usuarios[usuario] = {
         "usuario": usuario,
-        "nombre": nombre.strip() or usuario,
-        "matricula": matricula.strip(),
+        "nombre": (nombre or "").strip() or usuario,
+        "matricula": (matricula or "").strip(),
         "salt": hp["salt"],
         "hash": hp["hash"],
         "rol": "admin" if len(usuarios) == 0 else "usuario",
         "fecha_alta": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     guardar_usuarios_app(usuarios)
-    return True, "Usuario registrado correctamente."
+    return True, "Usuario registrado correctamente. Ya puede ingresar."
+
+
+def _buscar_usuario_flexible(usuarios: Dict[str, Any], usuario_norm: str) -> Optional[str]:
+    """Busca el usuario tolerando variaciones de mayúsculas, acentos o espacios."""
+    if not usuario_norm:
+        return None
+    if usuario_norm in usuarios:
+        return usuario_norm
+    for k in list(usuarios.keys()):
+        if _normalizar_usuario(k) == usuario_norm:
+            return k
+    return None
 
 
 def autenticar_usuario_app(usuario: str, clave: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
-    usuario = normalizar_txt(usuario).replace(" ", "_")
+    usuario_norm = _normalizar_usuario(usuario)
+    clave_norm = _normalizar_clave(clave)
+    if not usuario_norm:
+        return False, None, "Ingrese el nombre de usuario."
+    if not clave_norm:
+        return False, None, "Ingrese la clave."
     usuarios = cargar_usuarios_app()
-    info = usuarios.get(usuario)
-    if not info:
-        return False, None, "Usuario no encontrado."
-    hp = _hash_clave(clave, salt=info.get("salt"))
-    if hp.get("hash") != info.get("hash"):
-        return False, None, "Clave incorrecta."
+    if not usuarios:
+        return False, None, "Aun no hay usuarios registrados. Vaya a la pestana 'Registrar nuevo usuario'."
+    real_key = _buscar_usuario_flexible(usuarios, usuario_norm)
+    if real_key is None:
+        return False, None, "Usuario no encontrado. Verifique el nombre o registrese."
+    info = usuarios.get(real_key) or {}
+    salt_guardado = info.get("salt") or ""
+    hash_guardado = info.get("hash") or ""
+    if not salt_guardado or not hash_guardado:
+        return False, None, "Registro de usuario corrupto: use 'Restablecer clave' para recrear el acceso."
+    hp = _hash_clave(clave_norm, salt=salt_guardado)
+    if hp.get("hash") != hash_guardado:
+        # Compatibilidad con registros viejos guardados sin recortar espacios.
+        hp_legacy = _hash_clave(str(clave), salt=salt_guardado)
+        if hp_legacy.get("hash") != hash_guardado:
+            return False, None, "Clave incorrecta. Verifique mayusculas/minusculas y el bloqueo numerico."
     return True, info, "Ingreso correcto."
 
 
+def restablecer_clave_usuario_app(usuario: str, nueva_clave: str, nueva_clave2: str) -> Tuple[bool, str]:
+    """Permite a un usuario existente restablecer su clave en el equipo local."""
+    usuario_norm = _normalizar_usuario(usuario)
+    nueva = _normalizar_clave(nueva_clave)
+    nueva2 = _normalizar_clave(nueva_clave2)
+    if not usuario_norm:
+        return False, "Ingrese el nombre de usuario."
+    if nueva != nueva2:
+        return False, "Las claves nuevas no coinciden."
+    if len(nueva) < 4:
+        return False, "La clave debe tener al menos 4 caracteres."
+    usuarios = cargar_usuarios_app()
+    real_key = _buscar_usuario_flexible(usuarios, usuario_norm)
+    if real_key is None:
+        return False, "Usuario no encontrado. Registrelo primero."
+    hp = _hash_clave(nueva)
+    usuarios[real_key]["salt"] = hp["salt"]
+    usuarios[real_key]["hash"] = hp["hash"]
+    usuarios[real_key]["fecha_actualizacion_clave"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    guardar_usuarios_app(usuarios)
+    return True, "Clave actualizada. Ya puede ingresar con la nueva clave."
+
+
 def mostrar_login_registro_app() -> Optional[Dict[str, Any]]:
-    """Pantalla de acceso. Devuelve usuario autenticado o detiene la app."""
+    """Pantalla de acceso profesional con formulario robusto.
+
+    Usa st.form para garantizar que los inputs viajen junto con el submit en
+    una unica pasada. Incluye una pestana de 'Restablecer clave' para
+    auto-recuperacion local.
+    """
     if st.session_state.get("usuario_actual"):
         return st.session_state["usuario_actual"]
 
     st.markdown(
         """
-        <div class='card'>
-            <h1>🔐 APP CGI - Acceso de usuario</h1>
-            <p class='muted'>Cada médico/usuario trabaja con clave propia y con historial acumulado independiente.</p>
+        <div class='login-shell'>
+            <div class='login-card'>
+                <div class='login-brand'>
+                    <div class='login-logo'>HD</div>
+                    <div>
+                        <p class='login-title'>APP CGI - Acceso seguro</p>
+                        <p class='login-sub'>Informe Hemodinamico Integrado por Cardiografia de Impedancia</p>
+                    </div>
+                </div>
+                <div class='login-divider'></div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    tab_login, tab_registro = st.tabs(["Ingresar", "Registrar nuevo usuario"])
+    tab_login, tab_registro, tab_reset = st.tabs([
+        "Ingresar",
+        "Registrar usuario",
+        "Restablecer clave",
+    ])
+
     with tab_login:
-        u = st.text_input("Usuario", key="login_usuario")
-        c = st.text_input("Clave", type="password", key="login_clave")
-        if st.button("Ingresar", key="btn_login"):
+        with st.form("form_login_acceso", clear_on_submit=False):
+            u = st.text_input(
+                "Usuario",
+                key="login_usuario",
+                placeholder="su_usuario",
+                autocomplete="username",
+            )
+            ver_clave = st.checkbox("Mostrar clave", value=False, key="login_ver_clave")
+            c = st.text_input(
+                "Clave",
+                type=("default" if ver_clave else "password"),
+                key="login_clave",
+                placeholder="*****",
+                autocomplete="current-password",
+            )
+            submit_login = st.form_submit_button("Ingresar", use_container_width=True)
+        if submit_login:
             ok, info, msg = autenticar_usuario_app(u, c)
             if ok and info:
                 st.session_state["usuario_actual"] = info
@@ -4995,22 +5295,72 @@ def mostrar_login_registro_app() -> Optional[Dict[str, Any]]:
                 st.rerun()
             else:
                 st.error(msg)
+        st.caption("Si olvido su clave puede recrear el acceso desde la pestana 'Restablecer clave'.")
 
     with tab_registro:
-        nombre = st.text_input("Nombre y apellido", key="reg_nombre")
-        matricula = st.text_input("Matrícula profesional", key="reg_matricula")
-        u2 = st.text_input("Nuevo usuario", key="reg_usuario")
-        c2 = st.text_input("Nueva clave", type="password", key="reg_clave")
-        c3 = st.text_input("Repetir clave", type="password", key="reg_clave2")
-        if st.button("Registrar usuario", key="btn_registrar"):
+        with st.form("form_registro_acceso", clear_on_submit=False):
+            colA, colB = st.columns(2)
+            with colA:
+                nombre = st.text_input("Nombre y apellido", key="reg_nombre")
+            with colB:
+                matricula = st.text_input("Matricula profesional", key="reg_matricula")
+            u2 = st.text_input(
+                "Nuevo usuario",
+                key="reg_usuario",
+                placeholder="ej: dr_olano",
+                help="Minimo 3 caracteres. Se normaliza a minusculas y sin acentos.",
+                autocomplete="username",
+            )
+            ver_clave_reg = st.checkbox("Mostrar clave", value=False, key="reg_ver_clave")
+            c2 = st.text_input(
+                "Nueva clave",
+                type=("default" if ver_clave_reg else "password"),
+                key="reg_clave",
+                help="Minimo 4 caracteres.",
+                autocomplete="new-password",
+            )
+            c3 = st.text_input(
+                "Repetir clave",
+                type=("default" if ver_clave_reg else "password"),
+                key="reg_clave2",
+                autocomplete="new-password",
+            )
+            submit_registro = st.form_submit_button("Registrar usuario", use_container_width=True)
+        if submit_registro:
             if c2 != c3:
                 st.error("Las claves no coinciden.")
             else:
                 ok, msg = registrar_usuario_app(u2, c2, nombre, matricula)
                 if ok:
-                    st.success(msg + " Ahora puede ingresar.")
+                    st.success(msg)
                 else:
                     st.error(msg)
+
+    with tab_reset:
+        st.caption("Si tiene un usuario creado en este equipo y olvido la clave, puede definir una nueva aqui.")
+        with st.form("form_reset_acceso", clear_on_submit=False):
+            ru = st.text_input("Usuario", key="reset_usuario", autocomplete="username")
+            ver_clave_rst = st.checkbox("Mostrar clave", value=False, key="reset_ver_clave")
+            rc1 = st.text_input(
+                "Nueva clave",
+                type=("default" if ver_clave_rst else "password"),
+                key="reset_clave",
+                autocomplete="new-password",
+            )
+            rc2 = st.text_input(
+                "Repetir nueva clave",
+                type=("default" if ver_clave_rst else "password"),
+                key="reset_clave2",
+                autocomplete="new-password",
+            )
+            submit_reset = st.form_submit_button("Restablecer clave", use_container_width=True)
+        if submit_reset:
+            ok, msg = restablecer_clave_usuario_app(ru, rc1, rc2)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
     st.stop()
 
 
@@ -5913,13 +6263,14 @@ with col_pdf2:
             key="download_pdf_resumido",
         )
 
-excel_bytes = excel_bytes_from_df(df_final)
+excel_bytes = excel_bytes_paciente_integrado(df_final, contexto_embarazo)
 if excel_bytes:
     st.download_button(
-        "📊 Descargar datos estructurados Excel",
+        "📊 Descargar fila integrada del paciente (Excel)",
         data=excel_bytes,
-        file_name=f"Datos_CGI_integrados_{nombre}.xlsx",
+        file_name=f"Paciente_CGI_integrado_{nombre}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Una sola fila por paciente con los datos integrados de los PDFs (hoja 'Paciente_integrado'). El detalle crudo por archivo queda en la hoja 'Datos_crudos'.",
     )
 
 
