@@ -1752,35 +1752,155 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
     return f"Relación EA/EES fuera de rango fisiológico esperado: {fmt(avav)}. Revisar datos fuente."
 
 
-def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Devuelve resumen basal y de pie.
-    Basal: medición con CINTA/basal-acostada.
-    De pie: solo la fila que diga explícitamente DE PIE.
+def _valor_fila_case_insensitive(fila: Dict[str, Any], *claves: str) -> Any:
+    """Busca valores de una fila sin depender de mayúsculas/minúsculas ni del nombre exacto.
+
+    Corrección crítica para ortostatismo:
+    - IC puede venir como IC, ic, Índice Cardíaco, Cardiac Index o CI.
+    - IRV puede venir como IRV, RVS, SVR o Resistencia Vascular Sistémica.
+    - Evita que el delta quede artificialmente en 0 por no encontrar la clave correcta.
     """
-    dfx = estandarizar_columnas_clinicas(df)
-    base = seleccionar_df_diagnostico(dfx)
-    pie = seleccionar_df_de_pie(dfx)
-    if not base.empty and not pie.empty:
-        return extraer_resumen_integrado(base.iloc[[0]]), extraer_resumen_integrado(pie.iloc[[0]])
-    if not base.empty:
-        return extraer_resumen_integrado(base.iloc[[0]]), {}
-    return {}, {}
+    if not fila:
+        return None
+
+    mapa = {normalizar_txt(k).replace(" ", "_"): v for k, v in fila.items()}
+
+    for clave in claves:
+        k = normalizar_txt(clave).replace(" ", "_")
+        if k in mapa and es_valor_util(mapa[k]):
+            return mapa[k]
+
+    equivalencias = {
+        "ic": ["ic", "indice_cardiaco", "índice_cardíaco", "cardiac_index", "ci"],
+        "irv": ["irv", "rvs", "svr", "resistencia_vascular_sistemica", "resistencia_vascular_sistémica"],
+        "rvs": ["irv", "rvs", "svr", "resistencia_vascular_sistemica", "resistencia_vascular_sistémica"],
+        "fc": ["fc", "frecuencia_cardiaca", "frecuencia_cardíaca", "heart_rate", "hr"],
+        "pas": ["pas", "sistolica", "sistólica", "sbp", "sys"],
+        "pad": ["pad", "diastolica", "diastólica", "dbp", "dia"],
+        "ca": ["ca", "complacencia_arterial", "arterial_compliance"],
+        "cft": ["cft", "tfc", "contenido_de_fluidos_toracicos", "contenido_de_fluidos_torácicos"],
+        "cftnr": ["cftnr", "cft_nr", "cft_normalizado", "thoracic_fluid_index", "tfi"],
+    }
+
+    for clave in claves:
+        ck = normalizar_txt(clave).replace(" ", "_")
+        for alt in equivalencias.get(ck, []):
+            alt_n = normalizar_txt(alt).replace(" ", "_")
+            if alt_n in mapa and es_valor_util(mapa[alt_n]):
+                return mapa[alt_n]
+
+    return None
+
+
+def extraer_resumen_ortostatico_desde_fila(fila: pd.Series) -> Dict[str, Any]:
+    """Extrae métricas directamente de UNA fila real.
+
+    No usa extraer_resumen_integrado(), porque esa función puede volver a seleccionar
+    el registro basal y hacer que acostado y de pie queden iguales.
+    """
+    d = fila.to_dict()
+    return {
+        "paciente": _valor_fila_case_insensitive(d, "Paciente", "paciente"),
+        "posicion": detectar_posicion_fila(d),
+        "metodo": detectar_metodo_fila(d),
+        "ic": limpiar_numero(_valor_fila_case_insensitive(d, "IC", "ic", "indice cardiaco", "cardiac index", "ci")),
+        "irv": limpiar_numero(_valor_fila_case_insensitive(d, "IRV", "RVS", "SVR", "irv", "rvs")),
+        "fc": limpiar_numero(_valor_fila_case_insensitive(d, "FC", "fc", "frecuencia cardiaca", "heart rate")),
+        "pas": limpiar_numero(_valor_fila_case_insensitive(d, "PAS", "pas")),
+        "pad": limpiar_numero(_valor_fila_case_insensitive(d, "PAD", "pad")),
+        "ca": limpiar_numero(_valor_fila_case_insensitive(d, "CA", "ca")),
+        "cft": limpiar_numero(_valor_fila_case_insensitive(d, "CFT", "cft")),
+        "cftnr": limpiar_numero(_valor_fila_case_insensitive(d, "CFTnr", "cftnr")),
+    }
+
+
+def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Devuelve resumen basal/acostado y de pie con selección real de filas.
+
+    Basal:
+    1) CINTA no-de-pie.
+    2) Acostado/decúbito.
+    3) Cualquier fila no-de-pie.
+
+    De pie:
+    - Solo fila reconocida explícitamente como de pie.
+
+    Corrección crítica:
+    no se reintegra cada sub-DataFrame, para evitar que el registro basal sea reutilizado
+    como registro de pie y genere ΔIC = 0 o ΔIRV = 0 artificial.
+    """
+    if df is None or df.empty:
+        return {}, {}
+
+    dfx = estandarizar_columnas_clinicas(df).copy()
+    if dfx.empty:
+        return {}, {}
+
+    dfx["Posición_reconocida"] = [detectar_posicion_fila(f.to_dict()) for _, f in dfx.iterrows()]
+    dfx["Método_reconocido"] = [detectar_metodo_fila(f.to_dict()) for _, f in dfx.iterrows()]
+
+    basal = dfx[(dfx["Método_reconocido"] == "cinta") & (dfx["Posición_reconocida"] != "de_pie")]
+
+    if basal.empty:
+        basal = dfx[dfx["Posición_reconocida"] == "acostado"]
+
+    if basal.empty:
+        basal = dfx[dfx["Posición_reconocida"] != "de_pie"]
+
+    pie = dfx[dfx["Posición_reconocida"] == "de_pie"]
+
+    r_basal = extraer_resumen_ortostatico_desde_fila(basal.iloc[0]) if not basal.empty else {}
+    r_pie = extraer_resumen_ortostatico_desde_fila(pie.iloc[-1]) if not pie.empty else {}
+
+    return r_basal, r_pie
+
+
+def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
+    """Calcula deltas ortostáticos como: valor de pie - valor basal/acostado."""
+    r1, r2 = obtener_resumenes_ortostaticos(df)
+
+    resultado = {
+        "basal": r1,
+        "de_pie": r2,
+        "delta_ic": None,
+        "delta_irv": None,
+        "delta_fc": None,
+        "delta_pas": None,
+        "delta_pad": None,
+        "detalle": "",
+    }
+
+    pares = [
+        ("ic", "delta_ic", "IC", "L/min/m²"),
+        ("irv", "delta_irv", "IRV/RVS", "dyn·s·cm⁻⁵"),
+        ("fc", "delta_fc", "FC", "lpm"),
+        ("pas", "delta_pas", "PAS", "mmHg"),
+        ("pad", "delta_pad", "PAD", "mmHg"),
+    ]
+
+    partes = []
+    for key, out_key, nombre, unidad in pares:
+        v1 = limpiar_numero(r1.get(key))
+        v2 = limpiar_numero(r2.get(key))
+        if v1 is None or v2 is None:
+            continue
+        delta = v2 - v1
+        resultado[out_key] = delta
+        partes.append(f"{nombre}: basal {fmt(v1)} → de pie {fmt(v2)}; Δ {fmt(delta)} {unidad}")
+
+    resultado["detalle"] = " | ".join(partes) if partes else "No se pudieron calcular deltas ortostáticos por datos incompletos."
+    return resultado
 
 
 def interpretar_ortostatismo(df: pd.DataFrame) -> str:
-    if len(df) < 2:
-        return "No aplicable: se requieren dos registros para comparar."
-    r1, r2 = obtener_resumenes_ortostaticos(df)
-    partes = []
-    for nombre, key, unidad in [
-        ("índice cardíaco", "ic", "L/min/m²"),
-        ("resistencia vascular sistémica", "irv", "dyn·s·cm⁻⁵"),
-        ("frecuencia cardíaca", "fc", "lpm"),
-    ]:
-        v1, v2 = limpiar_numero(r1.get(key)), limpiar_numero(r2.get(key))
-        if v1 is not None and v2 is not None:
-            partes.append(f"El {nombre} cambia {fmt(v2 - v1)} {unidad} entre ambos registros.")
-    return " ".join(partes) if partes else "No se pudo realizar análisis ortostático automático por datos incompletos."
+    if df is None or len(df) < 2:
+        return "No aplicable: se requieren dos registros comparables, basal/acostado y de pie."
+
+    d = calcular_delta_ortostatico(df)
+    if not d.get("detalle") or "No se pudieron" in d.get("detalle", ""):
+        return d.get("detalle", "No se pudo realizar análisis ortostático automático por datos incompletos.")
+
+    return "Análisis ortostático automático: " + d["detalle"] + "."
 
 
 # =========================================================
@@ -1810,23 +1930,25 @@ def evaluar_dominio_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
             "detalle": "Dominio ortostático no evaluable: se requieren dos registros comparables.",
         }
 
-    r1, r2 = obtener_resumenes_ortostaticos(df)
+    d = calcular_delta_ortostatico(df)
 
     cambios = []
     scores = []
 
-    for nombre, key, limite_adecuado, limite_alterado, unidad in [
-        ("IC", "ic", 0.2, 1.0, "L/min/m²"),
-        ("IRV/RVS", "irv", 100, 800, "dyn·s·cm⁻⁵"),
-        ("FC", "fc", 3, 30, "lpm"),
-    ]:
-        v1 = limpiar_numero(r1.get(key))
-        v2 = limpiar_numero(r2.get(key))
-        if v1 is None or v2 is None:
+    reglas = [
+        ("IC", "delta_ic", 0.20, 1.00, "L/min/m²"),
+        ("IRV/RVS", "delta_irv", 100, 800, "dyn·s·cm⁻⁵"),
+        ("FC", "delta_fc", 3, 30, "lpm"),
+    ]
+
+    for nombre, key, limite_adecuado, limite_alterado, unidad in reglas:
+        delta = limpiar_numero(d.get(key))
+        if delta is None:
             continue
-        delta = v2 - v1
+
         cambios.append(f"Δ{nombre}: {fmt(delta)} {unidad}")
         abs_delta = abs(delta)
+
         if abs_delta <= limite_adecuado:
             scores.append(1.0)
         elif abs_delta >= limite_alterado:
@@ -1838,7 +1960,7 @@ def evaluar_dominio_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
         return {
             "score": None,
             "estado": "No disponible",
-            "detalle": "Dominio ortostático no evaluable por ausencia de métricas comparables entre ambos PDFs.",
+            "detalle": "Dominio ortostático no evaluable por ausencia de IC/IRV/FC comparables entre basal y de pie.",
         }
 
     score = sum(scores) / len(scores)
@@ -6029,6 +6151,49 @@ if df_final.empty:
 
 st.subheader("Datos integrados estructurados")
 st.dataframe(df_final, use_container_width=True)
+
+# =========================================================
+# CONTROL VISUAL DE CAMBIOS ORTOSTÁTICOS CORREGIDO
+# =========================================================
+st.subheader("Control de cambios ortostáticos")
+try:
+    delta_orto = calcular_delta_ortostatico(df_final)
+    st.write(delta_orto.get("detalle", "No se pudieron calcular deltas ortostáticos."))
+
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Posición": "Basal / acostado",
+                "Método": delta_orto.get("basal", {}).get("metodo"),
+                "IC": delta_orto.get("basal", {}).get("ic"),
+                "IRV/RVS": delta_orto.get("basal", {}).get("irv"),
+                "FC": delta_orto.get("basal", {}).get("fc"),
+                "PAS": delta_orto.get("basal", {}).get("pas"),
+                "PAD": delta_orto.get("basal", {}).get("pad"),
+            },
+            {
+                "Posición": "De pie",
+                "Método": delta_orto.get("de_pie", {}).get("metodo"),
+                "IC": delta_orto.get("de_pie", {}).get("ic"),
+                "IRV/RVS": delta_orto.get("de_pie", {}).get("irv"),
+                "FC": delta_orto.get("de_pie", {}).get("fc"),
+                "PAS": delta_orto.get("de_pie", {}).get("pas"),
+                "PAD": delta_orto.get("de_pie", {}).get("pad"),
+            },
+            {
+                "Posición": "Delta de pie - basal",
+                "Método": "",
+                "IC": delta_orto.get("delta_ic"),
+                "IRV/RVS": delta_orto.get("delta_irv"),
+                "FC": delta_orto.get("delta_fc"),
+                "PAS": delta_orto.get("delta_pas"),
+                "PAD": delta_orto.get("delta_pad"),
+            },
+        ]),
+        use_container_width=True,
+    )
+except Exception as e:
+    st.warning(f"No se pudo mostrar el control ortostático: {e}")
 
 with st.expander("📘 Glosario de métricas hemodinámicas", expanded=False):
     st.text(glosario_metricas_cgi_texto())
