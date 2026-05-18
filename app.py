@@ -3693,6 +3693,11 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     if usuario_habilitado_firma_olano():
         insertar_firma_olano_en_pdf(pdf, ancho=48, y=236)
 
+    try:
+        agregar_capturas_originales_fpdf_una_hoja(pdf, max_capturas=1)
+    except Exception:
+        pass
+
     # Nota final dentro de una hoja
     pdf.set_y(275)
     pdf.set_font("Arial", "I", 7)
@@ -6200,6 +6205,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     story.append(Spacer(1, 5))
     story.append(_paper_paragraph("3. Conclusión ejecutiva", stl["PaperH"]))
     story.append(_paper_paragraph("- " + _paper_conclusion_ejecutiva(r, contexto_embarazo), stl["PaperBody"]))
+    agregar_capturas_originales_reportlab_story(story, ancho, max_capturas=1)
     sig = _paper_signature_flowable(width=90, height=36)
     if sig:
         sign_table = Table([[sig, _paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual", {})), stl["PaperSmall"])]], colWidths=[100, ancho-100])
@@ -6484,6 +6490,81 @@ def capturas_pdfs_originales_desde_sesion() -> List[Dict[str, Any]]:
         img = capturar_primera_pagina_pdf_original(contenido)
         capturas.append({"nombre": nombre, "imagen": img})
     return capturas
+
+
+
+
+
+def agregar_capturas_originales_fpdf_una_hoja(pdf, max_capturas: int = 1) -> None:
+    """
+    Inserta captura compacta del PDF original en la versión FPDF de una hoja.
+    """
+    try:
+        import tempfile, os
+        capturas = capturas_pdfs_originales_desde_sesion() if "capturas_pdfs_originales_desde_sesion" in globals() else []
+        if not capturas:
+            pdf.set_font("Arial", "B", 8)
+            pdf.multi_cell(0, 4, "Captura del PDF original del estudio")
+            pdf.set_font("Arial", "", 7)
+            pdf.multi_cell(0, 3.5, "Captura no disponible. Agregue 'pymupdf' a requirements.txt.")
+            return
+
+        pdf.set_font("Arial", "B", 8)
+        pdf.multi_cell(0, 4, "Captura del PDF original del estudio - versión una hoja")
+        for cap in capturas[:max_capturas]:
+            img_io = cap.get("imagen")
+            if not img_io:
+                continue
+            if hasattr(img_io, "seek"):
+                img_io.seek(0)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(img_io.read())
+                tmp_path = tmp.name
+            try:
+                pdf.image(tmp_path, x=130, y=208, w=62)
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+def agregar_capturas_originales_reportlab_story(story, ancho: float, max_capturas: int = 1) -> None:
+    """
+    Inserta captura de la primera página del PDF original en el PDF ejecutivo de una hoja.
+    Usa las capturas guardadas en st.session_state['pdfs_originales_cgi'].
+    """
+    try:
+        from reportlab.platypus import Image as RLImage, Spacer
+        import io
+        stl = _paper_styles() if "_paper_styles" in globals() else None
+        capturas = capturas_pdfs_originales_desde_sesion() if "capturas_pdfs_originales_desde_sesion" in globals() else []
+        if not capturas:
+            if stl:
+                story.append(_paper_paragraph("4. Captura del PDF original del estudio", stl["PaperH"]))
+                story.append(_paper_paragraph("Captura no disponible. Para activarla agregue 'pymupdf' a requirements.txt y vuelva a ejecutar.", stl["PaperSmall"]))
+            return
+
+        if stl:
+            story.append(Spacer(1, 4))
+            story.append(_paper_paragraph("4. Captura del PDF original del estudio", stl["PaperH"]))
+
+        for cap in capturas[:max_capturas]:
+            img_io = cap.get("imagen")
+            nombre = cap.get("nombre", "PDF original")
+            if not img_io:
+                continue
+            if hasattr(img_io, "seek"):
+                img_io.seek(0)
+            img = RLImage(img_io)
+            img._restrictSize(ancho * 0.62, 118)  # tamaño compacto para versión una hoja
+            if stl:
+                story.append(_paper_paragraph(str(nombre), stl["PaperSmall"]))
+            story.append(img)
+            story.append(Spacer(1, 3))
+    except Exception:
+        pass
 
 # =========================================================
 # INTERFAZ
