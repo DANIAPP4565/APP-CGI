@@ -260,7 +260,46 @@ def aplicar_estilos() -> None:
         @media (prefers-reduced-motion: reduce) {
             * { transition: none !important; animation: none !important; }
         }
-        </style>
+        
+        /* Contraste obligatorio: texto blanco sobre barras/fondos azules */
+        section[data-testid="stSidebar"] [style*="background: rgb(6, 42, 71)"],
+        section[data-testid="stSidebar"] [style*="background-color: rgb(6, 42, 71)"],
+        section[data-testid="stSidebar"] [style*="background: #062A47"],
+        section[data-testid="stSidebar"] [style*="background-color: #062A47"],
+        section[data-testid="stSidebar"] [style*="background: #0B3D6E"],
+        section[data-testid="stSidebar"] [style*="background-color: #0B3D6E"],
+        section[data-testid="stSidebar"] [style*="background: #0E4F8A"],
+        section[data-testid="stSidebar"] [style*="background-color: #0E4F8A"],
+        section[data-testid="stSidebar"] .sidebar-blue,
+        section[data-testid="stSidebar"] .barra-vertical-azul,
+        .sidebar-blue,
+        .barra-vertical-azul {
+            color: #FFFFFF !important;
+        }
+        section[data-testid="stSidebar"] [style*="background: rgb(6, 42, 71)"] *,
+        section[data-testid="stSidebar"] [style*="background-color: rgb(6, 42, 71)"] *,
+        section[data-testid="stSidebar"] [style*="background: #062A47"] *,
+        section[data-testid="stSidebar"] [style*="background-color: #062A47"] *,
+        section[data-testid="stSidebar"] [style*="background: #0B3D6E"] *,
+        section[data-testid="stSidebar"] [style*="background-color: #0B3D6E"] *,
+        section[data-testid="stSidebar"] [style*="background: #0E4F8A"] *,
+        section[data-testid="stSidebar"] [style*="background-color: #0E4F8A"] *,
+        section[data-testid="stSidebar"] .sidebar-blue *,
+        section[data-testid="stSidebar"] .barra-vertical-azul *,
+        .sidebar-blue *,
+        .barra-vertical-azul * {
+            color: #FFFFFF !important;
+            fill: #FFFFFF !important;
+        }
+        section[data-testid="stSidebar"] .sidebar-blue a,
+        section[data-testid="stSidebar"] .barra-vertical-azul a,
+        .sidebar-blue a,
+        .barra-vertical-azul a {
+            color: #FFFFFF !important;
+            text-decoration: underline;
+        }
+
+</style>
         """,
         unsafe_allow_html=True,
     )
@@ -3694,7 +3733,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         insertar_firma_olano_en_pdf(pdf, ancho=48, y=236)
 
     try:
-        agregar_capturas_originales_fpdf_una_hoja(pdf, max_capturas=1)
+        agregar_capturas_originales_fpdf_una_hoja(pdf, max_capturas=2)
     except Exception:
         pass
 
@@ -6205,7 +6244,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     story.append(Spacer(1, 5))
     story.append(_paper_paragraph("3. Conclusión ejecutiva", stl["PaperH"]))
     story.append(_paper_paragraph("- " + _paper_conclusion_ejecutiva(r, contexto_embarazo), stl["PaperBody"]))
-    agregar_capturas_originales_reportlab_story(story, ancho, max_capturas=1)
+    agregar_capturas_originales_reportlab_story(story, ancho, max_capturas=2)
     sig = _paper_signature_flowable(width=90, height=36)
     if sig:
         sign_table = Table([[sig, _paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual", {})), stl["PaperSmall"])]], colWidths=[100, ancho-100])
@@ -6460,48 +6499,67 @@ def guardar_pdfs_originales_en_sesion(*archivos: Any) -> None:
     st.session_state["pdfs_originales_cgi"] = originales
 
 
-def capturar_primera_pagina_pdf_original(pdf_bytes: bytes, zoom: float = 2.0) -> Optional[io.BytesIO]:
-    """Renderiza la primera página del PDF original como PNG.
+
+def capturar_paginas_pdf_original(pdf_bytes: bytes, paginas: Tuple[int, ...] = (0, 1), zoom: float = 1.7) -> List[Dict[str, Any]]:
+    """Renderiza páginas del PDF original como PNG.
+    Por defecto captura página 1 y página 2 del estudio original.
     Requiere PyMuPDF: pip install pymupdf
     """
+    capturas: List[Dict[str, Any]] = []
     try:
         import fitz  # PyMuPDF
+        if not pdf_bytes:
+            return capturas
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        if len(doc) == 0:
-            return None
-        page = doc[0]
-        mat = fitz.Matrix(zoom, zoom)
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-        img = io.BytesIO(pix.tobytes("png"))
-        img.seek(0)
+        for p in paginas:
+            if 0 <= p < len(doc):
+                page = doc[p]
+                mat = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                img = io.BytesIO(pix.tobytes("png"))
+                img.seek(0)
+                capturas.append({"pagina": p + 1, "imagen": img})
         doc.close()
-        return img
     except Exception:
-        return None
+        pass
+    return capturas
 
 
-def capturas_pdfs_originales_desde_sesion() -> List[Dict[str, Any]]:
+def capturar_primera_pagina_pdf_original(pdf_bytes: bytes, zoom: float = 1.7) -> Optional[io.BytesIO]:
+    """Compatibilidad hacia atrás: devuelve la primera página como imagen."""
+    caps = capturar_paginas_pdf_original(pdf_bytes, paginas=(0,), zoom=zoom)
+    return caps[0]["imagen"] if caps else None
+
+
+def capturas_pdfs_originales_desde_sesion(max_paginas_por_pdf: int = 2) -> List[Dict[str, Any]]:
+    """Devuelve capturas de página 1 y página 2 de cada PDF original cargado."""
     capturas = []
+    paginas = tuple(range(max_paginas_por_pdf))
     for item in st.session_state.get("pdfs_originales_cgi", []) or []:
         nombre = item.get("nombre", "PDF original")
         contenido = item.get("bytes")
         if not contenido:
             continue
-        img = capturar_primera_pagina_pdf_original(contenido)
-        capturas.append({"nombre": nombre, "imagen": img})
+        for cap in capturar_paginas_pdf_original(contenido, paginas=paginas):
+            capturas.append({
+                "nombre": nombre,
+                "pagina": cap.get("pagina"),
+                "imagen": cap.get("imagen"),
+            })
     return capturas
 
 
 
 
 
-def agregar_capturas_originales_fpdf_una_hoja(pdf, max_capturas: int = 1) -> None:
+
+def agregar_capturas_originales_fpdf_una_hoja(pdf, max_capturas: int = 2) -> None:
     """
-    Inserta captura compacta del PDF original en la versión FPDF de una hoja.
+    Inserta captura compacta de la página 1 y página 2 del PDF original en la versión FPDF de una hoja.
     """
     try:
         import tempfile, os
-        capturas = capturas_pdfs_originales_desde_sesion() if "capturas_pdfs_originales_desde_sesion" in globals() else []
+        capturas = capturas_pdfs_originales_desde_sesion(max_paginas_por_pdf=2) if "capturas_pdfs_originales_desde_sesion" in globals() else []
         if not capturas:
             pdf.set_font("Arial", "B", 8)
             pdf.multi_cell(0, 4, "Captura del PDF original del estudio")
@@ -6510,8 +6568,10 @@ def agregar_capturas_originales_fpdf_una_hoja(pdf, max_capturas: int = 1) -> Non
             return
 
         pdf.set_font("Arial", "B", 8)
-        pdf.multi_cell(0, 4, "Captura del PDF original del estudio - versión una hoja")
-        for cap in capturas[:max_capturas]:
+        pdf.multi_cell(0, 4, "Capturas del PDF original del estudio - páginas 1 y 2")
+
+        posiciones = [(10, 206, 88), (108, 206, 88)]
+        for cap, (x, y, w) in zip(capturas[:max_capturas], posiciones):
             img_io = cap.get("imagen")
             if not img_io:
                 continue
@@ -6521,7 +6581,10 @@ def agregar_capturas_originales_fpdf_una_hoja(pdf, max_capturas: int = 1) -> Non
                 tmp.write(img_io.read())
                 tmp_path = tmp.name
             try:
-                pdf.image(tmp_path, x=130, y=208, w=62)
+                pdf.set_font("Arial", "", 6)
+                pdf.set_xy(x, y - 4)
+                pdf.cell(w, 3, preparar_texto_pdf(f"{cap.get('nombre','PDF original')} - página {cap.get('pagina','')}", max_token=30), ln=0)
+                pdf.image(tmp_path, x=x, y=y, w=w)
             finally:
                 try:
                     os.remove(tmp_path)
@@ -6530,39 +6593,57 @@ def agregar_capturas_originales_fpdf_una_hoja(pdf, max_capturas: int = 1) -> Non
     except Exception:
         pass
 
-def agregar_capturas_originales_reportlab_story(story, ancho: float, max_capturas: int = 1) -> None:
+def agregar_capturas_originales_reportlab_story(story, ancho: float, max_capturas: int = 2) -> None:
     """
-    Inserta captura de la primera página del PDF original en el PDF ejecutivo de una hoja.
-    Usa las capturas guardadas en st.session_state['pdfs_originales_cgi'].
+    Inserta capturas de la página 1 y página 2 del PDF original en el PDF ejecutivo de una hoja.
+    Usa st.session_state['pdfs_originales_cgi'].
     """
     try:
-        from reportlab.platypus import Image as RLImage, Spacer
-        import io
+        from reportlab.platypus import Image as RLImage, Spacer, Table, TableStyle
+        from reportlab.lib import colors
         stl = _paper_styles() if "_paper_styles" in globals() else None
-        capturas = capturas_pdfs_originales_desde_sesion() if "capturas_pdfs_originales_desde_sesion" in globals() else []
-        if not capturas:
-            if stl:
-                story.append(_paper_paragraph("4. Captura del PDF original del estudio", stl["PaperH"]))
-                story.append(_paper_paragraph("Captura no disponible. Para activarla agregue 'pymupdf' a requirements.txt y vuelva a ejecutar.", stl["PaperSmall"]))
-            return
+        capturas = capturas_pdfs_originales_desde_sesion(max_paginas_por_pdf=2) if "capturas_pdfs_originales_desde_sesion" in globals() else []
 
         if stl:
-            story.append(Spacer(1, 4))
-            story.append(_paper_paragraph("4. Captura del PDF original del estudio", stl["PaperH"]))
+            story.append(Spacer(1, 3))
+            story.append(_paper_paragraph("4. Capturas del PDF original del estudio", stl["PaperH"]))
 
+        if not capturas:
+            if stl:
+                story.append(_paper_paragraph("Capturas no disponibles. Para activarlas agregue 'pymupdf' a requirements.txt y vuelva a ejecutar.", stl["PaperSmall"]))
+            return
+
+        celdas = []
         for cap in capturas[:max_capturas]:
             img_io = cap.get("imagen")
-            nombre = cap.get("nombre", "PDF original")
             if not img_io:
                 continue
             if hasattr(img_io, "seek"):
                 img_io.seek(0)
             img = RLImage(img_io)
-            img._restrictSize(ancho * 0.62, 118)  # tamaño compacto para versión una hoja
+            img._restrictSize((ancho - 10) / 2, 96)  # dos imágenes compactas lado a lado
+            titulo = f"Página {cap.get('pagina', '')}"
             if stl:
-                story.append(_paper_paragraph(str(nombre), stl["PaperSmall"]))
-            story.append(img)
-            story.append(Spacer(1, 3))
+                celda = [ _paper_paragraph(titulo, stl["PaperSmall"]), img ]
+            else:
+                celda = [ img ]
+            celdas.append(celda)
+
+        if len(celdas) == 1:
+            story.extend(celdas[0])
+        elif len(celdas) >= 2:
+            tabla = Table([[celdas[0], celdas[1]]], colWidths=[ancho/2 - 3, ancho/2 - 3])
+            tabla.setStyle(TableStyle([
+                ("VALIGN", (0,0), (-1,-1), "TOP"),
+                ("BOX", (0,0), (-1,-1), 0.25, colors.HexColor("#CBD5E1")),
+                ("INNERGRID", (0,0), (-1,-1), 0.25, colors.HexColor("#E2E8F0")),
+                ("LEFTPADDING", (0,0), (-1,-1), 3),
+                ("RIGHTPADDING", (0,0), (-1,-1), 3),
+                ("TOPPADDING", (0,0), (-1,-1), 3),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+            ]))
+            story.append(tabla)
+        story.append(Spacer(1, 3))
     except Exception:
         pass
 
