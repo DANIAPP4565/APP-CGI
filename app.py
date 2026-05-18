@@ -270,22 +270,28 @@ aplicar_estilos()
 
 
 
+
+
 # =========================================================
-# REFERENCIAS BIBLIOGRÁFICAS
+# REFERENCIAS BIBLIOGRÁFICAS DE SOPORTE
 # =========================================================
 
 REFERENCIAS_BIBLIOGRAFICAS = [
-    "Ferrario CM. Hemodynamic profiling and cardiovascular risk assessment by impedance cardiography. Hypertension. 2010;56:635-643.",
-    "Krzesinski JM, Cohen EP. Ambulatory blood pressure monitoring and cardiovascular risk stratification. Hypertension. 2007;49:123-129.",
+    "Sociedad Argentina de Hipertensión Arterial (SAHA), Grupo de Trabajo de Mecánica Vascular. Manual de Mecánica Vascular: Manifiesto de actualización del Grupo de Trabajo de Mecánica Vascular de la Sociedad Argentina de Hipertensión Arterial (SAHA). 2024.",
     "Mancia G, Kreutz R, Brunström M, et al. 2023 ESH Guidelines for the management of arterial hypertension. J Hypertens. 2023;41:1874-2071.",
     "Whelton PK, Carey RM, Aronow WS, et al. 2017 ACC/AHA Guideline for High Blood Pressure in Adults. Hypertension. 2018;71:e13-e115.",
-    "Parati G, Stergiou G, O’Brien E, et al. European Society of Hypertension practice guidelines for ambulatory blood pressure monitoring. J Hypertens. 2014;32:1359-1366.",
-    "Sramek BB, Bernstein DP. Noninvasive hemodynamic monitoring by thoracic electrical bioimpedance. Crit Care Med. 1983;11:789-798.",
-    "Bernstein DP. A new stroke volume equation for thoracic electrical bioimpedance. Crit Care Med. 1986;14:904-909.",
-    "Safar ME, London GM. Arterial and venous compliance in sustained essential hypertension. Hypertension. 1987;10:133-139.",
-    "O'Rourke MF, Nichols WW. McDonald's Blood Flow in Arteries. 6th ed. Hodder Arnold; 2011.",
-    "Sociedad Argentina de Hipertensión Arterial (SAHA). Guía Argentina de Hipertensión Arterial 2025.",
+    "Townsend RR, Wilkinson IB, Schiffrin EL, et al. Recommendations for improving and standardizing vascular research on arterial stiffness. Hypertension. 2015;66:698-722.",
+    "Laurent S, Cockcroft J, Van Bortel L, et al. Expert consensus document on arterial stiffness. Eur Heart J. 2006;27:2588-2605.",
+    "Nichols WW, O’Rourke MF. McDonald’s Blood Flow in Arteries. 6th ed. Hodder Arnold; 2011.",
 ]
+
+SOPORTE_BIBLIOGRAFICO_APP = """
+La interpretación clínica del módulo de mecánica vascular y cardiografía de impedancia se apoya, entre otras fuentes,
+en el Manual de Mecánica Vascular 2024 de la Sociedad Argentina de Hipertensión Arterial (SAHA). Este documento
+desarrolla la evaluación integral de la disfunción vascular en hipertensión arterial, la velocidad de onda de pulso,
+los parámetros hemodinámicos centrales, la presión aórtica central, los patrones hemodinámicos en hipertensión
+arterial y la utilidad clínica de la cardiografía por impedancia.
+"""
 
 # =========================================================
 # UTILIDADES
@@ -296,13 +302,6 @@ REFERENCIAS_BIBLIOGRAFICAS = [
 def safe_pdf_texto_simple(txt: str) -> str:
     return str(txt).replace("—", "-").replace("–", "-").replace("“", "\"").replace("”", "\"").replace("‘", "'").replace("’", "'")
 
-def construir_bloque_referencias_pdf() -> str:
-    refs = "\n".join([f"{i+1}. {safe_pdf_texto_simple(r)}" for i, r in enumerate(REFERENCIAS_BIBLIOGRAFICAS)])
-    return (
-        "\nREFERENCIAS BIBLIOGRAFICAS UTILIZADAS\n"
-        "--------------------------------------------------\n"
-        f"{refs}\n"
-    )
 
 def limpiar_numero(x: Any) -> Optional[float]:
     if x is None:
@@ -3534,6 +3533,33 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
             pdf.multi_cell(0, 4, safe_pdf_texto_simple(f"{i}. {ref}"))
     except Exception:
         pass
+
+    try:
+
+
+        pdf.add_page()
+
+
+        pdf.set_font('Arial', 'B', 10)
+
+
+        pdf.multi_cell(0, 5, 'SOPORTE BIBLIOGRÁFICO DE LA APP')
+
+
+        pdf.ln(2)
+
+
+        pdf.set_font('Arial', '', 8)
+
+
+        pdf.multi_cell(0, 4, construir_bloque_referencias_pdf())
+
+
+    except Exception:
+
+
+        pass
+
 
     out = pdf.output(dest="S")
     if isinstance(out, bytearray):
@@ -6891,3 +6917,17 @@ pypdf
 fpdf2
         """.strip()
     )
+
+
+def construir_bloque_referencias_pdf() -> str:
+    refs = "\\n".join([f"{i+1}. {r}" for i, r in enumerate(REFERENCIAS_BIBLIOGRAFICAS)])
+    soporte = globals().get("SOPORTE_BIBLIOGRAFICO_APP", "").strip()
+    return (
+        "\\nSOPORTE BIBLIOGRÁFICO DE LA APP\\n"
+        "--------------------------------------------------\\n"
+        f"{soporte}\\n\\n"
+        "REFERENCIAS BIBLIOGRÁFICAS UTILIZADAS\\n"
+        "--------------------------------------------------\\n"
+        f"{refs}\\n"
+    )
+
