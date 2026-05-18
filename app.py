@@ -291,6 +291,19 @@ REFERENCIAS_BIBLIOGRAFICAS = [
 # UTILIDADES
 # =========================================================
 
+
+
+def safe_pdf_texto_simple(txt: str) -> str:
+    return str(txt).replace("—", "-").replace("–", "-").replace("“", "\"").replace("”", "\"").replace("‘", "'").replace("’", "'")
+
+def construir_bloque_referencias_pdf() -> str:
+    refs = "\n".join([f"{i+1}. {safe_pdf_texto_simple(r)}" for i, r in enumerate(REFERENCIAS_BIBLIOGRAFICAS)])
+    return (
+        "\nREFERENCIAS BIBLIOGRAFICAS UTILIZADAS\n"
+        "--------------------------------------------------\n"
+        f"{refs}\n"
+    )
+
 def limpiar_numero(x: Any) -> Optional[float]:
     if x is None:
         return None
@@ -3510,13 +3523,19 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     # Firma digital condicional: solo para usuario Ricardo Daniel Olano.
     insertar_firma_olano_en_pdf(pdf)
 
-    out = try:
+    # Bibliografia clínica utilizada en la app: se agrega al informe médico integrado.
+    try:
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 12)
+        pdf.multi_cell(0, 6, "REFERENCIAS BIBLIOGRAFICAS UTILIZADAS")
+        pdf.ln(2)
         pdf.set_font("Arial", size=8)
-        pdf.multi_cell(0, 4, construir_bloque_referencias_pdf())
+        for i, ref in enumerate(REFERENCIAS_BIBLIOGRAFICAS, start=1):
+            pdf.multi_cell(0, 4, safe_pdf_texto_simple(f"{i}. {ref}"))
     except Exception:
         pass
 
-    pdf.output(dest="S")
+    out = pdf.output(dest="S")
     if isinstance(out, bytearray):
         return bytes(out)
     if isinstance(out, bytes):
