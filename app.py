@@ -6351,6 +6351,40 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     except Exception as e:
         story.append(_paper_paragraph(f"No se pudieron insertar los aceleradores gráficos por dominio: {e}", stl["PaperBody"]))
 
+    # CAPTURA OBLIGATORIA DEL INFORME ORIGINAL: versión completa del PDF del estudio original.
+    capturas_originales = capturas_pdfs_originales_desde_sesion()
+    if capturas_originales:
+        story.append(PageBreak())
+        story.append(_paper_paragraph("J. CAPTURA DEL INFORME ORIGINAL DEL EQUIPO", stl["PaperH"]))
+        story.append(_paper_paragraph(
+            "Se incorpora la captura de la primera página del PDF original importado para mantener trazabilidad visual del estudio fuente dentro del informe médico integrado completo.",
+            stl["PaperBody"],
+        ))
+        for cap in capturas_originales:
+            story.append(Spacer(1, 6))
+            story.append(_paper_paragraph(f"Archivo original: {cap.get('nombre', 'PDF original')}", stl["PaperSmall"]))
+            if cap.get("imagen") is not None:
+                story.append(Image(cap["imagen"], width=ancho, height=ancho*1.28, kind="proportional"))
+            else:
+                story.append(_paper_paragraph(
+                    "No se pudo renderizar la captura del PDF original. Para activar esta función en Streamlit Cloud agregue pymupdf al requirements.txt.",
+                    stl["PaperBody"],
+                ))
+    else:
+        story.append(PageBreak())
+        story.append(_paper_paragraph("J. CAPTURA DEL INFORME ORIGINAL DEL EQUIPO", stl["PaperH"]))
+        story.append(_paper_paragraph("No se adjuntó PDF original o el archivo importado no era PDF.", stl["PaperBody"]))
+
+    # BIBLIOGRAFÍA OBLIGATORIA VISIBLE EN EL INFORME INTEGRADO.
+    story.append(PageBreak())
+    story.append(_paper_paragraph("K. REFERENCIAS BIBLIOGRÁFICAS UTILIZADAS", stl["PaperH"]))
+    story.append(_paper_paragraph(
+        "Bibliografía de soporte utilizada para el marco conceptual de cardiografía de impedancia, mecánica vascular, presión arterial, monitoreo ambulatorio e interpretación hemodinámica.",
+        stl["PaperBody"],
+    ))
+    for i, ref in enumerate(REFERENCIAS_BIBLIOGRAFICAS, start=1):
+        story.append(_paper_paragraph(f"{i}. {ref}", stl["PaperSmall"]))
+
     story.append(Spacer(1, 8))
     sig = _paper_signature_flowable(width=110, height=52, usuario_info=st.session_state.get("usuario_actual", {}))
     if sig:
@@ -6362,6 +6396,68 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
 
     doc.build(story, onFirstPage=_paper_footer, onLaterPages=_paper_footer)
     return buffer.getvalue()
+
+
+
+# =========================================================
+# CAPTURA DEL PDF ORIGINAL PARA INFORME COMPLETO
+# =========================================================
+
+def guardar_pdfs_originales_en_sesion(*archivos: Any) -> None:
+    """Guarda bytes de PDFs originales para poder insertar capturas en el informe completo.
+    No altera el cursor de lectura usado por pandas/pdfplumber.
+    """
+    originales = []
+    for archivo in archivos:
+        if archivo is None:
+            continue
+        nombre = getattr(archivo, "name", "") or "PDF_original.pdf"
+        if not str(nombre).lower().endswith(".pdf"):
+            continue
+        try:
+            contenido = archivo.getvalue()
+        except Exception:
+            try:
+                pos = archivo.tell()
+                contenido = archivo.read()
+                archivo.seek(pos)
+            except Exception:
+                contenido = b""
+        if contenido:
+            originales.append({"nombre": nombre, "bytes": contenido})
+    st.session_state["pdfs_originales_cgi"] = originales
+
+
+def capturar_primera_pagina_pdf_original(pdf_bytes: bytes, zoom: float = 2.0) -> Optional[io.BytesIO]:
+    """Renderiza la primera página del PDF original como PNG.
+    Requiere PyMuPDF: pip install pymupdf
+    """
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if len(doc) == 0:
+            return None
+        page = doc[0]
+        mat = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img = io.BytesIO(pix.tobytes("png"))
+        img.seek(0)
+        doc.close()
+        return img
+    except Exception:
+        return None
+
+
+def capturas_pdfs_originales_desde_sesion() -> List[Dict[str, Any]]:
+    capturas = []
+    for item in st.session_state.get("pdfs_originales_cgi", []) or []:
+        nombre = item.get("nombre", "PDF original")
+        contenido = item.get("bytes")
+        if not contenido:
+            continue
+        img = capturar_primera_pagina_pdf_original(contenido)
+        capturas.append({"nombre": nombre, "imagen": img})
+    return capturas
 
 # =========================================================
 # INTERFAZ
@@ -6417,6 +6513,7 @@ with st.sidebar:
     st.header("Carga de estudios")
     archivo1 = st.file_uploader("Subir primer archivo CGI", type=["csv", "xlsx", "xls", "pdf"], key="archivo1")
     archivo2 = st.file_uploader("Subir segundo archivo CGI opcional", type=["csv", "xlsx", "xls", "pdf"], key="archivo2")
+    guardar_pdfs_originales_en_sesion(archivo1, archivo2)
     st.info("Para PDF instalar: pdfplumber y pypdf. Para gráficos: matplotlib. Para Excel: openpyxl.")
 
     st.divider()
