@@ -6562,13 +6562,13 @@ def agregar_capturas_originales_fpdf_una_hoja(pdf, max_capturas: int = 2) -> Non
         capturas = capturas_pdfs_originales_desde_sesion(max_paginas_por_pdf=2) if "capturas_pdfs_originales_desde_sesion" in globals() else []
         if not capturas:
             pdf.set_font("Arial", "B", 8)
-            pdf.multi_cell(0, 4, "Captura del PDF original del estudio")
+            pdf.multi_cell(0, 4, "CAPTURA PANTALLA DE MEDICIONES")
             pdf.set_font("Arial", "", 7)
             pdf.multi_cell(0, 3.5, "Captura no disponible. Agregue 'pymupdf' a requirements.txt.")
             return
 
         pdf.set_font("Arial", "B", 8)
-        pdf.multi_cell(0, 4, "Capturas del PDF original del estudio - páginas 1 y 2")
+        pdf.multi_cell(0, 4, "CAPTURA PANTALLA DE MEDICIONES")
 
         posiciones = [(10, 206, 88), (108, 206, 88)]
         for cap, (x, y, w) in zip(capturas[:max_capturas], posiciones):
@@ -6606,7 +6606,7 @@ def agregar_capturas_originales_reportlab_story(story, ancho: float, max_captura
 
         if stl:
             story.append(Spacer(1, 3))
-            story.append(_paper_paragraph("4. Capturas del PDF original del estudio", stl["PaperH"]))
+            story.append(_paper_paragraph("4. CAPTURA PANTALLA DE MEDICIONES", stl["PaperH"]))
 
         if not capturas:
             if stl:
