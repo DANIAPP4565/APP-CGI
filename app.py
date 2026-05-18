@@ -269,6 +269,24 @@ def aplicar_estilos() -> None:
 aplicar_estilos()
 
 
+
+# =========================================================
+# REFERENCIAS BIBLIOGRÁFICAS
+# =========================================================
+
+REFERENCIAS_BIBLIOGRAFICAS = [
+    "Ferrario CM. Hemodynamic profiling and cardiovascular risk assessment by impedance cardiography. Hypertension. 2010;56:635-643.",
+    "Krzesinski JM, Cohen EP. Ambulatory blood pressure monitoring and cardiovascular risk stratification. Hypertension. 2007;49:123-129.",
+    "Mancia G, Kreutz R, Brunström M, et al. 2023 ESH Guidelines for the management of arterial hypertension. J Hypertens. 2023;41:1874-2071.",
+    "Whelton PK, Carey RM, Aronow WS, et al. 2017 ACC/AHA Guideline for High Blood Pressure in Adults. Hypertension. 2018;71:e13-e115.",
+    "Parati G, Stergiou G, O’Brien E, et al. European Society of Hypertension practice guidelines for ambulatory blood pressure monitoring. J Hypertens. 2014;32:1359-1366.",
+    "Sramek BB, Bernstein DP. Noninvasive hemodynamic monitoring by thoracic electrical bioimpedance. Crit Care Med. 1983;11:789-798.",
+    "Bernstein DP. A new stroke volume equation for thoracic electrical bioimpedance. Crit Care Med. 1986;14:904-909.",
+    "Safar ME, London GM. Arterial and venous compliance in sustained essential hypertension. Hypertension. 1987;10:133-139.",
+    "O'Rourke MF, Nichols WW. McDonald's Blood Flow in Arteries. 6th ed. Hodder Arnold; 2011.",
+    "Sociedad Argentina de Hipertensión Arterial (SAHA). Guía Argentina de Hipertensión Arterial 2025.",
+]
+
 # =========================================================
 # UTILIDADES
 # =========================================================
@@ -3293,27 +3311,23 @@ def _normalizar_identidad_usuario_firma(valor: Any) -> str:
 
 
 def usuario_habilitado_firma_olano(usuario_info: Optional[Dict[str, Any]] = None) -> bool:
-    """Inserta la firma solo cuando el usuario autenticado corresponde a Ricardo Daniel Olano."""
+    """Compatibilidad: mantiene firma predeterminada de Olano si no cargó firma propia."""
     try:
         info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
     except Exception:
         info = usuario_info or {}
-    candidatos = [
-        info.get("nombre", ""),
-        info.get("usuario", ""),
-        info.get("matricula", ""),
-    ]
+    candidatos = [info.get("nombre", ""), info.get("usuario", ""), info.get("matricula", "")]
     identidad = " | ".join(_normalizar_identidad_usuario_firma(x) for x in candidatos if es_valor_util(x))
     return (
         "ricardo daniel olano" in identidad
         or "daniel olano" in identidad
         or "ricardo_olano" in identidad
-        or "ricardo daniel" in identidad and "olano" in identidad
+        or ("ricardo daniel" in identidad and "olano" in identidad)
     )
 
 
 def obtener_path_firma_olano() -> Optional[str]:
-    """Crea/recupera el PNG de firma desde base64 para que el PDF pueda insertarlo."""
+    """Firma histórica predeterminada de Olano, usada solo como respaldo."""
     try:
         _asegurar_directorio_app()
         firma_path = APP_DATA_DIR / "firma_ricardo_daniel_olano.png"
@@ -3325,27 +3339,45 @@ def obtener_path_firma_olano() -> Optional[str]:
         return None
 
 
+def obtener_path_firma_usuario(usuario_info: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Firma cargada por el usuario; Olano conserva respaldo automático si no carga una propia."""
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    ruta = path_asset_usuario(info, "firma") if "path_asset_usuario" in globals() else None
+    if ruta:
+        return ruta
+    if usuario_habilitado_firma_olano(info):
+        return obtener_path_firma_olano()
+    return None
+
+
+def obtener_path_sello_usuario(usuario_info: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    return path_asset_usuario(info, "sello") if "path_asset_usuario" in globals() else None
+
+
 def insertar_firma_olano_en_pdf(pdf, usuario_info: Optional[Dict[str, Any]] = None, ancho: int = 58, y: Optional[float] = None) -> None:
-    """Inserta la firma digital al pie del informe solo para el usuario habilitado."""
-    if not usuario_habilitado_firma_olano(usuario_info):
-        return
-    firma_path = obtener_path_firma_olano()
-    if not firma_path:
+    """Inserta firma y sello del usuario autenticado sin distorsión. Nombre histórico conservado para no romper llamadas."""
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    firma_path = obtener_path_firma_usuario(info)
+    sello_path = obtener_path_sello_usuario(info)
+    if not firma_path and not sello_path:
         return
     try:
-        # Si no hay espacio suficiente, pasar a página nueva.
         if y is None:
-            if pdf.get_y() > 220:
+            if pdf.get_y() > 218:
                 pdf.add_page()
                 pdf.ln(8)
             else:
                 pdf.ln(6)
             y = pdf.get_y()
-        x = (210 - ancho) / 2
-        pdf.image(firma_path, x=x, y=y, w=ancho)
+        x_center = 105
+        if sello_path:
+            pdf.image(sello_path, x=x_center - 55, y=y, w=42)
+        if firma_path:
+            pdf.image(firma_path, x=x_center - 10, y=y, w=ancho)
         pdf.set_y(y + 42)
         pdf.set_font("Arial", "", 8)
-        texto = "Firma digital autorizada - Dr. Ricardo Daniel Olano"
+        texto = texto_firma_usuario(info) if "texto_firma_usuario" in globals() else "Firma y sello digital autorizados"
         pdf.multi_cell(0, 4, texto.encode("latin-1", "replace").decode("latin-1"), align="C")
     except Exception:
         pass
@@ -3478,7 +3510,13 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     # Firma digital condicional: solo para usuario Ricardo Daniel Olano.
     insertar_firma_olano_en_pdf(pdf)
 
-    out = pdf.output(dest="S")
+    out = try:
+        pdf.set_font("Arial", size=8)
+        pdf.multi_cell(0, 4, construir_bloque_referencias_pdf())
+    except Exception:
+        pass
+
+    pdf.output(dest="S")
     if isinstance(out, bytearray):
         return bytes(out)
     if isinstance(out, bytes):
@@ -5217,10 +5255,16 @@ if _generar_tabla_validacion_hemodinamica_v15_base_eaees is not None:
 APP_DATA_DIR = Path(__file__).resolve().parent / "app_cgi_data"
 USUARIOS_JSON = APP_DATA_DIR / "usuarios_app_cgi.json"
 HISTORIAL_XLSX = APP_DATA_DIR / "historial_informes_app_cgi.xlsx"
+USUARIO_ASSETS_DIR = APP_DATA_DIR / "usuarios_assets"
+
 
 
 def _asegurar_directorio_app() -> None:
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        USUARIO_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
 
 
 def _normalizar_usuario(usuario: Any) -> str:
@@ -5260,10 +5304,33 @@ def cargar_usuarios_app() -> Dict[str, Any]:
         import json
         with open(USUARIOS_JSON, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if isinstance(data, list):
+            # Compatibilidad con versiones que guardaban una lista de usuarios.
+            data = {
+                _normalizar_usuario(x.get("usuario") or x.get("user") or x.get("email") or x.get("nombre", "")): x
+                for x in data if isinstance(x, dict)
+            }
+        if not isinstance(data, dict):
+            return {}
+        normalizados: Dict[str, Any] = {}
+        cambio = False
+        for k, v in data.items():
+            if not isinstance(v, dict):
+                continue
+            key_norm = _normalizar_usuario(v.get("usuario") or k)
+            info = _migrar_registro_usuario_legacy(key_norm, v) if "_migrar_registro_usuario_legacy" in globals() else dict(v)
+            info["usuario"] = key_norm
+            normalizados[key_norm] = info
+            if key_norm != k or info != v:
+                cambio = True
+        if cambio:
+            try:
+                guardar_usuarios_app(normalizados)
+            except Exception:
+                pass
+        return normalizados
     except Exception:
         return {}
-
 
 def guardar_usuarios_app(usuarios: Dict[str, Any]) -> None:
     _asegurar_directorio_app()
@@ -5271,6 +5338,119 @@ def guardar_usuarios_app(usuarios: Dict[str, Any]) -> None:
     with open(USUARIOS_JSON, "w", encoding="utf-8") as f:
         json.dump(usuarios, f, ensure_ascii=False, indent=2)
 
+
+
+def _slug_archivo_usuario(usuario: Any) -> str:
+    slug = _normalizar_usuario(usuario)
+    slug = re.sub(r"[^a-z0-9_\-]+", "_", slug).strip("_")
+    return slug or "usuario"
+
+
+def _ruta_asset_usuario(usuario: Any, tipo: str, extension: str = ".png") -> Path:
+    _asegurar_directorio_app()
+    safe_user = _slug_archivo_usuario(usuario)
+    safe_tipo = "firma" if tipo == "firma" else "sello"
+    return USUARIO_ASSETS_DIR / f"{safe_user}_{safe_tipo}{extension.lower()}"
+
+
+def _extension_imagen(nombre: Any) -> str:
+    ext = Path(str(nombre or "")).suffix.lower()
+    if ext in [".png", ".jpg", ".jpeg", ".webp"]:
+        return ext
+    return ".png"
+
+
+def guardar_imagen_usuario_app(usuario_info: Dict[str, Any], uploaded_file: Any, tipo: str) -> Tuple[bool, str]:
+    """Guarda firma o sello por usuario y persiste la ruta en usuarios_app_cgi.json."""
+    if uploaded_file is None:
+        return False, "No se seleccionó ningún archivo."
+    usuario = str(usuario_info.get("usuario") or "").strip()
+    if not usuario:
+        return False, "Usuario no identificado."
+    ext = _extension_imagen(getattr(uploaded_file, "name", ""))
+    ruta = _ruta_asset_usuario(usuario, tipo, ext)
+    try:
+        contenido = uploaded_file.getvalue()
+        if not contenido:
+            return False, "El archivo está vacío."
+        ruta.write_bytes(contenido)
+        usuarios = cargar_usuarios_app()
+        real_key = _buscar_usuario_flexible(usuarios, _normalizar_usuario(usuario)) or usuario
+        if real_key not in usuarios:
+            usuarios[real_key] = dict(usuario_info)
+        campo = "firma_path" if tipo == "firma" else "sello_path"
+        usuarios[real_key][campo] = str(ruta)
+        usuarios[real_key][f"{tipo}_archivo"] = getattr(uploaded_file, "name", "")
+        usuarios[real_key][f"{tipo}_actualizado"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        guardar_usuarios_app(usuarios)
+        usuario_info[campo] = str(ruta)
+        usuario_info[f"{tipo}_archivo"] = getattr(uploaded_file, "name", "")
+        usuario_info[f"{tipo}_actualizado"] = usuarios[real_key][f"{tipo}_actualizado"]
+        st.session_state["usuario_actual"] = usuario_info
+        return True, f"{tipo.capitalize()} guardado correctamente para este usuario."
+    except Exception as e:
+        return False, f"No se pudo guardar {tipo}: {e}"
+
+
+def eliminar_imagen_usuario_app(usuario_info: Dict[str, Any], tipo: str) -> Tuple[bool, str]:
+    usuario = str(usuario_info.get("usuario") or "").strip()
+    campo = "firma_path" if tipo == "firma" else "sello_path"
+    ruta = usuario_info.get(campo)
+    try:
+        if ruta and Path(str(ruta)).exists():
+            Path(str(ruta)).unlink()
+    except Exception:
+        pass
+    usuarios = cargar_usuarios_app()
+    real_key = _buscar_usuario_flexible(usuarios, _normalizar_usuario(usuario))
+    if real_key and real_key in usuarios:
+        usuarios[real_key].pop(campo, None)
+        usuarios[real_key].pop(f"{tipo}_archivo", None)
+        usuarios[real_key].pop(f"{tipo}_actualizado", None)
+        guardar_usuarios_app(usuarios)
+    usuario_info.pop(campo, None)
+    usuario_info.pop(f"{tipo}_archivo", None)
+    usuario_info.pop(f"{tipo}_actualizado", None)
+    st.session_state["usuario_actual"] = usuario_info
+    return True, f"{tipo.capitalize()} eliminado para este usuario."
+
+
+def path_asset_usuario(usuario_info: Optional[Dict[str, Any]], tipo: str) -> Optional[str]:
+    """Devuelve firma/sello del usuario actual si existe en disco."""
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    campo = "firma_path" if tipo == "firma" else "sello_path"
+    ruta = info.get(campo)
+    if ruta and Path(str(ruta)).exists():
+        return str(ruta)
+    # Si el usuario fue cargado en sesión antes de actualizar JSON, refrescar desde disco.
+    usuarios = cargar_usuarios_app()
+    real_key = _buscar_usuario_flexible(usuarios, _normalizar_usuario(info.get("usuario", "")))
+    if real_key:
+        ruta = (usuarios.get(real_key) or {}).get(campo)
+        if ruta and Path(str(ruta)).exists():
+            return str(ruta)
+    return None
+
+
+def texto_firma_usuario(usuario_info: Optional[Dict[str, Any]] = None) -> str:
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    nombre = str(info.get("nombre") or info.get("usuario") or "").strip()
+    matricula = str(info.get("matricula") or "").strip()
+    if nombre and matricula:
+        return f"Firma y sello digital autorizados - {nombre} - Matrícula {matricula}"
+    if nombre:
+        return f"Firma y sello digital autorizados - {nombre}"
+    return "Firma y sello digital autorizados"
+
+
+def _migrar_registro_usuario_legacy(usuario_key: str, info: Dict[str, Any]) -> Dict[str, Any]:
+    """Normaliza registros viejos para que no fallen al volver a ingresar."""
+    info = dict(info or {})
+    info.setdefault("usuario", _normalizar_usuario(info.get("usuario") or usuario_key))
+    info.setdefault("nombre", info.get("usuario", usuario_key))
+    info.setdefault("matricula", "")
+    info.setdefault("rol", "admin" if str(info.get("rol", "")).lower() == "admin" else "usuario")
+    return info
 
 def registrar_usuario_app(usuario: str, clave: str, nombre: str = "", matricula: str = "") -> Tuple[bool, str]:
     usuario = _normalizar_usuario(usuario)
@@ -5308,6 +5488,45 @@ def _buscar_usuario_flexible(usuarios: Dict[str, Any], usuario_norm: str) -> Opt
     return None
 
 
+def _comparar_clave_legacy(info: Dict[str, Any], clave_norm: str, clave_original: str) -> bool:
+    """Compatibilidad con registros anteriores: clave, password, contraseña o hash simple."""
+    import hashlib
+    posibles_texto = [
+        info.get("clave"),
+        info.get("password"),
+        info.get("contrasena"),
+        info.get("contraseña"),
+    ]
+    for val in posibles_texto:
+        if val is not None and str(val).strip() == clave_norm:
+            return True
+    posibles_hash = [
+        info.get("clave_hash"),
+        info.get("password_hash"),
+        info.get("hash_sha256"),
+        info.get("sha256"),
+    ]
+    sha = hashlib.sha256(clave_norm.encode("utf-8")).hexdigest()
+    sha_original = hashlib.sha256(str(clave_original).encode("utf-8")).hexdigest()
+    return any(str(h or "").lower() in [sha, sha_original] for h in posibles_hash)
+
+
+def _actualizar_hash_usuario_si_legacy(usuarios: Dict[str, Any], real_key: str, clave_norm: str) -> None:
+    """Migra un usuario antiguo a PBKDF2 una vez que la clave fue validada."""
+    try:
+        hp = _hash_clave(clave_norm)
+        usuarios[real_key]["salt"] = hp["salt"]
+        usuarios[real_key]["hash"] = hp["hash"]
+        usuarios[real_key].pop("clave", None)
+        usuarios[real_key].pop("password", None)
+        usuarios[real_key].pop("contrasena", None)
+        usuarios[real_key].pop("contraseña", None)
+        usuarios[real_key]["fecha_migracion_clave"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        guardar_usuarios_app(usuarios)
+    except Exception:
+        pass
+
+
 def autenticar_usuario_app(usuario: str, clave: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
     usuario_norm = _normalizar_usuario(usuario)
     clave_norm = _normalizar_clave(clave)
@@ -5317,23 +5536,33 @@ def autenticar_usuario_app(usuario: str, clave: str) -> Tuple[bool, Optional[Dic
         return False, None, "Ingrese la clave."
     usuarios = cargar_usuarios_app()
     if not usuarios:
-        return False, None, "Aun no hay usuarios registrados. Vaya a la pestana 'Registrar nuevo usuario'."
+        return False, None, "Aún no hay usuarios registrados. Vaya a la pestaña 'Registrar usuario'."
     real_key = _buscar_usuario_flexible(usuarios, usuario_norm)
     if real_key is None:
-        return False, None, "Usuario no encontrado. Verifique el nombre o registrese."
-    info = usuarios.get(real_key) or {}
+        return False, None, "Usuario no encontrado. Verifique el nombre o regístrese."
+    info = _migrar_registro_usuario_legacy(real_key, usuarios.get(real_key) or {})
+    usuarios[real_key] = info
     salt_guardado = info.get("salt") or ""
     hash_guardado = info.get("hash") or ""
-    if not salt_guardado or not hash_guardado:
-        return False, None, "Registro de usuario corrupto: use 'Restablecer clave' para recrear el acceso."
-    hp = _hash_clave(clave_norm, salt=salt_guardado)
-    if hp.get("hash") != hash_guardado:
-        # Compatibilidad con registros viejos guardados sin recortar espacios.
-        hp_legacy = _hash_clave(str(clave), salt=salt_guardado)
-        if hp_legacy.get("hash") != hash_guardado:
-            return False, None, "Clave incorrecta. Verifique mayusculas/minusculas y el bloqueo numerico."
-    return True, info, "Ingreso correcto."
 
+    autenticado = False
+    if salt_guardado and hash_guardado:
+        hp = _hash_clave(clave_norm, salt=salt_guardado)
+        autenticado = hp.get("hash") == hash_guardado
+        if not autenticado:
+            hp_legacy = _hash_clave(str(clave), salt=salt_guardado)
+            autenticado = hp_legacy.get("hash") == hash_guardado
+
+    if not autenticado and _comparar_clave_legacy(info, clave_norm, str(clave)):
+        autenticado = True
+        _actualizar_hash_usuario_si_legacy(usuarios, real_key, clave_norm)
+
+    if not autenticado:
+        return False, None, "Usuario o contraseña incorrecta. Si el usuario ya existía en una versión previa, use 'Restablecer clave' una sola vez."
+
+    info = cargar_usuarios_app().get(real_key, info)
+    info["usuario"] = _normalizar_usuario(info.get("usuario") or real_key)
+    return True, info, "Ingreso correcto."
 
 def restablecer_clave_usuario_app(usuario: str, nueva_clave: str, nueva_clave2: str) -> Tuple[bool, str]:
     """Permite a un usuario existente restablecer su clave en el equipo local."""
@@ -5769,18 +5998,60 @@ def _paper_table(data, col_widths=None, header=True, compact=True):
     return t
 
 
-def _paper_signature_flowable(width=95, height=42):
-    """Firma digital si corresponde; no distorsiona. Devuelve Flowable o None."""
+def _paper_signature_flowable(width=95, height=42, usuario_info: Optional[Dict[str, Any]] = None):
+    """Firma digital del usuario autenticado; no distorsiona. Devuelve Flowable o None."""
     try:
         from reportlab.platypus import Image
         import os
-        path = obtener_path_firma_olano()
+        path = obtener_path_firma_usuario(usuario_info)
         if path and os.path.exists(path):
             return Image(path, width=width, height=height, kind="proportional")
     except Exception:
         return None
     return None
 
+
+def _paper_seal_flowable(width=54, height=54, usuario_info: Optional[Dict[str, Any]] = None):
+    """Sello digital del usuario autenticado; no distorsiona. Devuelve Flowable o None."""
+    try:
+        from reportlab.platypus import Image
+        import os
+        path = obtener_path_sello_usuario(usuario_info)
+        if path and os.path.exists(path):
+            return Image(path, width=width, height=height, kind="proportional")
+    except Exception:
+        return None
+    return None
+
+
+def _paper_signature_table(ancho: float, usuario_info: Optional[Dict[str, Any]] = None):
+    """Bloque único de firma/sello para informes ReportLab."""
+    try:
+        from reportlab.platypus import Table, TableStyle
+        from reportlab.lib import colors
+        stl = _paper_styles()
+        firma = _paper_signature_flowable(width=100, height=45, usuario_info=usuario_info)
+        sello = _paper_seal_flowable(width=55, height=55, usuario_info=usuario_info)
+        texto = texto_firma_usuario(usuario_info) if "texto_firma_usuario" in globals() else "Firma y sello digital autorizados"
+        elementos = []
+        widths = []
+        if sello:
+            elementos.append(sello); widths.append(65)
+        if firma:
+            elementos.append(firma); widths.append(110)
+        elementos.append(_paper_paragraph(texto, stl["PaperSmall"]))
+        widths.append(max(80, ancho - sum(widths)))
+        if len(widths) == 1:
+            widths = [ancho]
+        table = Table([elementos], colWidths=widths)
+        table.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("LINEABOVE", (0,0), (-1,0), 0.35, colors.HexColor("#CBD5E1")),
+            ("TOPPADDING", (0,0), (-1,-1), 6),
+        ]))
+        return table
+    except Exception:
+        return None
 
 def _paper_header_story(titulo: str, subtitulo: str):
     from reportlab.platypus import Spacer
@@ -5886,12 +6157,12 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     story.append(_paper_paragraph("- " + _paper_conclusion_ejecutiva(r, contexto_embarazo), stl["PaperBody"]))
     sig = _paper_signature_flowable(width=90, height=36)
     if sig:
-        sign_table = Table([[sig, _paper_paragraph("Firma digital autorizada - Dr. Ricardo Daniel Olano", stl["PaperSmall"])]], colWidths=[100, ancho-100])
+        sign_table = Table([[sig, _paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual", {})), stl["PaperSmall"])]], colWidths=[100, ancho-100])
         sign_table.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("LINEABOVE", (0,0), (-1,0), 0.35, colors.HexColor("#CBD5E1"))]))
         story.append(Spacer(1, 4))
         story.append(sign_table)
     else:
-        story.append(_paper_paragraph("Firma digital autorizada - Dr. Ricardo Daniel Olano", stl["PaperSmall"]))
+        story.append(_paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual", {})), stl["PaperSmall"]))
     doc.build(story, onFirstPage=_paper_footer, onLaterPages=_paper_footer)
     return buffer.getvalue()
 
@@ -6062,13 +6333,13 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         story.append(_paper_paragraph(f"No se pudieron insertar los aceleradores gráficos por dominio: {e}", stl["PaperBody"]))
 
     story.append(Spacer(1, 8))
-    sig = _paper_signature_flowable(width=110, height=52)
+    sig = _paper_signature_flowable(width=110, height=52, usuario_info=st.session_state.get("usuario_actual", {}))
     if sig:
-        sign_table = Table([[sig, _paper_paragraph("Firma digital autorizada - Dr. Ricardo Daniel Olano", stl["PaperSmall"])]], colWidths=[125, ancho-125])
+        sign_table = Table([[sig, _paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual", {})), stl["PaperSmall"])]], colWidths=[125, ancho-125])
         sign_table.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("LINEABOVE", (0,0), (-1,0), 0.35, colors.HexColor("#CBD5E1"))]))
         story.append(sign_table)
     else:
-        story.append(_paper_paragraph("Firma digital autorizada - Dr. Ricardo Daniel Olano", stl["PaperSmall"]))
+        story.append(_paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual", {})), stl["PaperSmall"]))
 
     doc.build(story, onFirstPage=_paper_footer, onLaterPages=_paper_footer)
     return buffer.getvalue()
@@ -6095,10 +6366,31 @@ with st.sidebar:
     st.success(f"Usuario: {usuario_actual.get('nombre', usuario_actual.get('usuario', ''))}")
     if usuario_actual.get("matricula"):
         st.caption(f"Matrícula: {usuario_actual.get('matricula')}")
-    if usuario_habilitado_firma_olano(usuario_actual):
-        firma_preview = obtener_path_firma_olano()
+    with st.expander("Firma y sello digital del usuario", expanded=False):
+        st.caption("La firma y el sello cargados aquí solo se insertan en los PDF generados por este usuario.")
+        firma_preview = obtener_path_firma_usuario(usuario_actual)
+        sello_preview = obtener_path_sello_usuario(usuario_actual)
         if firma_preview:
-            st.image(firma_preview, caption="Firma activa para informes PDF", use_container_width=True)
+            st.image(firma_preview, caption="Firma activa", use_container_width=True)
+        if sello_preview:
+            st.image(sello_preview, caption="Sello activo", use_container_width=True)
+        firma_upload = st.file_uploader("Cargar firma digital", type=["png", "jpg", "jpeg", "webp"], key="upload_firma_usuario")
+        if st.button("Guardar firma", key="btn_guardar_firma_usuario"):
+            ok, msg = guardar_imagen_usuario_app(usuario_actual, firma_upload, "firma")
+            st.success(msg) if ok else st.error(msg)
+        sello_upload = st.file_uploader("Cargar sello digital", type=["png", "jpg", "jpeg", "webp"], key="upload_sello_usuario")
+        if st.button("Guardar sello", key="btn_guardar_sello_usuario"):
+            ok, msg = guardar_imagen_usuario_app(usuario_actual, sello_upload, "sello")
+            st.success(msg) if ok else st.error(msg)
+        col_del1, col_del2 = st.columns(2)
+        with col_del1:
+            if st.button("Quitar firma", key="btn_quitar_firma_usuario"):
+                ok, msg = eliminar_imagen_usuario_app(usuario_actual, "firma")
+                st.success(msg) if ok else st.error(msg)
+        with col_del2:
+            if st.button("Quitar sello", key="btn_quitar_sello_usuario"):
+                ok, msg = eliminar_imagen_usuario_app(usuario_actual, "sello")
+                st.success(msg) if ok else st.error(msg)
     if st.button("Cerrar sesión"):
         st.session_state.pop("usuario_actual", None)
         st.rerun()
@@ -6357,14 +6649,26 @@ with st.expander("📚 Historial acumulado de informes por usuario", expanded=Fa
         st.info("Todavía no hay informes guardados para este usuario.")
     else:
         st.dataframe(hist_usuario.sort_values("fecha_generacion", ascending=False), use_container_width=True)
-        hist_bytes = excel_historial_bytes_app(hist_usuario, df_actual=df_final)
-        if hist_bytes:
-            etiqueta_hist = "todos_los_usuarios" if ver_todos else str(usuario_actual.get("usuario", "usuario"))
+    hist_bytes = excel_historial_bytes_app(hist_usuario, df_actual=df_final)
+    if hist_bytes:
+        etiqueta_hist = "todos_los_usuarios" if ver_todos else str(usuario_actual.get("usuario", "usuario"))
+        texto_btn = "📊 Descargar Excel de TODOS los pacientes / TODOS los usuarios" if ver_todos else "📊 Descargar Excel de mis pacientes"
+        st.download_button(
+            texto_btn,
+            data=hist_bytes,
+            file_name=f"Historial_CGI_{etiqueta_hist}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_historial_filtrado_usuario",
+        )
+    if usuario_actual.get("rol") == "admin" and not hist_total.empty:
+        hist_admin_bytes = excel_historial_bytes_app(hist_total, df_actual=None)
+        if hist_admin_bytes:
             st.download_button(
-                "📊 Descargar Excel histórico acumulado",
-                data=hist_bytes,
-                file_name=f"Historial_CGI_{etiqueta_hist}.xlsx",
+                "👑 Admin: descargar Excel global completo",
+                data=hist_admin_bytes,
+                file_name="Historial_CGI_ADMIN_TODOS_LOS_USUARIOS.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_historial_global_admin",
             )
 
 def nombre_archivo_pdf_paciente(r: Dict[str, Any], prefijo: str = "") -> str:
