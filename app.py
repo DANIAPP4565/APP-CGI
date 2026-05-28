@@ -3439,6 +3439,179 @@ def sugerencia_tratamiento_no_embarazada(r: Dict[str, Any], df: Optional[pd.Data
     return "\n".join(lineas)
 
 
+def crear_grafico_propuesta_terapeutica_bytes(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Optional[io.BytesIO]:
+    """
+    Flujograma ICG terapéutico basado en Ferrario et al. / Therapeutic Advances in Cardiovascular Disease.
+    Muestra las 4 ramas del algoritmo (hiperdinámica, hipodinámica, vasoconstrictora, retención de fluidos)
+    y resalta en color la(s) que aplica(n) al paciente según sus valores reales.
+    Ref: Ferrario CM et al. Ther Adv Cardiovasc Dis 2010;4(1):53-62. Figure 2.
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+        import io as _io
+    except Exception:
+        return None
+
+    ic  = limpiar_numero((r or {}).get("ic"))
+    rvs = limpiar_numero((r or {}).get("irv"))
+    cft = limpiar_numero((r or {}).get("cft"))
+    cftnr = limpiar_numero((r or {}).get("cftnr"))
+    fc  = limpiar_numero((r or {}).get("fc"))
+
+    # ── Evaluar qué ramas aplican ────────────────────────────────────────────
+    rama_hiper  = ic is not None and ic > 4.2
+    rama_hipo   = ic is not None and ic < 2.5
+    rama_vaso   = rvs is not None and rvs > 2000   # ≥2580 severo; >2000 probable
+    rama_vaso_sev = rvs is not None and rvs > 2580
+    rama_fluid  = (cft is not None and cft > 37) or (cftnr is not None and cftnr > 37)
+
+    try:
+        cft_prev, cft_act = _valor_previo_y_actual(df, "cft")
+        if cft_prev is not None and cft_act is not None and (cft_act - cft_prev) > 2:
+            rama_fluid = True
+    except Exception:
+        pass
+
+    ninguna = not (rama_hiper or rama_hipo or rama_vaso or rama_fluid)
+
+    # ── Colores ──────────────────────────────────────────────────────────────
+    C_ACTIVO   = "#1D4ED8"   # azul oscuro — rama del paciente
+    C_INACTIVO = "#CBD5E1"   # gris claro  — rama no aplicable
+    C_TERAPIA  = "#D97706"   # ámbar       — caja de terapia activa
+    C_TERAPIA_N= "#FEF3C7"   # ámbar claro — terapia inactiva
+    C_ASSESS   = "#0EA5E9"   # celeste     — assessment
+    C_HEADER   = "#64748B"   # slate       — encabezado columna
+    C_OK       = "#15803D"   # verde       — ninguna rama (perfil favorable)
+
+    fig, ax = plt.subplots(figsize=(14, 9.5), dpi=160)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+    ax.set_xlim(0, 14)
+    ax.set_ylim(0, 10)
+    ax.axis("off")
+
+    def caja(x, y, w, h, texto, color_fondo, color_borde, color_txt="#0F172A", fs=9.5, bold=False, centrado=True, alpha=1.0):
+        rect = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.12",
+                              facecolor=color_fondo, edgecolor=color_borde,
+                              linewidth=2.0 if color_borde != C_INACTIVO else 0.8, alpha=alpha, zorder=3)
+        ax.add_patch(rect)
+        ax.text(x + w/2, y + h/2, texto,
+                ha="center" if centrado else "left",
+                va="center", fontsize=fs,
+                fontweight="bold" if bold else "normal",
+                color=color_txt, wrap=True, zorder=4,
+                multialignment="center")
+
+    def flecha(x1, y1, x2, y2, color, lw=1.8):
+        ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=lw),
+                    zorder=2)
+
+    # ── Encabezados de columnas ──────────────────────────────────────────────
+    for x_col, titulo in [(0.2, "EVALUACION"), (3.6, "PERFIL\nHEMODINAMICO"), (6.8, "IMPLICACION\nDIAGNOSTICA"), (10.2, "OPCION\nTERAPEUTICA")]:
+        caja(x_col, 8.8, 3.2, 0.95, titulo, C_HEADER, C_HEADER, "#FFFFFF", 9, True)
+
+    # ── Caja Assessment (izquierda, siempre activa) ──────────────────────────
+    vals_txt = []
+    if ic is not None:  vals_txt.append(f"IC: {fmt(ic,2)} L/min/m²")
+    if rvs is not None: vals_txt.append(f"RVS: {fmt(rvs,0)}")
+    if cft is not None: vals_txt.append(f"CFT: {fmt(cft,2)}")
+    val_str = "\n".join(vals_txt) if vals_txt else "Sin datos"
+    caja(0.2, 4.5, 3.2, 3.8,
+         f"Historia clinica\nPA / labs\n+\nTest ICG\n\n{val_str}",
+         "#E0F2FE", C_ASSESS, "#0C4A6E", 9.0, False)
+
+    # ── 4 filas de ramas ─────────────────────────────────────────────────────
+    ramas = [
+        # (y_centro, activa, label_perfil, label_dx, label_terapia, umbral_txt)
+        (7.45, rama_hiper,
+         "IC > 4.2",
+         "Hiperdinámica",
+         "Agregar / aumentar:\nbeta bloqueante o\ncalcioantagonista no DHP",
+         f"IC={fmt(ic,2)}" if ic else ""),
+        (5.75, rama_hipo,
+         "IC < 2.5",
+         "Hipodinámica",
+         "Reducir:\nbeta bloqueante\n(salvo indicación\ncomórbida obligatoria)",
+         f"IC={fmt(ic,2)}" if ic else ""),
+        (4.05, rama_vaso,
+         f"SVRI > 2580{'*' if rama_vaso and not rama_vaso_sev else ''}",
+         "Vasoconstricción",
+         "Agregar / aumentar:\nIECA, ARA-II,\ncalcioantagonista DHP\no vasodilatador directo",
+         f"RVS={fmt(rvs,0)}" if rvs else ""),
+        (2.20, rama_fluid,
+         "CFT/TFC elevado\no en ascenso",
+         "Retención\nde fluidos",
+         "Agregar / aumentar:\ndiurético",
+         f"CFT={fmt(cft,2)}" if cft else ""),
+    ]
+
+    for (y_c, activa, lbl_perf, lbl_dx, lbl_ter, umbral) in ramas:
+        h_box = 1.05
+        yb = y_c - h_box / 2
+
+        c_fondo_p  = "#DBEAFE" if activa else "#F8FAFC"
+        c_borde_p  = C_ACTIVO  if activa else C_INACTIVO
+        c_fondo_d  = "#DBEAFE" if activa else "#F8FAFC"
+        c_borde_d  = C_ACTIVO  if activa else C_INACTIVO
+        c_fondo_t  = "#FEF3C7" if activa else "#FAFAFA"
+        c_borde_t  = C_TERAPIA if activa else C_INACTIVO
+        c_txt      = "#1E3A5F" if activa else "#94A3B8"
+
+        lbl_p_full = lbl_perf + (f"\n({umbral})" if activa and umbral else "")
+        caja(3.6, yb, 2.95, h_box, lbl_p_full, c_fondo_p, c_borde_p, c_txt, 9.0, activa)
+        caja(6.8, yb, 3.1,  h_box, lbl_dx,     c_fondo_d, c_borde_d, c_txt, 9.0, activa)
+        caja(10.1, yb, 3.7, h_box, lbl_ter,     c_fondo_t, c_borde_t,
+             "#92400E" if activa else "#94A3B8", 8.5, activa)
+
+        col_flecha = C_ACTIVO if activa else C_INACTIVO
+        lw_f = 2.0 if activa else 0.8
+        flecha(3.45, y_c, 3.6, y_c, col_flecha, lw_f)
+        flecha(6.55, y_c, 6.8, y_c, col_flecha, lw_f)
+        flecha(9.9,  y_c, 10.1, y_c, col_flecha, lw_f)
+
+    # Flechas del bloque assessment al centro
+    flecha(3.4, 6.0, 3.6, 7.45, C_ASSESS, 1.4)
+    flecha(3.4, 5.85, 3.6, 5.75, C_ASSESS, 1.4)
+    flecha(3.4, 5.55, 3.6, 4.05, C_ASSESS, 1.4)
+    flecha(3.4, 5.3, 3.6, 2.20, C_ASSESS, 1.4)
+
+    # Nota pie
+    nota = "* Si ninguno de IC ni SVRI está en rango alto, seleccionar terapia según el más alto dentro del rango normal.  |  Ref: Ferrario et al. Ther Adv Cardiovasc Dis 2010;4(1):53-62."
+    ax.text(0.15, 0.25, nota, fontsize=7.5, color="#64748B", va="bottom", style="italic")
+
+    # Título y leyenda
+    titulo_color = C_OK if ninguna else C_ACTIVO
+    if ninguna:
+        titulo_estado = "SIN FENOTIPO EXTREMO DETECTADO — perfil hemodinamico dentro de rangos"
+    else:
+        ramas_act = []
+        if rama_hiper: ramas_act.append("HIPERDINÁMICA")
+        if rama_hipo:  ramas_act.append("HIPODINÁMICA")
+        if rama_vaso:  ramas_act.append("VASOCONSTRICTORA")
+        if rama_fluid: ramas_act.append("RETENCIÓN DE FLUIDOS")
+        titulo_estado = "RAMAS ACTIVAS: " + " + ".join(ramas_act)
+
+    ax.set_title(
+        f"Propuesta terapéutica ICG individualizada\n{titulo_estado}",
+        fontsize=13, fontweight="bold", color=titulo_color, pad=10
+    )
+
+    patch_act = mpatches.Patch(color=C_ACTIVO, label="Rama activa del paciente")
+    patch_ter = mpatches.Patch(color=C_TERAPIA, label="Terapia sugerida")
+    patch_ina = mpatches.Patch(color=C_INACTIVO, label="Rama no aplicable")
+    ax.legend(handles=[patch_act, patch_ter, patch_ina], loc="lower right", fontsize=8.5, framealpha=0.9)
+
+    fig.tight_layout()
+    buf = _io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
 # =========================================================
 # INFORME
 # =========================================================
@@ -8166,42 +8339,46 @@ with c4:
     st.markdown(f"<div class='metric-card'><b>CA - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('ca'))}<br><span class='muted'>Complacencia arterial basal</span></div>", unsafe_allow_html=True)
 
 
-# Gráfico dinámico IC vs IRV/RVS con ubicación real del paciente.
-graf_fenotipo_ui = crear_grafico_fenotipado_dinamico_bytes(r_panel, df_final)
-if graf_fenotipo_ui is not None:
-    st.subheader("Fenotipado clínico automatizado")
-    st.image(
-        graf_fenotipo_ui,
-        caption="Gráfico dinámico IC vs IRV/RVS: ubicación real del paciente y, si corresponde, desplazamiento ortostático basal → de pie.",
-        use_container_width=True,
-    )
+_es_embarazo_ui = bool(contexto_embarazo.get("embarazada"))
 
-st.subheader("Interpretación automática")
-st.markdown(f"<div class='card'><b>Perfil hemodinámico:</b><br>{diagnostico_perfil_hemodinamico(r_panel.get('ic'), r_panel.get('irv'))}</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr'))}</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='card'><b>Contractilidad:</b><br>{diagnostico_contractilidad(r.get('iv'), r.get('iac'), r.get('cts'))}</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='card'><b>Acoplamiento ventrículo-arterial:</b><br>{diagnostico_acoplamiento(r.get('ea'), r.get('ees'), r.get('ava'))}</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='card'><b>Análisis ortostático automático:</b><br>{interpretar_ortostatismo(df_final)}</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='card'><b>Informe de dominios integrados resumido y didáctico:</b><br>{perfil_hemodinamico_integrado(r_panel, df_final)}</div>", unsafe_allow_html=True)
-if contexto_embarazo.get("embarazada"):
-    st.markdown(f"<div class='card'><b>Módulo embarazo - hemodinamia materna:</b><br>{interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
+if not _es_embarazo_ui:
+    # ── MÓDULO CLÍNICO ────────────────────────────────────────────────────────
+    graf_fenotipo_ui = crear_grafico_fenotipado_dinamico_bytes(r_panel, df_final)
+    if graf_fenotipo_ui is not None:
+        st.subheader("Fenotipado clínico automatizado")
+        st.image(
+            graf_fenotipo_ui,
+            caption="Gráfico dinámico IC vs IRV/RVS: ubicación real del paciente y desplazamiento ortostático basal → de pie.",
+            use_container_width=True,
+        )
+    st.subheader("Interpretación automática")
+    st.markdown(f"<div class='card'><b>Perfil hemodinámico:</b><br>{diagnostico_perfil_hemodinamico(r_panel.get('ic'), r_panel.get('irv'))}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr'))}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Contractilidad:</b><br>{diagnostico_contractilidad(r.get('iv'), r.get('iac'), r.get('cts'))}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Acoplamiento ventrículo-arterial:</b><br>{diagnostico_acoplamiento(r.get('ea'), r.get('ees'), r.get('ava'))}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Análisis ortostático automático:</b><br>{interpretar_ortostatismo(df_final)}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Informe de dominios integrados resumido y didáctico:</b><br>{perfil_hemodinamico_integrado(r_panel, df_final)}</div>", unsafe_allow_html=True)
+    st.subheader("Aceleradores circulares por dominio y métricas")
+    st.caption("Cada acelerador está semaforizado: verde = normal/favorable, amarillo = precaución/intermedio, rojo = alterado.")
+    for dominio, graf in crear_graficos_dominios_individuales_bytes(r_panel).items():
+        st.image(graf, caption=f"{dominio}: gauges semicirculares del dominio", use_container_width=True)
+    st.subheader("Propuesta terapéutica ICG individualizada")
+    st.caption("Flujograma basado en Ferrario et al. — Ther Adv Cardiovasc Dis 2010. Las ramas activas del paciente aparecen resaltadas en azul; la terapia sugerida en ámbar.")
+    _graf_ter = crear_grafico_propuesta_terapeutica_bytes(r_panel, df_final)
+    if _graf_ter is not None:
+        st.image(_graf_ter, caption="Algoritmo ICG: propuesta terapéutica según fenotipo hemodinámico. No reemplaza criterio clínico ni guías vigentes.", use_container_width=True)
+
+else:
+    # ── MÓDULO EMBARAZO ───────────────────────────────────────────────────────
+    st.subheader("Módulo embarazo — hemodinamia materna")
+    st.markdown(f"<div class='card'><b>Hemodinamia materna:</b><br>{interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
     graf_materno_ui = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
     if graf_materno_ui is not None:
-        st.image(graf_materno_ui, caption="Gráfico diagnóstico de hemodinamia materna: punto real ACOSTADO/CINTA comparado con referencia gestacional", use_container_width=True)
+        st.image(graf_materno_ui, caption="Gráfico diagnóstico de hemodinamia materna: IC vs RVS con referencia gestacional (ACOSTADO/CINTA)", use_container_width=True)
     graf_eg_ui = crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(r_panel, contexto_embarazo)
     if graf_eg_ui is not None:
-        st.image(graf_eg_ui, caption="Hemodinamia materna vs edad gestacional: IC y RVS del paciente sobre curvas de referencia fisiológica gestacional, con conclusiones clínicas remarcadas", use_container_width=True)
-    st.markdown(f"<div class='card'><b>Módulo riesgo de preeclampsia:</b><br>{texto_riesgo_preeclampsia(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
-    graf_pe_ui = crear_grafico_riesgo_preeclampsia_bytes(r_panel, contexto_embarazo)
-    if graf_pe_ui is not None:
-        st.image(graf_pe_ui, caption="Acelerador circular del score hemodinámico orientativo de riesgo de preeclampsia", use_container_width=True)
-    curva_ui = crear_curva_impedancia_representativa_bytes(r_panel)
-    if curva_ui is not None:
-        st.image(curva_ui, caption="Curva de cardiografía de impedancia representativa", use_container_width=True)
-
-
-if contexto_embarazo.get("embarazada"):
-    st.subheader("Módulo paper clínico")
+        st.image(graf_eg_ui, caption="Hemodinamia materna vs edad gestacional: IC y RVS sobre curvas de referencia fisiológica gestacional, con conclusiones clínicas remarcadas", use_container_width=True)
+    st.subheader("Módulo paper clínico — Score PE/HDP")
     score_pub = calcular_score_preeclampsia_publicable(r_panel, contexto_embarazo)
     fen_pub = score_pub.get("fenotipo", {})
     st.markdown(
@@ -8215,11 +8392,6 @@ if contexto_embarazo.get("embarazada"):
     graf_pub = crear_grafico_score_paper_bytes(r_panel, contexto_embarazo)
     if graf_pub is not None:
         st.image(graf_pub, caption="Aceleradores circulares de componentes auditables del score PE/HDP", use_container_width=True)
-
-st.subheader("Aceleradores circulares por dominio y métricas")
-st.caption("Cada acelerador está semaforizado: verde = normal/favorable, amarillo = precaución/intermedio, rojo = alterado.")
-for dominio, graf in crear_graficos_dominios_individuales_bytes(r_panel).items():
-    st.image(graf, caption=f"{dominio}: gauges semicirculares del dominio", use_container_width=True)
 
 st.subheader("Informe médico integrado")
 informe = generar_informe_texto(df_final, contexto_embarazo)
