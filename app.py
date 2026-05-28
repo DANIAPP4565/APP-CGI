@@ -5796,6 +5796,178 @@ def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Opti
 
 
 # =========================================================
+# V22 - INFORME DE DOMINIOS INTEGRADOS SIN AMBIGÜEDADES
+# =========================================================
+# Reglas obligatorias:
+# - El patrón hemodinámico principal se informa SIEMPRE desde ACOSTADO/CINTA.
+# - El registro DE PIE describe respuesta ortostática y no reemplaza el patrón basal.
+# - No se utilizan las expresiones "patrón mixto", "patrón de transición" ni "patrón subóptimo".
+# - El gráfico de cuadrantes hemodinámicos IC vs IRV/RVS se integra al informe médico.
+
+PATRONES_PROHIBIDOS_RE = re.compile(
+    r"perfil\s+mixto\s+o\s+de\s+transici[oó]n|patr[oó]n\s+mixto|perfil\s+mixto|patr[oó]n\s+de\s+transici[oó]n|perfil\s+de\s+transici[oó]n|patr[oó]n\s+sub[oó]ptimo",
+    re.IGNORECASE,
+)
+
+def limpiar_patrones_prohibidos(texto: Any) -> str:
+    t = str(texto or "")
+    t = PATRONES_PROHIBIDOS_RE.sub("patrón circulatorio ACOSTADO/CINTA definido", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def resumen_acostado_cinta_para_patron(df: Optional[pd.DataFrame], r_default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Devuelve el registro ACOSTADO/CINTA para usarlo como única referencia diagnóstica."""
+    r_default = dict(r_default or {})
+    try:
+        if df is not None and not df.empty:
+            r_basal, _r_pie = obtener_resumenes_ortostaticos(df)
+            if r_basal:
+                r_out = dict(r_default)
+                for k, v in r_basal.items():
+                    if es_valor_util(v):
+                        r_out[k] = v
+                return r_out
+    except Exception:
+        pass
+    return r_default
+
+
+def estado_volemia_simple(cft: Any, cftnr: Any) -> str:
+    txt = diagnostico_volemia(cft, cftnr).upper()
+    if "HIPERVOLEMIA" in txt:
+        return "HIPERVOLEMIA"
+    if "HIPOVOLEMIA" in txt:
+        return "HIPOVOLEMIA"
+    if "NORMOVOLEMIA" in txt:
+        return "NORMOVOLEMIA"
+    return "VOLEMIA NO CLASIFICABLE"
+
+
+def estado_contractilidad_simple(iv: Any, iac: Any, cts: Any) -> str:
+    txt = diagnostico_contractilidad(iv, iac, cts).upper()
+    if "AUMENTADA" in txt:
+        return "CONTRACTILIDAD AUMENTADA"
+    if "DISMINUIDA" in txt or "REDUC" in txt:
+        return "CONTRACTILIDAD DISMINUIDA"
+    if "NO CLASIFICABLE" in txt or "INCOMPLET" in txt:
+        return "CONTRACTILIDAD NO CLASIFICABLE"
+    return "CONTRACTILIDAD CONSERVADA"
+
+
+def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
+    avav = calcular_ea_ees_derivado(ea, ees)
+    if avav is None:
+        avav = limpiar_numero(ava)
+    if avav is None:
+        return "ACOPLAMIENTO NO CLASIFICABLE"
+    if 0 <= avav <= 1.0:
+        return "ACOPLAMIENTO ÓPTIMO"
+    if 1.0 < avav <= 1.3:
+        return "ACOPLAMIENTO EN PRECAUCIÓN CLÍNICA"
+    if avav > 1.3:
+        return "DESACOPLAMIENTO VENTRÍCULO-ARTERIAL"
+    return "ACOPLAMIENTO NO CLASIFICABLE"
+
+
+def estado_ortostatico_simple(df: Optional[pd.DataFrame]) -> str:
+    try:
+        if df is None or len(df) < 2:
+            return "ORTOSTATISMO NO EVALUABLE"
+        d = calcular_delta_ortostatico(df)
+        if not d or "No se pudieron" in str(d.get("detalle", "")):
+            return "ORTOSTATISMO NO EVALUABLE"
+        return str(definir_patron_ortostatico(d)).upper()
+    except Exception:
+        return "ORTOSTATISMO NO EVALUABLE"
+
+
+def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[List[str]]:
+    rb = resumen_acostado_cinta_para_patron(df, r)
+    patron = patron_circulatorio_simple_acostado_cinta(rb, None)
+    volemia_estado = estado_volemia_simple(rb.get("cft"), rb.get("cftnr"))
+    contract_estado = estado_contractilidad_simple(rb.get("iv") or r.get("iv"), rb.get("iac") or r.get("iac"), rb.get("cts") or r.get("cts"))
+    acop_estado = estado_acoplamiento_simple(rb.get("ea") or r.get("ea"), rb.get("ees") or r.get("ees"), rb.get("ava") or r.get("ava"))
+    orto_estado = estado_ortostatico_simple(df)
+    rows = [
+        ["Dominio", "Resultado", "Interpretación resumida"],
+        [
+            "Patrón hemodinámico de referencia",
+            patron,
+            f"Resultado calculado solo con ACOSTADO/CINTA. IC {fmt(rb.get('ic'), 2, ' L/min/m²')} e IRV/RVS {fmt(rb.get('irv'), 0, ' dyn·s·cm⁻⁵')}. Es el eje diagnóstico principal.",
+        ],
+        [
+            "Volemia",
+            volemia_estado,
+            f"Clasificación volémica por CFT/CFTnr basal. CFT {fmt(rb.get('cft'), 2)}; CFTnr {fmt(rb.get('cftnr'), 2)}.",
+        ],
+        [
+            "Contractilidad",
+            contract_estado,
+            f"Lectura complementaria por IV, IAC y CTS. IV {fmt((rb.get('iv') or r.get('iv')), 2)}; IAC {fmt((rb.get('iac') or r.get('iac')), 2)}; CTS {fmt((rb.get('cts') or r.get('cts')), 2)}.",
+        ],
+        [
+            "Acoplamiento ventrículo-arterial",
+            acop_estado,
+            f"Dominio complementario por EA/EES. EA {fmt((rb.get('ea') or r.get('ea')), 2)}; EES {fmt((rb.get('ees') or r.get('ees')), 2)}; EA/EES {fmt((rb.get('ava') or r.get('ava')), 2)}.",
+        ],
+        [
+            "Comportamiento ortostático",
+            orto_estado,
+            "Describe la respuesta al ponerse de pie. No modifica ni reemplaza el patrón hemodinámico ACOSTADO/CINTA.",
+        ],
+    ]
+    return [[limpiar_patrones_prohibidos(c) for c in row] for row in rows]
+
+
+def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFrame] = None, html: bool = True) -> str:
+    rb = resumen_acostado_cinta_para_patron(df, r)
+    rows = tabla_dominios_integrados_sin_ambiguedad(r, df)[1:]
+    patron = rows[0][1]
+    orto = rows[-1][1]
+    cierre = (
+        f"Conclusión integrada: patrón hemodinámico de referencia ACOSTADO/CINTA = {patron}. "
+        f"Volemia = {rows[1][1]}. Contractilidad = {rows[2][1]}. "
+        f"Acoplamiento = {rows[3][1]}. Respuesta ortostática = {orto}."
+    )
+    lineas = [
+        f"**{rows[0][0]}:** {rows[0][1]}. {rows[0][2]}",
+        f"**{rows[1][0]}:** {rows[1][1]}. {rows[1][2]}",
+        f"**{rows[2][0]}:** {rows[2][1]}. {rows[2][2]}",
+        f"**{rows[3][0]}:** {rows[3][1]}. {rows[3][2]}",
+        f"**{rows[4][0]}:** {rows[4][1]}. {rows[4][2]}",
+        f"**{cierre}**",
+    ]
+    txt = "<br>".join(lineas) if html else "\n".join(lineas)
+    return limpiar_patrones_prohibidos(txt)
+
+
+def _paper_dominios_integrados_table(r: Dict[str, Any], df: Optional[pd.DataFrame], ancho_total: float):
+    return _paper_table(
+        tabla_dominios_integrados_sin_ambiguedad(r, df),
+        col_widths=[ancho_total*0.26, ancho_total*0.24, ancho_total*0.50],
+        header=True,
+        compact=False,
+    )
+
+
+_perfil_hemodinamico_integrado_pre_v22 = perfil_hemodinamico_integrado
+
+def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
+    """Versión final: dominios integrados, sin mezcla de patrones ni términos ambiguos."""
+    return informe_dominios_integrados_texto(r or {}, df, html=True)
+
+
+_generar_informe_texto_pre_v22 = generar_informe_texto
+
+def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> str:
+    base = _generar_informe_texto_pre_v22(df, contexto_embarazo)
+    r_local = resumen_acostado_cinta_para_patron(df, extraer_resumen_integrado(df))
+    bloque = "\n\nINFORME DE DOMINIOS INTEGRADOS SIN AMBIGÜEDADES\n" + informe_dominios_integrados_texto(r_local, df, html=False)
+    return limpiar_patrones_prohibidos(base + bloque)
+
+
+# =========================================================
 # USUARIOS, CLAVES E HISTORIAL ACUMULADO
 # =========================================================
 
@@ -6775,32 +6947,45 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     story.append(_paper_table(param, col_widths=[ancho*0.23, ancho*0.27, ancho*0.50], header=True))
     story.append(Spacer(1, 6))
 
-    story.append(_paper_paragraph("D. Lectura fisiopatológica por dominios", stl["PaperH"]))
-    bullets = [
-        "Función circulatoria: el eje dominante se define por la relación IC-RVS/IRV y la presión arterial integrada.",
-        "Volemia: CFT y CFTnr no deben interpretarse aisladamente; correlacionar con edema, proteinuria, función renal, disnea y tratamiento.",
-        "Contractilidad y onda sistólica: IV, IAC, IH, CTS, DS e IDS orientan eficiencia expulsiva y reserva sistólica.",
-        "Acoplamiento ventrículo-arterial: EA/EES estima interacción carga arterial-reserva ventricular y aporta valor pronóstico fisiopatológico.",
-    ]
-    for b in bullets:
-        story.append(_paper_paragraph("- " + b, stl["PaperBody"]))
+    story.append(_paper_paragraph("D. Gráfico de cuadrantes hemodinámicos", stl["PaperH"]))
+    story.append(_paper_paragraph(
+        "El gráfico IC vs IRV/RVS muestra la situación real del paciente. El punto ACOSTADO/CINTA es la referencia diagnóstica principal; el punto DE PIE, si está disponible, describe solo la respuesta ortostática.",
+        stl["PaperBody"],
+    ))
+    try:
+        graf_cuadrantes = crear_grafico_fenotipado_dinamico_bytes(resumen_acostado_cinta_para_patron(df, r), df)
+        if graf_cuadrantes is not None:
+            story.append(Image(graf_cuadrantes, width=ancho, height=ancho*0.66, kind="proportional"))
+        else:
+            story.append(_paper_paragraph("No hay IC e IRV/RVS suficientes para generar el gráfico de cuadrantes.", stl["PaperBody"]))
+    except Exception as e:
+        story.append(_paper_paragraph(f"No se pudo insertar el gráfico de cuadrantes hemodinámicos: {e}", stl["PaperBody"]))
+    story.append(Spacer(1, 6))
 
-    story.append(_paper_paragraph("E. Diagnóstico hemodinámico final", stl["PaperH"]))
-    story.append(_paper_paragraph(_paper_conclusion_ejecutiva(r, contexto_embarazo), stl["PaperBody"]))
+    story.append(_paper_paragraph("E. Informe de dominios integrados sin ambigüedades", stl["PaperH"]))
+    story.append(_paper_paragraph(
+        "Los dominios se informan como resultados separados. Solo el dominio de función circulatoria define el patrón hemodinámico de referencia ACOSTADO/CINTA.",
+        stl["PaperBody"],
+    ))
+    story.append(_paper_dominios_integrados_table(r, df, ancho))
+    story.append(Spacer(1, 6))
+
+    story.append(_paper_paragraph("F. Diagnóstico hemodinámico final", stl["PaperH"]))
+    story.append(_paper_paragraph(informe_dominios_integrados_texto(r, df, html=False), stl["PaperBody"]))
     story.append(_paper_diagnostico_pronostico_table(r, contexto_embarazo, ancho))
     story.append(Spacer(1, 6))
 
     if contexto_embarazo and contexto_embarazo.get("embarazada"):
-        story.append(_paper_paragraph("F. Módulo embarazo / HDP / PE", stl["PaperH"]))
+        story.append(_paper_paragraph("G. Módulo embarazo / HDP / PE", stl["PaperH"]))
         story.append(_paper_paragraph(interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo), stl["PaperBody"]))
         story.append(_paper_paragraph("Riesgo hemodinámico orientativo", stl["PaperH"]))
         story.append(_paper_paragraph(texto_riesgo_preeclampsia(r_panel, contexto_embarazo), stl["PaperBody"]))
     else:
-        story.append(_paper_paragraph("F. Orientación terapéutica", stl["PaperH"]))
+        story.append(_paper_paragraph("G. Orientación terapéutica", stl["PaperH"]))
         story.append(_paper_paragraph(limpiar_referencias_obstetricas_en_linea(sugerencia_tratamiento_no_embarazada(r, df)), stl["PaperBody"]))
 
     story.append(PageBreak())
-    story.append(_paper_paragraph("G. Control de integración y trazabilidad", stl["PaperH"]))
+    story.append(_paper_paragraph("H. Control de integración y trazabilidad", stl["PaperH"]))
     try:
         calidad = resumen_calidad_integracion(df)
         tabla = calidad.get("tabla")
@@ -6815,7 +7000,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         story.append(_paper_paragraph(f"No se pudo construir la tabla de trazabilidad: {e}", stl["PaperBody"]))
 
     story.append(Spacer(1, 6))
-    story.append(_paper_paragraph("H. Métricas por dominio", stl["PaperH"]))
+    story.append(_paper_paragraph("I. Métricas por dominio", stl["PaperH"]))
     try:
         md = metricas_por_dominio(r)
         for dominio, items in md.items():
@@ -6836,7 +7021,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         graf_pe = crear_grafico_riesgo_preeclampsia_bytes(r_panel, contexto_embarazo) if es_embarazo else None
         if graf_pe is not None:
             story.append(PageBreak())
-            story.append(_paper_paragraph("I. Visualización de riesgo / acelerador", stl["PaperH"]))
+            story.append(_paper_paragraph("J. Visualización de riesgo / acelerador", stl["PaperH"]))
             story.append(Image(graf_pe, width=ancho*0.82, height=ancho*0.45, kind="proportional"))
     except Exception:
         pass
@@ -6851,7 +7036,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     # BLOQUE FINAL OBLIGATORIO: gauges gráficos de métricas por dominio.
     # Se coloca al final del informe médico integrado, antes de la firma.
     story.append(PageBreak())
-    story.append(_paper_paragraph("I. ACELERADORES GRAFICOS DE LAS METRICAS POR DOMINIO", stl["PaperH"]))
+    story.append(_paper_paragraph("J. ACELERADORES GRAFICOS DE LAS METRICAS POR DOMINIO", stl["PaperH"]))
     story.append(_paper_paragraph(
         "Cada acelerador resume la posición de la métrica respecto de su rango clínico de referencia y permite una lectura visual semaforizada por dominio.",
         stl["PaperBody"],
@@ -6886,7 +7071,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     capturas_originales = capturas_pdfs_originales_desde_sesion()
     if capturas_originales:
         story.append(PageBreak())
-        story.append(_paper_paragraph("J. CAPTURA DEL INFORME ORIGINAL DEL EQUIPO", stl["PaperH"]))
+        story.append(_paper_paragraph("K. CAPTURA DEL INFORME ORIGINAL DEL EQUIPO", stl["PaperH"]))
         story.append(_paper_paragraph(
             "Se incorpora la captura de la primera página del PDF original importado para mantener trazabilidad visual del estudio fuente dentro del informe médico integrado completo.",
             stl["PaperBody"],
@@ -7380,7 +7565,7 @@ st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia
 st.markdown(f"<div class='card'><b>Contractilidad:</b><br>{diagnostico_contractilidad(r.get('iv'), r.get('iac'), r.get('cts'))}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='card'><b>Acoplamiento ventrículo-arterial:</b><br>{diagnostico_acoplamiento(r.get('ea'), r.get('ees'), r.get('ava'))}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='card'><b>Análisis ortostático automático:</b><br>{interpretar_ortostatismo(df_final)}</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='card'><b>Perfil hemodinámico integrado por dominios:</b><br>{perfil_hemodinamico_integrado(r, df_final)}</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='card'><b>Informe de dominios integrados sin ambigüedades:</b><br>{perfil_hemodinamico_integrado(r_panel, df_final)}</div>", unsafe_allow_html=True)
 if contexto_embarazo.get("embarazada"):
     st.markdown(f"<div class='card'><b>Módulo embarazo - hemodinamia materna:</b><br>{interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Módulo riesgo de preeclampsia:</b><br>{texto_riesgo_preeclampsia(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
