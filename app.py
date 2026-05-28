@@ -1268,7 +1268,7 @@ def integrar_datos(df1: pd.DataFrame, df2: Optional[pd.DataFrame] = None) -> pd.
     return combinado.reset_index(drop=True)
 
 def es_valor_util(x: Any) -> bool:
-    """Evita comparaciones ambiguas de Pandas al leer valores de filas integradas."""
+    """Evita comparaciones claras de Pandas al leer valores de filas integradas."""
     if x is None:
         return False
     if isinstance(x, (pd.Series, pd.DataFrame, list, tuple, dict)):
@@ -1676,7 +1676,7 @@ def diagnostico_perfil_hemodinamico(ic: Any, irv: Any) -> str:
     icv = limpiar_numero(ic)
     rv = limpiar_numero(irv)
     if icv is None and rv is None:
-        return "Patrón circulatorio no clasificable por datos incompletos."
+        return "DATOS INSUFICIENTES PARA DEFINIR PATRÓN CIRCULATORIO."
 
     if icv is not None and rv is not None:
         if icv > 4.0 or rv < 1200:
@@ -1699,7 +1699,7 @@ def diagnostico_perfil_hemodinamico(ic: Any, irv: Any) -> str:
             return "Patrón circulatorio de HIPODINAMIA: resistencia vascular elevada."
         return "Patrón circulatorio de NORMODINAMIA: resistencia vascular dentro de rango esperado."
 
-    return "Patrón circulatorio no clasificable por datos incompletos."
+    return "DATOS INSUFICIENTES PARA DEFINIR PATRÓN CIRCULATORIO."
 
 
 
@@ -1807,7 +1807,7 @@ def diagnostico_contractilidad(iv: Any, iac: Any, cts: Any) -> str:
     ivv, iacv, ctsv = map(limpiar_numero, [iv, iac, cts])
     disponibles = [v for v in [ivv, iacv, ctsv] if v is not None]
     if not disponibles:
-        return "Contractilidad no clasificable por datos incompletos."
+        return "CONTRACTILIDAD: datos insuficientes para definir resultado."
 
     aumentada = 0
     disminuida = 0
@@ -1833,7 +1833,7 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
     if avav is None and eav is not None and eesv not in [None, 0]:
         avav = eav / eesv
     if avav is None:
-        return "Acoplamiento ventrículo-arterial no clasificable por datos incompletos."
+        return "ACOPLAMIENTO VENTRÍCULO-ARTERIAL: datos insuficientes para definir resultado."
 
     if 0 <= avav <= 1.0:
         return f"Acoplamiento ventrículo-arterial óptimo. Relación EA/EES: {fmt(avav)}."
@@ -1981,7 +1981,7 @@ def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
         resultado[out_key] = delta
         partes.append(f"{nombre}: basal {fmt(v1)} → de pie {fmt(v2)}; Δ {fmt(delta)} {unidad}")
 
-    resultado["detalle"] = " | ".join(partes) if partes else "No se pudieron calcular deltas ortostáticos por datos incompletos."
+    resultado["detalle"] = " | ".join(partes) if partes else "No se pudieron calcular deltas ortostáticos por datos insuficientes."
     return resultado
 
 
@@ -2043,7 +2043,7 @@ def interpretar_ortostatismo(df: pd.DataFrame) -> str:
 
     d = calcular_delta_ortostatico(df)
     if not d.get("detalle") or "No se pudieron" in d.get("detalle", ""):
-        return d.get("detalle", "No se pudo realizar análisis ortostático automático por datos incompletos.")
+        return d.get("detalle", "No se pudo definir el análisis ortostático automático por datos insuficientes.")
 
     patron = definir_patron_ortostatico(d)
     descripcion = descripcion_patron_ortostatico(patron)
@@ -2245,7 +2245,7 @@ def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] 
     score_global = sum(scores) / len(scores) if scores else None
 
     if score_global is None:
-        categoria = "perfil hemodinámico integrado no clasificable por datos incompletos"
+        categoria = "perfil hemodinámico integrado con datos insuficientes para definir resultado"
     elif score_global >= 0.80:
         categoria = "patrón de referencia ACOSTADO/CINTA conservado"
     elif score_global >= 0.50:
@@ -3043,7 +3043,7 @@ def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict
     lineas.append("- " + texto_clasificacion_dinamica(r, contexto))
 
     # Clasificación orientativa inspirada en Ferrazzi: no reemplaza diagnóstico obstétrico.
-    fenotipo = "No clasificable por datos incompletos."
+    fenotipo = "Datos insuficientes para definir resultado."
     if ic is not None and irv is not None:
         if hdp and ("SGA" in crecimiento.upper() or "RCIU" in crecimiento.upper() or "FGR" in crecimiento.upper() or "IUGR" in crecimiento.upper()):
             if ic < 3.8 and irv >= 1200:
@@ -3151,7 +3151,7 @@ def calcular_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str,
 
     puntaje = 0.0
     factores: List[str] = []
-    fenotipo = "No clasificable por datos incompletos"
+    fenotipo = "Datos insuficientes para definir resultado"
 
     if hdp:
         puntaje += 2.0
@@ -3426,8 +3426,8 @@ def sugerencia_tratamiento_no_embarazada(r: Dict[str, Any], df: Optional[pd.Data
             fenotipos.append("Fenotipo sin predominio hemodinámico extremo")
             recomendaciones.append("Mantener enfoque escalonado basado en riesgo cardiovascular global, daño de órgano blanco y tolerancia; si la PA no está controlada, intensificar combinación racional según guías clínicas y repetir evaluación hemodinámica.")
         else:
-            fenotipos.append("No clasificable por datos incompletos")
-            recomendaciones.append("No se puede sugerir una estrategia farmacológica hemodinámica porque faltan IC, RVS/SVRI y CFT/TFC.")
+            fenotipos.append("Datos insuficientes para definir resultado")
+            recomendaciones.append("No se emite sugerencia farmacológica hemodinámica porque no están disponibles IC, RVS/SVRI y CFT/TFC.")
 
     lineas.append("- Fenotipo terapéutico detectado: " + "; ".join(dict.fromkeys(fenotipos)) + ".")
     lineas.append("- Sugerencia farmacológica orientativa:")
@@ -5651,7 +5651,7 @@ if _generar_tabla_validacion_hemodinamica_v15_base_eaees is not None:
 # Regla clínica obligatoria:
 # - El patrón hemodinámico diagnóstico se informa siempre desde ACOSTADO/CINTA.
 # - DE PIE se informa exclusivamente como respuesta ortostática.
-# - No se usa "patrón subóptimo" como patrón circulatorio.
+# - No se usa "patrón definido" como patrón circulatorio.
 # - El patrón circulatorio solo puede ser HIPODINAMIA, NORMODINAMIA o HIPERDINAMIA.
 
 def patron_circulatorio_simple_acostado_cinta(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
@@ -5800,22 +5800,37 @@ def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Opti
 
 
 # =========================================================
-# V22 - INFORME DE DOMINIOS INTEGRADOS SIN AMBIGÜEDADES
+# V22 - INFORME DE DOMINIOS INTEGRADOS RESUMIDO Y DIDÁCTICO
 # =========================================================
 # Reglas obligatorias:
 # - El patrón hemodinámico principal se informa SIEMPRE desde ACOSTADO/CINTA.
 # - El registro DE PIE describe respuesta ortostática y no reemplaza el patrón basal.
-# - No se utilizan las expresiones "patrón mixto", "patrón de transición" ni "patrón subóptimo".
+# - No se utilizan las expresiones "patrón definido", "patrón definido" ni "patrón definido".
 # - El gráfico de cuadrantes hemodinámicos IC vs IRV/RVS se integra al informe médico.
 
 PATRONES_PROHIBIDOS_RE = re.compile(
-    r"perfil\s+mixto\s+o\s+de\s+transici[oó]n|patr[oó]n\s+mixto|perfil\s+mixto|patr[oó]n\s+de\s+transici[oó]n|perfil\s+de\s+transici[oó]n|patr[oó]n\s+sub[oó]ptimo",
+    r"perfil\s+mixto\s+o\s+de\s+transici[oó]n|patr[oó]n\s+mixto|perfil\s+mixto|patr[oó]n\s+de\s+transici[oó]n|perfil\s+de\s+transici[oó]n|patr[oó]n\s+sub[oó]ptimo|ambigu[oa]s?|ambig[uü]edad(?:es)?|incomplet[oa]s?",
     re.IGNORECASE,
 )
 
 def limpiar_patrones_prohibidos(texto: Any) -> str:
+    """Normaliza el lenguaje del informe para mantenerlo claro, breve y definitivo."""
     t = str(texto or "")
     t = PATRONES_PROHIBIDOS_RE.sub("patrón circulatorio ACOSTADO/CINTA definido", t)
+    reemplazos = {
+        r"datos\s+incomplet[oa]s?": "datos insuficientes para definir el resultado",
+        r"no\s+clasificable": "datos insuficientes para definir",
+        r"perfil\s+hemodin[aá]mico\s+integrado\s+no\s+clasificable": "perfil hemodinámico integrado con datos insuficientes para definir resultado",
+        r"patr[oó]n\s+sub[oó]ptimo": "patrón definido",
+        r"patr[oó]n\s+mixto": "patrón definido",
+        r"perfil\s+mixto": "patrón definido",
+        r"patr[oó]n\s+de\s+transici[oó]n": "patrón definido",
+        r"perfil\s+de\s+transici[oó]n": "patrón definido",
+        r"ambigu[oa]s?": "claro",
+        r"ambig[uü]edad(?:es)?": "definición clara",
+    }
+    for pat, rep in reemplazos.items():
+        t = re.sub(pat, rep, t, flags=re.IGNORECASE)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -5925,22 +5940,21 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
 
 
 def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFrame] = None, html: bool = True) -> str:
-    rb = resumen_acostado_cinta_para_patron(df, r)
+    """Informe integrado breve, didáctico y con un único patrón basal ACOSTADO/CINTA."""
     rows = tabla_dominios_integrados_sin_ambiguedad(r, df)[1:]
     patron = rows[0][1]
-    orto = rows[-1][1]
-    cierre = (
-        f"Conclusión integrada: patrón hemodinámico de referencia ACOSTADO/CINTA = {patron}. "
-        f"Volemia = {rows[1][1]}. Contractilidad = {rows[2][1]}. "
-        f"Acoplamiento = {rows[3][1]}. Respuesta ortostática = {orto}."
-    )
+    volemia = rows[1][1]
+    contractilidad = rows[2][1]
+    acoplamiento = rows[3][1]
+    orto = rows[4][1]
+
     lineas = [
-        f"**{rows[0][0]}:** {rows[0][1]}. {rows[0][2]}",
-        f"**{rows[1][0]}:** {rows[1][1]}. {rows[1][2]}",
-        f"**{rows[2][0]}:** {rows[2][1]}. {rows[2][2]}",
-        f"**{rows[3][0]}:** {rows[3][1]}. {rows[3][2]}",
-        f"**{rows[4][0]}:** {rows[4][1]}. {rows[4][2]}",
-        f"**{cierre}**",
+        f"**Patrón hemodinámico basal ACOSTADO/CINTA:** {patron}. {rows[0][2]}",
+        f"**Volemia:** {volemia}. {rows[1][2]}",
+        f"**Contractilidad:** {contractilidad}. {rows[2][2]}",
+        f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {rows[3][2]}",
+        f"**Respuesta ortostática:** {orto}. El registro DE PIE describe adaptación postural y no cambia el diagnóstico basal.",
+        f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; respuesta ortostática {orto}.",
     ]
     txt = "<br>".join(lineas) if html else "\n".join(lineas)
     return limpiar_patrones_prohibidos(txt)
@@ -5958,7 +5972,7 @@ def _paper_dominios_integrados_table(r: Dict[str, Any], df: Optional[pd.DataFram
 _perfil_hemodinamico_integrado_pre_v22 = perfil_hemodinamico_integrado
 
 def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
-    """Versión final: dominios integrados, sin mezcla de patrones ni términos ambiguos."""
+    """Versión final: dominios integrados, sin mezcla de patrones ni términos claros."""
     return informe_dominios_integrados_texto(r or {}, df, html=True)
 
 
@@ -5967,7 +5981,7 @@ _generar_informe_texto_pre_v22 = generar_informe_texto
 def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> str:
     base = _generar_informe_texto_pre_v22(df, contexto_embarazo)
     r_local = resumen_acostado_cinta_para_patron(df, extraer_resumen_integrado(df))
-    bloque = "\n\nINFORME DE DOMINIOS INTEGRADOS SIN AMBIGÜEDADES\n" + informe_dominios_integrados_texto(r_local, df, html=False)
+    bloque = "\n\nINFORME DE DOMINIOS INTEGRADOS RESUMIDO Y DIDÁCTICO\n" + informe_dominios_integrados_texto(r_local, df, html=False)
     return limpiar_patrones_prohibidos(base + bloque)
 
 
@@ -6259,7 +6273,11 @@ def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict
         lineas.append(f"- Edad gestacional no especificada; referencia usada: {ref['label']}.")
     lineas.append(f"- Patrón circulatorio materno ACOSTADO/CINTA: {c['diagnostico']}.")
     lineas.append(f"- Base real del estudio: IC {fmt(c.get('ic'),2,' L/min/m²')}; IRV/RVS {fmt(c.get('rvs'),0,' dyn·s·cm⁻⁵')}.")
-    lineas.append(f"- Comparación gestacional: esperado IC {fmt(ref['ic_low'],1)}-{fmt(ref['ic_high'],1)} L/min/m² y RVS {fmt(ref['rvs_low'],0)}-{fmt(ref['rvs_high'],0)} dyn·s·cm⁻⁵.")
+    lineas.append(f"- Comparación con edad gestacional: para {ref['label']} se espera IC {fmt(ref['ic_low'],1)}-{fmt(ref['ic_high'],1)} L/min/m² y RVS {fmt(ref['rvs_low'],0)}-{fmt(ref['rvs_high'],0)} dyn·s·cm⁻⁵.")
+    if c.get("ic") is not None and c.get("rvs") is not None:
+        comp_ic_txt = "bajo para la edad gestacional" if c.get("ic") < ref["ic_low"] else ("alto para la edad gestacional" if c.get("ic") > ref["ic_high"] else "en rango para la edad gestacional")
+        comp_rvs_txt = "elevada para la edad gestacional" if c.get("rvs") > ref["rvs_high"] else ("baja para la edad gestacional" if c.get("rvs") < ref["rvs_low"] else "en rango para la edad gestacional")
+        lineas.append(f"- Diagnóstico gráfico por edad gestacional: IC {comp_ic_txt}; IRV/RVS {comp_rvs_txt}.")
     lineas.append(f"- Interpretación resumida: {c['interpretacion']}")
     lineas.append(f"- HDP/HTA obstétrica informada: {'sí' if hdp else 'no/no informado'}. Crecimiento fetal: {crecimiento}. Doppler uterino: {doppler}.")
 
@@ -6301,6 +6319,10 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
         return None
 
     ref = c["referencia"]
+    tri = ref.get("trimestre", trimestre_gestacional_desde_contexto(contexto))
+    eg_val = limpiar_numero(c.get("edad_gestacional"))
+    eg_label = f"EG {fmt(eg_val,0)} semanas" if eg_val is not None else "EG no especificada"
+    tri_label = ref.get("label", "referencia gestacional")
     x_min = max(500, min(650, ref["rvs_low"] - 250, rvs - 450))
     x_max = max(2200, ref["rvs_high"] + 650, rvs + 450)
     y_min = max(1.5, min(2.0, ref["ic_low"] - 1.2, ic - 1.0))
@@ -6344,13 +6366,13 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
         fontsize=10.5, fontweight="bold", color="#0F172A"
     )
 
-    ax.set_title("Hemodinamia materna gestacional: situación real ACOSTADO/CINTA", fontsize=15, fontweight="bold", color="#0B3D6E")
+    ax.set_title(f"Hemodinamia materna según edad gestacional: {eg_label} ({tri_label})", fontsize=15, fontweight="bold", color="#0B3D6E")
     ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=12, fontweight="bold")
     ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=12, fontweight="bold")
     ax.grid(True, alpha=0.25)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
-    ax.text(0.01, -0.17, f"Referencia usada: {ref['label']}. El punto diagnóstico corresponde a ACOSTADO/CINTA; DE PIE queda reservado para respuesta ortostática.", transform=ax.transAxes, fontsize=10.5, color="#334155")
+    ax.text(0.01, -0.17, f"Lectura: el punto ACOSTADO/CINTA se compara contra la referencia de {tri_label} ({eg_label}). DE PIE queda reservado para respuesta ortostática. Diagnóstico: {c['diagnostico']}.", transform=ax.transAxes, fontsize=10.5, color="#334155")
     fig.tight_layout()
     buf = _io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
@@ -6385,6 +6407,7 @@ APP_DATA_DIR = Path(__file__).resolve().parent / "app_cgi_data"
 USUARIOS_JSON = APP_DATA_DIR / "usuarios_app_cgi.json"
 HISTORIAL_XLSX = APP_DATA_DIR / "historial_informes_app_cgi.xlsx"
 USUARIO_ASSETS_DIR = APP_DATA_DIR / "usuarios_assets"
+HISTORIAL_USUARIOS_DIR = APP_DATA_DIR / "historial_usuarios"
 
 
 
@@ -6392,6 +6415,7 @@ def _asegurar_directorio_app() -> None:
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
     try:
         USUARIO_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+        HISTORIAL_USUARIOS_DIR.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
 
@@ -6676,11 +6700,12 @@ def autenticar_usuario_app(usuario: str, clave: str) -> Tuple[bool, Optional[Dic
 
     autenticado = False
     if salt_guardado and hash_guardado:
+        import hmac
         hp = _hash_clave(clave_norm, salt=salt_guardado)
-        autenticado = hp.get("hash") == hash_guardado
+        autenticado = hmac.compare_digest(str(hp.get("hash") or ""), str(hash_guardado or ""))
         if not autenticado:
             hp_legacy = _hash_clave(str(clave), salt=salt_guardado)
-            autenticado = hp_legacy.get("hash") == hash_guardado
+            autenticado = hmac.compare_digest(str(hp_legacy.get("hash") or ""), str(hash_guardado or ""))
 
     if not autenticado and _comparar_clave_legacy(info, clave_norm, str(clave)):
         autenticado = True
@@ -6689,7 +6714,15 @@ def autenticar_usuario_app(usuario: str, clave: str) -> Tuple[bool, Optional[Dic
     if not autenticado:
         return False, None, "Usuario o contraseña incorrecta. Si el usuario ya existía en una versión previa, use 'Restablecer clave' una sola vez."
 
-    info = cargar_usuarios_app().get(real_key, info)
+    try:
+        usuarios = cargar_usuarios_app()
+        real_key = _buscar_usuario_flexible(usuarios, usuario_norm) or real_key
+        if real_key in usuarios:
+            usuarios[real_key]["ultimo_ingreso"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            guardar_usuarios_app(usuarios)
+        info = usuarios.get(real_key, info)
+    except Exception:
+        info = cargar_usuarios_app().get(real_key, info)
     info["usuario"] = _normalizar_usuario(info.get("usuario") or real_key)
     return True, info, "Ingreso correcto."
 
@@ -6945,30 +6978,87 @@ def leer_historial_app() -> pd.DataFrame:
         # Evita NameError/ruptura de app si el archivo está corrupto o falta dependencia.
         return pd.DataFrame(columns=columnas_base)
 
-def guardar_historial_app(fila: Dict[str, Any]) -> bool:
+def _ruta_historial_usuario(usuario: Any) -> Path:
+    """Ruta de respaldo por usuario autenticado.
+
+    Además del Excel global, se mantiene un Excel propio para cada usuario.
+    Esto facilita que cada profesional conserve y exporte sus estudios previos
+    con sus propias credenciales.
+    """
     _asegurar_directorio_app()
+    return HISTORIAL_USUARIOS_DIR / f"historial_{_slug_archivo_usuario(usuario)}.xlsx"
+
+
+def leer_historial_usuario_app(usuario_info: Dict[str, Any]) -> pd.DataFrame:
+    ruta = _ruta_historial_usuario(usuario_info.get("usuario", ""))
+    if not ruta.exists():
+        # Compatibilidad: si todavía no existe el archivo individual, filtra el global.
+        return filtrar_historial_por_usuario(leer_historial_app(), usuario_info, todos=False)
+    try:
+        return pd.read_excel(ruta, sheet_name="Historial", engine="openpyxl")
+    except Exception:
+        return filtrar_historial_por_usuario(leer_historial_app(), usuario_info, todos=False)
+
+
+def guardar_historial_usuario_app(fila: Dict[str, Any]) -> bool:
+    """Guarda/actualiza el historial del usuario logueado en un archivo propio."""
+    usuario = _normalizar_usuario(fila.get("usuario", ""))
+    if not usuario:
+        return False
+    ruta = _ruta_historial_usuario(usuario)
     nuevo = pd.DataFrame([fila])
-    hist = leer_historial_app()
+    try:
+        hist = pd.read_excel(ruta, sheet_name="Historial", engine="openpyxl") if ruta.exists() else pd.DataFrame()
+    except Exception:
+        hist = pd.DataFrame()
     if not hist.empty and "uid_registro" in hist.columns and fila.get("uid_registro") in set(hist["uid_registro"].astype(str)):
-        # Actualiza el registro existente en lugar de duplicar el mismo informe.
         hist = hist[hist["uid_registro"].astype(str) != str(fila.get("uid_registro"))]
     hist = pd.concat([hist, nuevo], ignore_index=True, sort=False)
     try:
-        with pd.ExcelWriter(HISTORIAL_XLSX, engine="openpyxl") as writer:
+        with pd.ExcelWriter(ruta, engine="openpyxl") as writer:
             hist.to_excel(writer, index=False, sheet_name="Historial")
         return True
     except Exception:
         return False
 
 
+def guardar_historial_app(fila: Dict[str, Any]) -> bool:
+    _asegurar_directorio_app()
+    fila = dict(fila or {})
+    fila["usuario"] = _normalizar_usuario(fila.get("usuario", ""))
+    nuevo = pd.DataFrame([fila])
+    hist = leer_historial_app()
+    if not hist.empty and "uid_registro" in hist.columns and fila.get("uid_registro") in set(hist["uid_registro"].astype(str)):
+        # Actualiza el registro existente en lugar de duplicar el mismo informe.
+        hist = hist[hist["uid_registro"].astype(str) != str(fila.get("uid_registro"))]
+    hist = pd.concat([hist, nuevo], ignore_index=True, sort=False)
+    ok_global = False
+    try:
+        with pd.ExcelWriter(HISTORIAL_XLSX, engine="openpyxl") as writer:
+            hist.to_excel(writer, index=False, sheet_name="Historial")
+        ok_global = True
+    except Exception:
+        ok_global = False
+    ok_usuario = guardar_historial_usuario_app(fila)
+    return bool(ok_global or ok_usuario)
+
+
 def filtrar_historial_por_usuario(hist: pd.DataFrame, usuario_info: Dict[str, Any], todos: bool = False) -> pd.DataFrame:
+    """Devuelve solo los estudios del usuario autenticado.
+
+    La comparación se normaliza igual que el login para que un mismo usuario
+    conserve su historial aunque ingrese con mayúsculas, espacios o acentos.
+    El administrador puede exportar el total cuando se activa la opción.
+    """
     if hist is None or hist.empty:
         return pd.DataFrame()
     if todos and usuario_info.get("rol") == "admin":
         return hist.copy()
     if "usuario" not in hist.columns:
         return pd.DataFrame()
-    return hist[hist["usuario"].astype(str) == str(usuario_info.get("usuario", ""))].copy()
+    usuario_norm = _normalizar_usuario(usuario_info.get("usuario", ""))
+    serie_norm = hist["usuario"].astype(str).map(_normalizar_usuario)
+    return hist[serie_norm == usuario_norm].copy()
 
 
 def excel_historial_bytes_app(hist: pd.DataFrame, df_actual: Optional[pd.DataFrame] = None) -> Optional[bytes]:
@@ -7380,7 +7470,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         story.append(_paper_paragraph(f"No se pudo insertar el gráfico de cuadrantes hemodinámicos: {e}", stl["PaperBody"]))
     story.append(Spacer(1, 6))
 
-    story.append(_paper_paragraph("E. Informe de dominios integrados sin ambigüedades", stl["PaperH"]))
+    story.append(_paper_paragraph("E. Informe de dominios integrados resumido y didáctico", stl["PaperH"]))
     story.append(_paper_paragraph(
         "Los dominios se informan como resultados separados. Solo el dominio de función circulatoria define el patrón hemodinámico de referencia ACOSTADO/CINTA.",
         stl["PaperBody"],
@@ -7990,7 +8080,7 @@ st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia
 st.markdown(f"<div class='card'><b>Contractilidad:</b><br>{diagnostico_contractilidad(r.get('iv'), r.get('iac'), r.get('cts'))}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='card'><b>Acoplamiento ventrículo-arterial:</b><br>{diagnostico_acoplamiento(r.get('ea'), r.get('ees'), r.get('ava'))}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='card'><b>Análisis ortostático automático:</b><br>{interpretar_ortostatismo(df_final)}</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='card'><b>Informe de dominios integrados sin ambigüedades:</b><br>{perfil_hemodinamico_integrado(r_panel, df_final)}</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='card'><b>Informe de dominios integrados resumido y didáctico:</b><br>{perfil_hemodinamico_integrado(r_panel, df_final)}</div>", unsafe_allow_html=True)
 if contexto_embarazo.get("embarazada"):
     st.markdown(f"<div class='card'><b>Módulo embarazo - hemodinamia materna:</b><br>{interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
     graf_materno_ui = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
@@ -8042,7 +8132,10 @@ hist_total = leer_historial_app()
 ver_todos = False
 if usuario_actual.get("rol") == "admin":
     ver_todos = st.checkbox("Admin: exportar historial de todos los usuarios", value=False)
-hist_usuario = filtrar_historial_por_usuario(hist_total, usuario_actual, todos=ver_todos)
+if ver_todos:
+    hist_usuario = filtrar_historial_por_usuario(hist_total, usuario_actual, todos=True)
+else:
+    hist_usuario = leer_historial_usuario_app(usuario_actual)
 with st.expander("📚 Historial acumulado de informes por usuario", expanded=False):
     if hist_usuario.empty:
         st.info("Todavía no hay informes guardados para este usuario.")
@@ -8188,3 +8281,24 @@ def construir_bloque_referencias_pdf() -> str:
         f"{refs}\\n"
     )
 
+
+
+# =========================================================
+# V_FINAL_LENGUAJE_DIDACTICO
+# Normalización final del lenguaje de informes: sin términos no deseados,
+# con patrón basal ACOSTADO/CINTA y lectura resumida por dominios.
+# =========================================================
+
+try:
+    _generar_informe_texto_pre_lenguaje_didactico = generar_informe_texto
+    def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> str:
+        return limpiar_patrones_prohibidos(_generar_informe_texto_pre_lenguaje_didactico(df, contexto_embarazo))
+except Exception:
+    pass
+
+try:
+    _perfil_hemodinamico_integrado_pre_lenguaje_didactico = perfil_hemodinamico_integrado
+    def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
+        return limpiar_patrones_prohibidos(_perfil_hemodinamico_integrado_pre_lenguaje_didactico(r, df))
+except Exception:
+    pass
