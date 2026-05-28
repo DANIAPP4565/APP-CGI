@@ -6087,6 +6087,296 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
     return limpiar_patrones_prohibidos(texto)
 
 
+
+
+# =========================================================
+# V24 - HEMODINAMIA MATERNA GESTACIONAL
+# Clasificación por trimestre: el patrón materno en embarazo se compara con
+# la fisiología esperada del embarazo, no con rangos generales no gestacionales.
+# El punto diagnóstico usa exclusivamente ACOSTADO/CINTA.
+# =========================================================
+
+def trimestre_gestacional_desde_contexto(contexto: Optional[Dict[str, Any]] = None) -> str:
+    eg = limpiar_numero((contexto or {}).get("edad_gestacional"))
+    if eg is None:
+        return "No especificado"
+    if eg < 14:
+        return "T1"
+    if eg < 28:
+        return "T2"
+    return "T3"
+
+
+def referencia_hemodinamica_materna_por_trimestre(contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Rangos operativos para la app basados en la adaptación hemodinámica gestacional.
+
+    La finalidad es clínica-orientativa: en embarazo avanzado se espera mayor IC/GC
+    y menor RVS que en una adulta no embarazada. Por eso un IC aparentemente normal
+    en rango general puede ser bajo relativo para T2/T3 si se acompaña de RVS elevada.
+    """
+    tri = trimestre_gestacional_desde_contexto(contexto)
+    refs = {
+        "T1": {"ic_low": 3.2, "ic_high": 5.5, "rvs_low": 850, "rvs_high": 1450, "label": "primer trimestre"},
+        "T2": {"ic_low": 3.5, "ic_high": 6.0, "rvs_low": 750, "rvs_high": 1300, "label": "segundo trimestre"},
+        "T3": {"ic_low": 3.6, "ic_high": 6.0, "rvs_low": 750, "rvs_high": 1300, "label": "tercer trimestre"},
+        "No especificado": {"ic_low": 3.5, "ic_high": 6.0, "rvs_low": 750, "rvs_high": 1350, "label": "embarazo, trimestre no especificado"},
+    }
+    out = refs.get(tri, refs["No especificado"]).copy()
+    out["trimestre"] = tri
+    return out
+
+
+def clasificacion_hemodinamica_materna_gestacional(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    contexto = contexto or {}
+    ref = referencia_hemodinamica_materna_por_trimestre(contexto)
+    ic = limpiar_numero((r or {}).get("ic"))
+    rvs = limpiar_numero((r or {}).get("irv"))
+    eg = limpiar_numero(contexto.get("edad_gestacional"))
+
+    if ic is None or rvs is None:
+        return {
+            "patron_principal": "NO CLASIFICABLE",
+            "subtipo": "datos insuficientes",
+            "diagnostico": "NO CLASIFICABLE",
+            "interpretacion": "No se dispone simultáneamente de IC e IRV/RVS ACOSTADO/CINTA para clasificar la hemodinamia materna.",
+            "referencia": ref,
+            "ic": ic,
+            "rvs": rvs,
+        }
+
+    low_flow = ic < ref["ic_low"]
+    high_flow = ic > ref["ic_high"]
+    high_rvs = rvs > ref["rvs_high"]
+    low_rvs = rvs < ref["rvs_low"]
+
+    if low_flow and high_rvs:
+        principal = "HIPODINAMIA"
+        subtipo = "VASOCONSTRICTORA"
+        dx = "HIPODINAMIA VASOCONSTRICTORA"
+        interp = "Bajo flujo relativo para la edad gestacional asociado a resistencia vascular sistémica elevada. Se aparta del patrón fisiológico esperado del embarazo, que debería combinar mayor flujo y menor resistencia."
+    elif low_flow:
+        principal = "HIPODINAMIA"
+        subtipo = "POR BAJO FLUJO"
+        dx = "HIPODINAMIA POR BAJO FLUJO"
+        interp = "Índice cardíaco bajo relativo para la edad gestacional, sin vasoconstricción sistémica marcada. Integrar con volemia, frecuencia cardíaca, contractilidad y tratamiento."
+    elif high_flow and low_rvs:
+        principal = "HIPERDINAMIA"
+        subtipo = "VASODILATADA / FISIOLÓGICA DEL EMBARAZO"
+        dx = "HIPERDINAMIA VASODILATADA"
+        interp = "Alto flujo con resistencia baja, compatible con la adaptación hemodinámica fisiológica del embarazo si la presión arterial y el contexto obstétrico son favorables."
+    elif high_flow and high_rvs:
+        principal = "HIPERDINAMIA"
+        subtipo = "CON POSCARGA ELEVADA"
+        dx = "HIPERDINAMIA CON POSCARGA ELEVADA"
+        interp = "Índice cardíaco elevado con resistencia vascular también elevada; sugiere carga hemodinámica aumentada y requiere correlación con PA, volemia y tratamiento."
+    elif high_rvs:
+        principal = "NORMODINAMIA"
+        subtipo = "CON VASOCONSTRICCIÓN"
+        dx = "NORMODINAMIA CON VASOCONSTRICCIÓN"
+        interp = "Flujo en rango gestacional operativo con resistencia vascular elevada; puede representar fenotipo vasoconstrictor inicial o compensado."
+    elif low_rvs:
+        principal = "NORMODINAMIA"
+        subtipo = "VASODILATADA"
+        dx = "NORMODINAMIA VASODILATADA"
+        interp = "Flujo en rango gestacional con resistencia baja, compatible con adaptación vasodilatada si la perfusión y la PA son adecuadas."
+    else:
+        principal = "NORMODINAMIA"
+        subtipo = "GESTACIONAL"
+        dx = "NORMODINAMIA GESTACIONAL"
+        interp = "IC e IRV/RVS se ubican dentro del rango operativo esperado para la edad gestacional considerada."
+
+    return {
+        "patron_principal": principal,
+        "subtipo": subtipo,
+        "diagnostico": dx,
+        "interpretacion": interp,
+        "referencia": ref,
+        "ic": ic,
+        "rvs": rvs,
+        "edad_gestacional": eg,
+    }
+
+
+# Reemplaza la clasificación dinámica SOLO cuando el contexto es embarazo.
+_clasificacion_dinamica_obligatoria_pre_v24 = clasificacion_dinamica_obligatoria
+
+def clasificacion_dinamica_obligatoria(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    if contexto and contexto.get("embarazada"):
+        return clasificacion_hemodinamica_materna_gestacional(r, contexto).get("patron_principal", "NORMODINAMIA")
+    return _clasificacion_dinamica_obligatoria_pre_v24(r, contexto)
+
+
+def clasificar_dinamia_materna(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    return clasificacion_dinamica_obligatoria(r, contexto)
+
+
+def parent_dynamics_class(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    return clasificacion_dinamica_obligatoria(r, contexto)
+
+
+def maternal_dynamics_class(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    return clasificacion_dinamica_obligatoria(r, contexto)
+
+
+_texto_clasificacion_dinamica_pre_v24 = texto_clasificacion_dinamica
+
+def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    if contexto and contexto.get("embarazada"):
+        c = clasificacion_hemodinamica_materna_gestacional(r, contexto)
+        ref = c["referencia"]
+        return (
+            f"Clasificación dinámica materna ACOSTADO/CINTA: {c['diagnostico']}. "
+            f"Base: IC {fmt(c.get('ic'),2,' L/min/m²')}; IRV/RVS {fmt(c.get('rvs'),0,' dyn·s·cm⁻⁵')}. "
+            f"Referencia gestacional: {ref['label']} ({'EG ' + fmt(c.get('edad_gestacional'),0) + ' semanas' if c.get('edad_gestacional') is not None else 'EG no especificada'}); "
+            f"rango operativo esperado IC {fmt(ref['ic_low'],1)}-{fmt(ref['ic_high'],1)} L/min/m² y RVS {fmt(ref['rvs_low'],0)}-{fmt(ref['rvs_high'],0)} dyn·s·cm⁻⁵. "
+            "DE PIE se interpreta solo como respuesta ortostática."
+        )
+    return _texto_clasificacion_dinamica_pre_v24(r, contexto)
+
+
+_interpretar_hemodinamica_embarazo_pre_v24 = interpretar_hemodinamica_embarazo
+
+def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    contexto = contexto or {}
+    if not contexto.get("embarazada", False):
+        return "No aplicable: paciente no marcada como embarazada."
+    c = clasificacion_hemodinamica_materna_gestacional(r, contexto)
+    ref = c["referencia"]
+    hdp = bool(contexto.get("hdp", False))
+    crecimiento = str(contexto.get("crecimiento_fetal") or "No informado")
+    doppler = str(contexto.get("doppler_uterino") or "No informado")
+    cft = limpiar_numero((r or {}).get("cft"))
+    cftnr = limpiar_numero((r or {}).get("cftnr"))
+    iv = limpiar_numero((r or {}).get("iv"))
+    iac = limpiar_numero((r or {}).get("iac"))
+
+    lineas = []
+    lineas.append("Interpretación hemodinámica materna en embarazo")
+    lineas.append("- Referencia diagnóstica: ACOSTADO/CINTA basal. El registro DE PIE se reserva para ortostatismo.")
+    if c.get("edad_gestacional") is not None:
+        lineas.append(f"- Edad gestacional: {fmt(c.get('edad_gestacional'),0)} semanas; referencia usada: {ref['label']}.")
+    else:
+        lineas.append(f"- Edad gestacional no especificada; referencia usada: {ref['label']}.")
+    lineas.append(f"- Patrón circulatorio materno ACOSTADO/CINTA: {c['diagnostico']}.")
+    lineas.append(f"- Base real del estudio: IC {fmt(c.get('ic'),2,' L/min/m²')}; IRV/RVS {fmt(c.get('rvs'),0,' dyn·s·cm⁻⁵')}.")
+    lineas.append(f"- Comparación gestacional: esperado IC {fmt(ref['ic_low'],1)}-{fmt(ref['ic_high'],1)} L/min/m² y RVS {fmt(ref['rvs_low'],0)}-{fmt(ref['rvs_high'],0)} dyn·s·cm⁻⁵.")
+    lineas.append(f"- Interpretación resumida: {c['interpretacion']}")
+    lineas.append(f"- HDP/HTA obstétrica informada: {'sí' if hdp else 'no/no informado'}. Crecimiento fetal: {crecimiento}. Doppler uterino: {doppler}.")
+
+    if c["diagnostico"] == "HIPODINAMIA VASOCONSTRICTORA" and hdp:
+        lineas.append("- Fenotipo materno sugerido: HDP con bajo flujo relativo y alta resistencia vascular, orientador de fenotipo vascular-placentario. Completar con crecimiento fetal, Doppler uterino, proteinuria/laboratorio y evolución clínica.")
+    elif "VASOCONSTRIC" in c["diagnostico"] and hdp:
+        lineas.append("- Fenotipo materno sugerido: HDP con componente vasoconstrictor; vigilar progresión a compromiso placentario si aparecen Doppler alterado o restricción de crecimiento.")
+    elif c["patron_principal"] == "HIPERDINAMIA" and hdp:
+        lineas.append("- Fenotipo materno sugerido: patrón hiperdinámico; integrar con obesidad, volemia, tratamiento y fenotipo AGA/metabólico.")
+    else:
+        lineas.append("- Fenotipo materno sugerido: interpretar según patrón gestacional basal y datos obstétricos complementarios.")
+
+    if cft is not None or cftnr is not None:
+        lineas.append("- Volemia/fluidos torácicos: " + diagnostico_volemia(cft, cftnr))
+    if iv is not None or iac is not None:
+        partes = []
+        if iv is not None:
+            partes.append(f"IV {fmt(iv,2)}")
+        if iac is not None:
+            partes.append(f"IAC/ACI {fmt(iac,2)}")
+        lineas.append("- Función aórtica/onda sistólica: " + "; ".join(partes) + ". Integrar con PA, rigidez arterial y contexto HDP.")
+
+    lineas.append("- Conducta sugerida: integrar con presión arterial seriada, proteinuria/laboratorio, Doppler uterino, biometría fetal, medicación actual y obstetricia de alto riesgo. Esta interpretación no reemplaza criterios diagnósticos obstétricos.")
+    return limpiar_patrones_prohibidos("\n".join(lineas))
+
+
+def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Optional[io.BytesIO]:
+    """Gráfico diagnóstico IC vs RVS con referencia gestacional y punto real ACOSTADO/CINTA."""
+    c = clasificacion_hemodinamica_materna_gestacional(r, contexto)
+    ic = limpiar_numero(c.get("ic"))
+    rvs = limpiar_numero(c.get("rvs"))
+    if ic is None or rvs is None:
+        return None
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+        import io as _io
+    except Exception:
+        return None
+
+    ref = c["referencia"]
+    x_min = max(500, min(650, ref["rvs_low"] - 250, rvs - 450))
+    x_max = max(2200, ref["rvs_high"] + 650, rvs + 450)
+    y_min = max(1.5, min(2.0, ref["ic_low"] - 1.2, ic - 1.0))
+    y_max = max(6.5, ref["ic_high"] + 0.8, ic + 1.0)
+
+    fig, ax = plt.subplots(figsize=(10.5, 6.2), dpi=170)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    # Zonas diagnósticas.
+    ax.axvspan(x_min, ref["rvs_low"], color="#D8F3DC", alpha=0.85)
+    ax.axvspan(ref["rvs_low"], ref["rvs_high"], color="#E8F1FA", alpha=0.9)
+    ax.axvspan(ref["rvs_high"], x_max, color="#FDE2E4", alpha=0.85)
+    ax.axhspan(y_min, ref["ic_low"], color="#FFF4CC", alpha=0.6)
+    ax.axhspan(ref["ic_high"], y_max, color="#EBD8FF", alpha=0.45)
+
+    # Rectángulo de normalidad gestacional esperada.
+    rect = Rectangle((ref["rvs_low"], ref["ic_low"]), ref["rvs_high"]-ref["rvs_low"], ref["ic_high"]-ref["ic_low"],
+                     fill=False, edgecolor="#0B4F8A", linewidth=2.2, linestyle="--")
+    ax.add_patch(rect)
+
+    # Líneas de corte.
+    ax.axvline(ref["rvs_low"], color="#64748B", lw=1.4, ls="--")
+    ax.axvline(ref["rvs_high"], color="#64748B", lw=1.4, ls="--")
+    ax.axhline(ref["ic_low"], color="#64748B", lw=1.4, ls="--")
+    ax.axhline(ref["ic_high"], color="#64748B", lw=1.4, ls="--")
+
+    # Etiquetas de zonas.
+    ax.text(x_min + 0.04*(x_max-x_min), y_max - 0.12*(y_max-y_min), "Hiperdinamia\nvasodilatada", fontsize=12, fontweight="bold", color="#14532D")
+    ax.text(ref["rvs_high"] + 0.04*(x_max-x_min), y_max - 0.12*(y_max-y_min), "Hiperdinamia\ncon poscarga elevada", fontsize=12, fontweight="bold", color="#7F1D1D")
+    ax.text(x_min + 0.04*(x_max-x_min), y_min + 0.08*(y_max-y_min), "Hipodinamia\npor bajo flujo", fontsize=12, fontweight="bold", color="#78350F")
+    ax.text(ref["rvs_high"] + 0.04*(x_max-x_min), y_min + 0.08*(y_max-y_min), "Hipodinamia\nvasoconstrictora", fontsize=12, fontweight="bold", color="#7F1D1D")
+    ax.text(ref["rvs_low"] + 0.05*(ref["rvs_high"]-ref["rvs_low"]), ref["ic_low"] + 0.45*(ref["ic_high"]-ref["ic_low"]), "Rango esperado\ngestacional", fontsize=12, fontweight="bold", color="#0B4F8A")
+
+    ax.scatter([rvs], [ic], s=170, color="#111827", edgecolor="white", linewidth=2.0, zorder=5)
+    ax.annotate(
+        f"ACOSTADO/CINTA\nIC {fmt(ic,2)} | RVS {fmt(rvs,0)}\n{c['diagnostico']}",
+        xy=(rvs, ic), xytext=(18, 22), textcoords="offset points",
+        bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="#0B4F8A", lw=1.4, alpha=0.95),
+        arrowprops=dict(arrowstyle="->", color="#0B4F8A", lw=1.4),
+        fontsize=10.5, fontweight="bold", color="#0F172A"
+    )
+
+    ax.set_title("Hemodinamia materna gestacional: situación real ACOSTADO/CINTA", fontsize=15, fontweight="bold", color="#0B3D6E")
+    ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=12, fontweight="bold")
+    ax.grid(True, alpha=0.25)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.text(0.01, -0.17, f"Referencia usada: {ref['label']}. El punto diagnóstico corresponde a ACOSTADO/CINTA; DE PIE queda reservado para respuesta ortostática.", transform=ax.transAxes, fontsize=10.5, color="#334155")
+    fig.tight_layout()
+    buf = _io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+_calcular_riesgo_preeclampsia_pre_v24 = calcular_riesgo_preeclampsia
+
+def calcular_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    res = _calcular_riesgo_preeclampsia_pre_v24(r, contexto)
+    try:
+        if contexto and contexto.get("embarazada") and res.get("aplicable"):
+            c = clasificacion_hemodinamica_materna_gestacional(r, contexto)
+            factores = list(res.get("factores", []))
+            nota = f"Clasificación gestacional ACOSTADO/CINTA: {c['diagnostico']} con IC {fmt(c.get('ic'),2)} e IRV/RVS {fmt(c.get('rvs'),0)}."
+            if nota not in factores:
+                factores.insert(1 if factores else 0, nota)
+            res["factores"] = factores
+            res["fenotipo"] = c["diagnostico"]
+    except Exception:
+        pass
+    return res
+
+
 # =========================================================
 # USUARIOS, CLAVES E HISTORIAL ACUMULADO
 # =========================================================
@@ -7021,6 +7311,14 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         raise RuntimeError("Falta instalar ReportLab. Agregue 'reportlab' a requirements.txt y ejecute: pip install reportlab") from e
 
     r = extraer_resumen_integrado(df)
+    try:
+        r_ref_pdf, _r_depie_pdf = obtener_resumenes_ortostaticos(df)
+        r_panel = dict(r)
+        for _k in ["ic", "irv", "fc", "pas", "pad", "ca", "cft", "cftnr", "iv", "iac", "cts", "ea", "ees", "ava", "ds", "ids"]:
+            if limpiar_numero(r_ref_pdf.get(_k)) is not None:
+                r_panel[_k] = r_ref_pdf.get(_k)
+    except Exception:
+        r_panel = dict(r)
     es_embarazo = bool(contexto_embarazo and contexto_embarazo.get("embarazada"))
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=1.15*cm, leftMargin=1.15*cm, topMargin=1.0*cm, bottomMargin=1.0*cm)
@@ -7098,6 +7396,13 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     if contexto_embarazo and contexto_embarazo.get("embarazada"):
         story.append(_paper_paragraph("G. Módulo embarazo / HDP / PE", stl["PaperH"]))
         story.append(_paper_paragraph(interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo), stl["PaperBody"]))
+        try:
+            graf_materno = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
+            if graf_materno is not None:
+                story.append(_paper_paragraph("Gráfico diagnóstico de hemodinamia materna", stl["PaperH"]))
+                story.append(Image(graf_materno, width=ancho, height=ancho*0.58, kind="proportional"))
+        except Exception as e:
+            story.append(_paper_paragraph(f"No se pudo insertar el gráfico diagnóstico de hemodinamia materna: {e}", stl["PaperBody"]))
         story.append(_paper_paragraph("Riesgo hemodinámico orientativo", stl["PaperH"]))
         story.append(_paper_paragraph(texto_riesgo_preeclampsia(r_panel, contexto_embarazo), stl["PaperBody"]))
     else:
@@ -7688,6 +7993,9 @@ st.markdown(f"<div class='card'><b>Análisis ortostático automático:</b><br>{i
 st.markdown(f"<div class='card'><b>Informe de dominios integrados sin ambigüedades:</b><br>{perfil_hemodinamico_integrado(r_panel, df_final)}</div>", unsafe_allow_html=True)
 if contexto_embarazo.get("embarazada"):
     st.markdown(f"<div class='card'><b>Módulo embarazo - hemodinamia materna:</b><br>{interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
+    graf_materno_ui = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
+    if graf_materno_ui is not None:
+        st.image(graf_materno_ui, caption="Gráfico diagnóstico de hemodinamia materna: punto real ACOSTADO/CINTA comparado con referencia gestacional", use_container_width=True)
     st.markdown(f"<div class='card'><b>Módulo riesgo de preeclampsia:</b><br>{texto_riesgo_preeclampsia(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
     graf_pe_ui = crear_grafico_riesgo_preeclampsia_bytes(r_panel, contexto_embarazo)
     if graf_pe_ui is not None:
