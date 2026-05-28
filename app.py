@@ -7844,6 +7844,22 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         story.append(_paper_paragraph(informe_dominios_integrados_texto(r, df, html=False), stl["PaperBody"]))
         story.append(_paper_diagnostico_pronostico_table(r, contexto_embarazo, ancho))
         story.append(Spacer(1, 6))
+        story.append(_paper_paragraph("Propuesta terapeutica ICG individualizada", stl["PaperH"]))
+        story.append(_paper_paragraph(
+            "Flujograma basado en Ferrario et al. (Ther Adv Cardiovasc Dis 2010). "
+            "Las ramas resaltadas corresponden al fenotipo hemodinamico activo del paciente. "
+            "No reemplaza criterio clinico ni guias vigentes.",
+            stl["PaperBody"],
+        ))
+        try:
+            graf_ter = crear_grafico_propuesta_terapeutica_bytes(r_panel, df)
+            if graf_ter is not None:
+                story.append(Image(graf_ter, width=ancho, height=ancho*0.68, kind="proportional"))
+            else:
+                story.append(_paper_paragraph("No hay IC, RVS o CFT suficientes para generar el grafico terapeutico.", stl["PaperBody"]))
+        except Exception as e:
+            story.append(_paper_paragraph(f"No se pudo insertar el grafico de propuesta terapeutica: {e}", stl["PaperBody"]))
+        story.append(Spacer(1, 6))
     else:
         # ── Módulo embarazo: gráfico hemodinamia materna vs edad gestacional ──
         story.append(_paper_paragraph("Grafico: hemodinamia materna vs edad gestacional y situacion diagnostica", stl["PaperH"]))
