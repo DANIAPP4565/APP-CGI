@@ -7402,3 +7402,11 @@ def construir_bloque_referencias_pdf() -> str:
     refs = "\\n".join([f"{i+1}. {r}" for i, r in enumerate(REFERENCIAS_BIBLIOGRAFICAS)])
     soporte = globals().get("SOPORTE_BIBLIOGRAFICO_APP", "").strip()
     return (
+        "\\nSOPORTE BIBLIOGRÁFICO DE LA APP\\n"
+        "--------------------------------------------------\\n"
+        f"{soporte}\\n\\n"
+        "REFERENCIAS BIBLIOGRÁFICAS UTILIZADAS\\n"
+        "--------------------------------------------------\\n"
+        f"{refs}\\n"
+    )
+
