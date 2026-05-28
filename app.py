@@ -1834,7 +1834,7 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
     if 0 <= avav <= 1.0:
         return f"Acoplamiento ventrículo-arterial óptimo. Relación EA/EES: {fmt(avav)}."
     if 1.0 < avav <= 1.3:
-        return f"Acoplamiento ventrículo-arterial subóptimo. Relación EA/EES: {fmt(avav)}. Sugiere incremento relativo de la carga arterial o menor reserva ventricular."
+        return f"Acoplamiento ventrículo-arterial en rango de precaución. Relación EA/EES: {fmt(avav)}. Sugiere incremento relativo de la carga arterial o menor reserva ventricular."
     if avav > 1.3:
         return f"Desacoplamiento ventrículo-arterial. Relación EA/EES: {fmt(avav)}. Se asocia a mayor estrés hemodinámico y riesgo de insuficiencia cardíaca, según el contexto clínico."
 
@@ -2194,9 +2194,9 @@ def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame]
         if score is None:
             return "No disponible"
         if score >= 0.80:
-            return "Conservado / óptimo"
+            return "Conservado"
         if score >= 0.50:
-            return "Subóptimo"
+            return "Precaución clínica"
         return "Alterado"
 
     dominios = {
@@ -2243,11 +2243,11 @@ def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] 
     if score_global is None:
         categoria = "perfil hemodinámico integrado no clasificable por datos incompletos"
     elif score_global >= 0.80:
-        categoria = "perfil hemodinámico global conservado"
+        categoria = "patrón de referencia ACOSTADO/CINTA conservado"
     elif score_global >= 0.50:
-        categoria = "perfil hemodinámico global subóptimo"
+        categoria = "patrón de referencia ACOSTADO/CINTA con variables en precaución clínica"
     else:
-        categoria = "perfil hemodinámico global alterado"
+        categoria = "patrón de referencia ACOSTADO/CINTA con alteración hemodinámica"
 
     texto_orto = ""
     if ortostatico is not None:
@@ -2310,7 +2310,7 @@ def estado_semaforo_metrica(nombre: str, valor: Any) -> Tuple[str, str, str]:
     """Clasifica una métrica para el acelerador.
 
     Retorna: estado clínico, color principal, zona textual.
-    Verde = normal/favorable; amarillo = subóptimo/intermedio; rojo = alterado.
+    Verde = normal/favorable; amarillo = en rango de precaución/intermedio; rojo = alterado.
     """
     v = limpiar_numero(valor)
     ref = referencia_metrica(nombre)
@@ -2347,7 +2347,7 @@ def color_semaforo_por_estado(estado: Any) -> str:
     t = normalizar_txt(estado)
     if any(x in t for x in ["normal", "favorable", "conservado", "optimo", "óptimo", "ok", "verde"]):
         return "#10B981"
-    if any(x in t for x in ["subopt", "precaucion", "precaución", "intermedio", "moderado", "amarillo"]):
+    if any(x in t for x in ["precaucion", "precaucion", "precaución", "intermedio", "moderado", "amarillo"]):
         return "#F59E0B"
     if any(x in t for x in ["alter", "patolog", "rojo", "riesgo", "bajo - alterado", "alto - alterado"]):
         return "#EF4444"
@@ -5597,7 +5597,7 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
     if 0 <= avav <= 1.0:
         return base + "Acoplamiento ventrículo-arterial óptimo."
     if 1.0 < avav <= 1.3:
-        return base + "Acoplamiento ventrículo-arterial subóptimo, compatible con incremento relativo de carga arterial o menor reserva ventricular."
+        return base + "Acoplamiento ventrículo-arterial en rango de precaución, compatible con incremento relativo de carga arterial o menor reserva ventricular."
     if avav > 1.3:
         return base + "Desacoplamiento ventrículo-arterial, con mayor estrés hemodinámico según el contexto clínico."
     return base + "Valor fuera de rango fisiológico esperado; revisar datos fuente."
@@ -5638,6 +5638,160 @@ if _generar_tabla_validacion_hemodinamica_v15_base_eaees is not None:
                 tabla.loc[idx, "Estado"] = r.get("ava_estado", "FALTA")
                 tabla.loc[idx, "Validación"] = r.get("ava_detalle", "EA/EES debe calcularse como EA Capan/EES Capan.")
         return tabla
+
+
+
+# =========================================================
+# V21 - COHERENCIA FINAL DEL PATRÓN HEMODINÁMICO
+# =========================================================
+# Regla clínica obligatoria:
+# - El patrón hemodinámico diagnóstico se informa siempre desde ACOSTADO/CINTA.
+# - DE PIE se informa exclusivamente como respuesta ortostática.
+# - No se usa "patrón subóptimo" como patrón circulatorio.
+# - El patrón circulatorio solo puede ser HIPODINAMIA, NORMODINAMIA o HIPERDINAMIA.
+
+def patron_circulatorio_simple_acostado_cinta(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    clase = clasificacion_dinamica_obligatoria(r or {}, contexto or {}).upper()
+    if "HIPO" in clase:
+        return "HIPODINAMIA"
+    if "HIPER" in clase:
+        return "HIPERDINAMIA"
+    return "NORMODINAMIA"
+
+
+def diagnostico_perfil_hemodinamico_acostado_cinta(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    patron = patron_circulatorio_simple_acostado_cinta(r, contexto)
+    ic = fmt((r or {}).get("ic"), 2, " L/min/m²")
+    rvs = fmt((r or {}).get("irv"), 0, " dyn·s·cm⁻⁵")
+    if patron == "HIPERDINAMIA":
+        significado = "predominio de alto flujo y/o baja resistencia vascular."
+    elif patron == "HIPODINAMIA":
+        significado = "predominio de bajo flujo y/o resistencia vascular elevada."
+    else:
+        significado = "IC e IRV/RVS dentro del rango esperado."
+    return f"**Patrón hemodinámico de referencia ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}. Significado: {significado}"
+
+
+_texto_clasificacion_dinamica_pre_v21 = texto_clasificacion_dinamica
+
+def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    """Salida final coherente: patrón basal/acostado, sin mezclar con de pie."""
+    contexto = contexto or {}
+    patron = patron_circulatorio_simple_acostado_cinta(r, contexto)
+    ic = fmt((r or {}).get("ic"), 2, " L/min/m²")
+    rvs = fmt((r or {}).get("irv"), 0, " dyn·s·cm⁻⁵")
+    pas = limpiar_numero((r or {}).get("pas"))
+    pad = limpiar_numero((r or {}).get("pad"))
+    fc = limpiar_numero((r or {}).get("fc"))
+    map_hr_txt = "No disponible"
+    if pas is not None and pad is not None and fc not in [None, 0]:
+        pam = pad + (pas - pad) / 3.0
+        map_hr_txt = fmt(pam / fc, 2)
+    if contexto.get("embarazada"):
+        return f"**Patrón circulatorio ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}; PAM/FC {map_hr_txt}. El registro de pie se interpreta solo como respuesta ortostática."
+    return f"**Patrón circulatorio ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}. El registro de pie se interpreta solo como respuesta ortostática."
+
+
+_diagnostico_acoplamiento_pre_v21 = diagnostico_acoplamiento
+
+def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
+    """Evita llamar patrón al rendimiento CV/VA y elimina el término subóptimo."""
+    eav = limpiar_numero(ea)
+    eesv = limpiar_numero(ees)
+    avav = calcular_ea_ees_derivado(ea, ees)
+    if avav is None:
+        estado, detalle = validar_ea_ees_derivado(ea, ees)
+        return f"Acoplamiento ventrículo-arterial no clasificable. {detalle}"
+    base = f"Relación EA/EES calculada automáticamente como EA Capan/EES Capan: {fmt(eav)} / {fmt(eesv)} = {fmt(avav)}. "
+    if 0 <= avav <= 1.0:
+        return base + "Acoplamiento ventrículo-arterial óptimo."
+    if 1.0 < avav <= 1.3:
+        return base + "Acoplamiento ventrículo-arterial en zona de precaución clínica, compatible con incremento relativo de carga arterial o menor reserva ventricular."
+    if avav > 1.3:
+        return base + "Desacoplamiento ventrículo-arterial, con mayor estrés hemodinámico según el contexto clínico."
+    return base + "Valor fuera de rango fisiológico esperado; revisar datos fuente."
+
+
+_evaluar_dominios_hemodinamicos_pre_v21 = evaluar_dominios_hemodinamicos
+
+def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Dict[str, Dict[str, Any]]:
+    """Dominios coherentes: la función circulatoria usa solo el patrón ACOSTADO/CINTA."""
+    dominios = _evaluar_dominios_hemodinamicos_pre_v21(r, df)
+    if "Función circulatoria" in dominios:
+        score = dominios["Función circulatoria"].get("score")
+        dominios["Función circulatoria"]["estado"] = patron_circulatorio_simple_acostado_cinta(r, None)
+        dominios["Función circulatoria"]["detalle"] = diagnostico_perfil_hemodinamico_acostado_cinta(r, None)
+        dominios["Función circulatoria"]["score"] = score
+    # Evitar que otros dominios se lean como patrones hemodinámicos.
+    for nombre in ["Contractilidad", "Volemia", "Rendimiento CV / VA"]:
+        if nombre in dominios and str(dominios[nombre].get("estado", "")).lower().find("precaucion") >= 0:
+            dominios[nombre]["estado"] = "Precaución clínica"
+    return dominios
+
+
+_perfil_hemodinamico_integrado_pre_v21 = perfil_hemodinamico_integrado
+
+def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
+    """Conclusión integrada sin mezcla de patrones.
+
+    El único patrón hemodinámico principal es el de ACOSTADO/CINTA.
+    Volemia, contractilidad, acoplamiento y ortostatismo se informan como dominios complementarios.
+    """
+    patron_ref = diagnostico_perfil_hemodinamico_acostado_cinta(r, None)
+    volemia = diagnostico_volemia((r or {}).get("cft"), (r or {}).get("cftnr"))
+    contractilidad = diagnostico_contractilidad((r or {}).get("iv"), (r or {}).get("iac"), (r or {}).get("cts"))
+    acoplamiento = diagnostico_acoplamiento((r or {}).get("ea"), (r or {}).get("ees"), (r or {}).get("ava"))
+    texto_posicion = ""
+    if df is not None:
+        texto_posicion = " " + re.sub(r"\s+", " ", texto_patron_hemodinamico_acostado_y_de_pie(df, None)).strip()
+    ortostatico = evaluar_dominio_ortostatico(df) if df is not None else None
+    texto_orto = f" Respuesta ortostática: {ortostatico.get('detalle', '')}" if ortostatico is not None else ""
+    return (
+        f"{patron_ref} "
+        f"Volemia: {volemia} "
+        f"Contractilidad: {contractilidad} "
+        f"Acoplamiento CV/VA: {acoplamiento}"
+        f"{texto_posicion}"
+        f"{texto_orto}"
+    )
+
+
+_texto_patron_hemodinamico_acostado_y_de_pie_pre_v21 = texto_patron_hemodinamico_acostado_y_de_pie
+
+def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Optional[Dict[str, Any]] = None) -> str:
+    """Diferencia estrictamente patrón basal y respuesta ortostática."""
+    contexto = contexto or {}
+    r_basal, r_pie = obtener_resumenes_ortostaticos(df)
+
+    def linea_basal(r_local: Dict[str, Any]) -> str:
+        if not r_local:
+            return "- **Patrón hemodinámico ACOSTADO/CINTA:** no disponible por falta de registro basal reconocible."
+        patron = patron_circulatorio_simple_acostado_cinta(r_local, contexto)
+        metodo = str(r_local.get("metodo") or "no reconocido").upper()
+        posicion = str(r_local.get("posicion") or "no reconocida").replace("_", " ").upper()
+        return (
+            f"- **Patrón hemodinámico ACOSTADO/CINTA: {patron}.** "
+            f"IC {fmt(r_local.get('ic'), 2, ' L/min/m²')}; "
+            f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn·s·cm⁻⁵')}; "
+            f"método {metodo}; posición {posicion}. **Referencia diagnóstica principal.**"
+        )
+
+    def linea_pie(r_local: Dict[str, Any]) -> str:
+        if not r_local:
+            return "- **Registro DE PIE:** no disponible o no reconocido; no se modifica el patrón basal."
+        patron = patron_circulatorio_simple_acostado_cinta(r_local, contexto)
+        return (
+            f"- **Registro DE PIE: respuesta ortostática con comportamiento {patron}.** "
+            f"IC {fmt(r_local.get('ic'), 2, ' L/min/m²')}; "
+            f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn·s·cm⁻⁵')}. "
+            f"Este registro describe adaptación postural y **no reemplaza** al patrón ACOSTADO/CINTA."
+        )
+
+    return "\n".join([
+        "**Patrón hemodinámico principal: siempre ACOSTADO/CINTA.** El registro DE PIE se informa solo como comportamiento ortostático.",
+        linea_basal(r_basal),
+        linea_pie(r_pie),
+    ])
 
 
 
@@ -6615,7 +6769,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         ["RVS/IRV", f"{_paper_fmt_val(r.get('irv'),0)} dyn.s.cm-5", "Elevada; eje de alta resistencia vascular."],
         ["CFT / CFTnr", f"{_paper_fmt_val(r.get('cft'),2)} / {_paper_fmt_val(r.get('cftnr'),2)}", "Revisar unidad/lectura e integrar con clínica, edema, disnea, tratamiento y función renal."],
         ["IV / IAC / CTS", f"{_paper_fmt_val(r.get('iv'),2)} / {_paper_fmt_val(r.get('iac'),2)} / {_paper_fmt_val(r.get('cts'),2)}", "Evaluación de onda sistólica y tiempos sistólicos."],
-        ["EA / EES / EA-EES", f"{_paper_fmt_val(r.get('ea'),2)} / {_paper_fmt_val(r.get('ees'),2)} / {_paper_fmt_val(r.get('ava'),2)}", "Acoplamiento VA subóptimo si EA/EES >1."],
+        ["EA / EES / EA-EES", f"{_paper_fmt_val(r.get('ea'),2)} / {_paper_fmt_val(r.get('ees'),2)} / {_paper_fmt_val(r.get('ava'),2)}", "Acoplamiento VA en rango de precaución si EA/EES >1."],
         ["DS / IDS", f"{_paper_fmt_val(r.get('ds'),2)} / {_paper_fmt_val(r.get('ids'),2)}", "Volumen sistólico bajo si está por debajo del rango esperado."],
     ]
     story.append(_paper_table(param, col_widths=[ancho*0.23, ancho*0.27, ancho*0.50], header=True))
