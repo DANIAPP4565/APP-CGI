@@ -2419,11 +2419,11 @@ def _dibujar_acelerador_circular(
     subtitulo: str = "",
     color_estado: Optional[str] = None,
 ) -> None:
-    """Dibuja un gauge semicircular oscuro tipo tablero clínico.
+    """Dibuja un gauge semicircular tipo tablero clínico con fondo blanco.
 
-    Diseño solicitado: fondo oscuro, bandas amarillo-verde-rojo, aguja central,
-    valor de la métrica, estado clínico y rango normal. Mantiene la misma firma
-    para no romper el resto de la app ni la generación del PDF.
+    Diseño solicitado: bandas amarillo-verde-rojo, aguja central, valor de la
+    métrica, estado clínico y rango normal, con fondo blanco para mejor lectura
+    en pantalla y PDF. Mantiene la misma firma para no romper el resto de la app.
     """
     import numpy as np
     import matplotlib.patches as patches
@@ -2435,25 +2435,25 @@ def _dibujar_acelerador_circular(
     estado_txt = str(estado or "").upper()
     color_estado = color_estado or color_semaforo_por_estado(estado)
 
-    # Fondo oscuro con borde suave, como tarjeta de monitor hemodinámico.
-    ax.set_facecolor("#17212B")
+    # Fondo blanco con borde suave, apto para pantalla y PDF.
+    ax.set_facecolor("#FFFFFF")
     card = patches.FancyBboxPatch(
         (-1.42, -0.55), 2.84, 1.72,
         boxstyle="round,pad=0.045,rounding_size=0.08",
-        facecolor="#17212B",
-        edgecolor="#6B7280",
+        facecolor="#FFFFFF",
+        edgecolor="#CBD5E1",
         linewidth=1.1,
         alpha=0.98,
     )
     ax.add_patch(card)
 
-    # Sombra interna sutil.
+    # Sombra interna sutil clara.
     sombra = patches.FancyBboxPatch(
         (-1.36, -0.49), 2.72, 1.60,
         boxstyle="round,pad=0.02,rounding_size=0.07",
-        facecolor="#111827",
+        facecolor="#F8FAFC",
         edgecolor="none",
-        alpha=0.22,
+        alpha=0.85,
     )
     ax.add_patch(sombra)
 
@@ -2469,7 +2469,7 @@ def _dibujar_acelerador_circular(
             (0, 0), 0.82, t1, t2,
             width=0.105,
             facecolor=color,
-            edgecolor="#17212B",
+            edgecolor="#FFFFFF",
             linewidth=2.0,
             alpha=0.96,
         )
@@ -2479,26 +2479,26 @@ def _dibujar_acelerador_circular(
     borde = patches.Wedge(
         (0, 0), 0.89, -25, 205,
         width=0.018,
-        facecolor="#94A3B8",
+        facecolor="#64748B",
         edgecolor="none",
-        alpha=0.28,
+        alpha=0.35,
     )
     ax.add_patch(borde)
 
     # Aguja: 0 -> izquierda, 100 -> derecha.
     ang = np.deg2rad(205 - porcentaje * 2.30)
     x, y = 0.67 * np.cos(ang), 0.67 * np.sin(ang)
-    ax.plot([0, x], [0, y], color="#D1D5DB", linewidth=4.0, solid_capstyle="round", zorder=10)
-    ax.plot([0, x * 0.92], [0, y * 0.92], color="#F8FAFC", linewidth=1.1, alpha=0.70, zorder=11)
+    ax.plot([0, x], [0, y], color="#64748B", linewidth=4.0, solid_capstyle="round", zorder=10)
+    ax.plot([0, x * 0.92], [0, y * 0.92], color="#0F172A", linewidth=1.1, alpha=0.55, zorder=11)
     ax.add_patch(patches.Circle((0, 0), 0.070, color="#CBD5E1", zorder=12))
-    ax.add_patch(patches.Circle((0, 0), 0.030, color="#94A3B8", zorder=13))
+    ax.add_patch(patches.Circle((0, 0), 0.030, color="#64748B", zorder=13))
 
     # Título y textos: alto contraste.
     ax.text(
         -1.28, 0.94, titulo,
         ha="left", va="center",
         fontsize=12.5, fontweight="bold",
-        color="#F8FAFC",
+        color="#0F172A",
     )
 
     # Estado con semaforización textual: mantiene lectura clínica rápida.
@@ -2516,7 +2516,7 @@ def _dibujar_acelerador_circular(
         -1.08, -0.30, linea_valor,
         ha="left", va="center",
         fontsize=9.5, fontweight="bold",
-        color="#F8FAFC",
+        color="#0F172A",
         family="monospace",
     )
     ax.text(
@@ -2532,7 +2532,7 @@ def _dibujar_acelerador_circular(
             -0.95, -0.43, subtitulo,
             ha="left", va="center",
             fontsize=7.6,
-            color="#CBD5E1",
+            color="#475569",
         )
 
     ax.set_xlim(-1.48, 1.48)
@@ -2571,13 +2571,13 @@ def crear_acelerador_circular_bytes(
 def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
     """Devuelve puntos reales del paciente para el gráfico IC vs IRV/RVS.
 
-    Si hay dos registros comparables, muestra basal/acostado y de pie con flecha.
+    Si hay dos registros comparables, muestra Acostado/CINTA como referencia diagnóstica y De pie como respuesta ortostática con flecha.
     Si no, muestra el valor integrado disponible.
     """
     puntos: List[Dict[str, Any]] = []
     if df is not None and isinstance(df, pd.DataFrame) and len(df) >= 2:
         basal, pie = obtener_resumenes_ortostaticos(df)
-        for etiqueta, fuente in [("Basal/acostado", basal), ("De pie", pie)]:
+        for etiqueta, fuente in [("Acostado/CINTA (referencia)", basal), ("De pie (respuesta ortostática)", pie)]:
             ic = limpiar_numero(fuente.get("ic"))
             irv = limpiar_numero(fuente.get("irv"))
             if ic is not None and irv is not None:
@@ -2586,7 +2586,7 @@ def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = 
         ic = limpiar_numero(r.get("ic"))
         irv = limpiar_numero(r.get("irv"))
         if ic is not None and irv is not None:
-            puntos.append({"etiqueta": "Situación real", "ic": ic, "irv": irv})
+            puntos.append({"etiqueta": "Acostado/CINTA (referencia)", "ic": ic, "irv": irv})
     return puntos
 
 
@@ -2595,7 +2595,7 @@ def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.D
 
     Eje X: IRV/RVS. Eje Y: IC. El punto del paciente se ubica sobre zonas clínicas
     de hipodinamia, normodinamia o hiperdinamia. Si existen mediciones basal y de pie,
-    se dibuja una flecha para mostrar el comportamiento ortostático real.
+    se dibuja una flecha para mostrar el comportamiento ortostático real, pero la clasificación principal se calcula con el registro Acostado/CINTA.
     """
     puntos = _puntos_fenotipado_paciente(r, df)
     if not puntos:
@@ -2655,14 +2655,15 @@ def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.D
                 zorder=6,
             )
 
-        patron = diagnostico_perfil_hemodinamico(puntos[-1].get("ic"), puntos[-1].get("irv"))
-        ax.set_title("Fenotipado clínico automatizado: situación real del paciente", fontsize=14, fontweight="bold", color="#0B4F8A")
+        punto_referencia = puntos[0]
+        patron = diagnostico_perfil_hemodinamico(punto_referencia.get("ic"), punto_referencia.get("irv"))
+        ax.set_title("Fenotipado clínico automatizado: patrón ACOSTADO/CINTA de referencia", fontsize=14, fontweight="bold", color="#0B4F8A")
         ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=11, fontweight="bold")
         ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=11, fontweight="bold")
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
         ax.grid(True, alpha=0.20)
-        ax.text(0.01, -0.18, f"Clasificación automática: {patron}", transform=ax.transAxes, fontsize=10, color="#0F172A", fontweight="bold")
+        ax.text(0.01, -0.18, f"Clasificación automática del patrón ACOSTADO/CINTA: {patron}", transform=ax.transAxes, fontsize=10, color="#0F172A", fontweight="bold")
         plt.tight_layout()
         buffer = io.BytesIO()
         fig.savefig(buffer, format="png", dpi=180, bbox_inches="tight")
@@ -7401,11 +7402,3 @@ def construir_bloque_referencias_pdf() -> str:
     refs = "\\n".join([f"{i+1}. {r}" for i, r in enumerate(REFERENCIAS_BIBLIOGRAFICAS)])
     soporte = globals().get("SOPORTE_BIBLIOGRAFICO_APP", "").strip()
     return (
-        "\\nSOPORTE BIBLIOGRÁFICO DE LA APP\\n"
-        "--------------------------------------------------\\n"
-        f"{soporte}\\n\\n"
-        "REFERENCIAS BIBLIOGRÁFICAS UTILIZADAS\\n"
-        "--------------------------------------------------\\n"
-        f"{refs}\\n"
-    )
-
