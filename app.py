@@ -1705,45 +1705,49 @@ def diagnostico_perfil_hemodinamico(ic: Any, irv: Any) -> str:
 
 def clasificacion_dinamica_obligatoria(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
     """Devuelve siempre Normodinamia, Hiperdinamia o Hipodinamia.
-    En embarazo prioriza los puntos de corte obstétricos AIPE/SIMP por RVS/TPVR y MAP/FC.
-    En no embarazadas usa el patrón ICG clásico IC + RVS.
+
+    Regla corregida de coherencia clínica:
+    - El patrón hemodinámico de referencia se define con los valores ACOSTADO/CINTA.
+    - No se clasifica Hipodinamia si IC e IRV/RVS están en rango normal.
+    - Embarazo/HDP/PE usa la misma clasificación basal IC + IRV/RVS; los datos obstétricos
+      modifican el riesgo clínico, pero no cambian el patrón circulatorio si la hemodinamia es normal.
+
+    Rangos operativos usados por la app:
+    - IC normal: 2,5 a 4,0 L/min/m².
+    - IRV/RVS normal: 1200 a 2000 dyn·s·cm⁻⁵.
     """
-    contexto = contexto or {}
-    ic = limpiar_numero(r.get("ic"))
-    rvs = limpiar_numero(r.get("irv"))
-    pas = limpiar_numero(r.get("pas"))
-    pad = limpiar_numero(r.get("pad"))
-    fc = limpiar_numero(r.get("fc"))
-    pam = None
-    map_hr = None
-    if pas is not None and pad is not None:
-        pam = pad + (pas - pad) / 3.0
-    if pam is not None and fc not in [None, 0]:
-        map_hr = pam / fc
+    ic = limpiar_numero((r or {}).get("ic"))
+    rvs = limpiar_numero((r or {}).get("irv"))
 
-    es_emb = bool(contexto.get("embarazada"))
-
-    if es_emb:
-        # Consenso AIPE/SIMP: hipodinámica si TPVR >1300 o MAP/HR >1,4; hiperdinámica si TPVR <800 o MAP/HR <1,1.
-        if (rvs is not None and rvs > 1300) or (map_hr is not None and map_hr > 1.4):
-            return "Hipodinamia"
-        if (rvs is not None and rvs < 800) or (map_hr is not None and map_hr < 1.1) or (ic is not None and ic >= 4.0 and (rvs is None or rvs <= 1300)):
-            return "Hiperdinamia"
-        return "Normodinamia"
-
-    # No embarazada: salida obligatoria en tres patrones.
     if ic is not None and rvs is not None:
-        if ic > 4.0 or rvs < 1200:
+        if ic < 2.5 and rvs > 2000:
+            return "Hipodinamia"
+        if ic > 4.0 and rvs < 1200:
             return "Hiperdinamia"
+        if 2.5 <= ic <= 4.0 and 1200 <= rvs <= 2000:
+            return "Normodinamia"
+        # Regla de predominio cuando solo una variable está francamente fuera de rango.
         if ic < 2.5 or rvs > 2000:
             return "Hipodinamia"
+        if ic > 4.0 or rvs < 1200:
+            return "Hiperdinamia"
         return "Normodinamia"
-    if (ic is not None and ic > 4.0) or (rvs is not None and rvs < 1200):
-        return "Hiperdinamia"
-    if (ic is not None and ic < 2.5) or (rvs is not None and rvs > 2000):
-        return "Hipodinamia"
-    return "Normodinamia"
 
+    if ic is not None:
+        if ic < 2.5:
+            return "Hipodinamia"
+        if ic > 4.0:
+            return "Hiperdinamia"
+        return "Normodinamia"
+
+    if rvs is not None:
+        if rvs > 2000:
+            return "Hipodinamia"
+        if rvs < 1200:
+            return "Hiperdinamia"
+        return "Normodinamia"
+
+    return "Normodinamia"
 
 
 # ---------------------------------------------------------
@@ -1776,7 +1780,7 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
     if pam is not None and fc not in [None, 0]:
         map_hr_txt = fmt(pam / fc, 2)
     if contexto.get("embarazada"):
-        return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, RVS/IRV {rvs}, relación PAM/FC {map_hr_txt}. En embarazo se priorizan los puntos de corte obstétricos de RVS/TPVR y PAM/FC."
+        return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, RVS/IRV {rvs}, relación PAM/FC {map_hr_txt}. En embarazo se informa la hemodinamia basal ACOSTADO/CINTA; los datos obstétricos se integran como contexto clínico sin cambiar el patrón si IC e IRV/RVS están en rango normal."
     return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, RVS/IRV {rvs}."
 
 def diagnostico_volemia(cft: Any, cftnr: Any) -> str:
@@ -5688,7 +5692,7 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
         pam = pad + (pas - pad) / 3.0
         map_hr_txt = fmt(pam / fc, 2)
     if contexto.get("embarazada"):
-        return f"**Patrón circulatorio ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}; PAM/FC {map_hr_txt}. El registro de pie se interpreta solo como respuesta ortostática."
+        return f"**Patrón circulatorio ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}; PAM/FC {map_hr_txt}. Si IC e IRV/RVS están en rango normal, el patrón es NORMODINAMIA. El registro de pie se interpreta solo como respuesta ortostática."
     return f"**Patrón circulatorio ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}. El registro de pie se interpreta solo como respuesta ortostática."
 
 
