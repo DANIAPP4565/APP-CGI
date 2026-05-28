@@ -3551,10 +3551,10 @@ La integración fue realizada usando el último valor clínico útil disponible 
     if es_embarazo:
         modulo = f"""
 8. Módulo embarazo / hemodinamia materna
-{interpretar_hemodinamica_embarazo(r, contexto_embarazo)}
+{interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo)}
 
 9. Módulo riesgo de preeclampsia
-{texto_riesgo_preeclampsia(r, contexto_embarazo)}
+{texto_riesgo_preeclampsia(r_panel, contexto_embarazo)}
 
 10. Conclusión clínica integrada para paciente embarazada
 Paciente clasificada como embarazada/gestante. Por lo tanto, el informe utiliza exclusivamente el módulo obstétrico: hemodinamia materna, HDP (trastornos hipertensivos del embarazo) y riesgo de PE (preeclampsia). No se aplica el módulo terapéutico para HTA no embarazada. La interpretación debe correlacionarse con edad gestacional, proteinuria, laboratorio, Doppler uterino, crecimiento fetal y evaluación obstétrica.
@@ -3789,11 +3789,11 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         pdf.set_font("Arial", "B", 15)
         pdf.multi_cell(0, 8, "MODULO EMBARAZO - HEMODINAMIA MATERNA", align="C")
         pdf.ln(2)
-        pdf_texto(pdf, interpretar_hemodinamica_embarazo(r, contexto_embarazo), 9)
+        pdf_texto(pdf, interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo), 9)
         pdf.ln(2)
         pdf_texto(pdf, "MODULO RIESGO DE PREECLAMPSIA", 11, True)
-        pdf_texto(pdf, texto_riesgo_preeclampsia(r, contexto_embarazo), 9)
-        graf_pe = crear_grafico_riesgo_preeclampsia_bytes(r, contexto_embarazo)
+        pdf_texto(pdf, texto_riesgo_preeclampsia(r_panel, contexto_embarazo), 9)
+        graf_pe = crear_grafico_riesgo_preeclampsia_bytes(r_panel, contexto_embarazo)
         if graf_pe is not None:
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
@@ -3803,7 +3803,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
                 os.remove(tmp_path)
             except Exception as e:
                 pdf_texto(pdf, f"No se pudo insertar el gauge semicircular de riesgo PE: {e}", 9)
-        curva = crear_curva_impedancia_representativa_bytes(r)
+        curva = crear_curva_impedancia_representativa_bytes(r_panel)
         if curva is not None:
             pdf.add_page()
             pdf.set_font("Arial", "B", 15)
@@ -3990,8 +3990,8 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     pdf.cell(0, 5, "Interpretación clínica resumida", ln=1)
     pdf.set_font("Arial", "", 8)
     if es_embarazo:
-        resumen_clinico = interpretar_hemodinamica_embarazo(r, contexto_embarazo)
-        riesgo = texto_riesgo_preeclampsia(r, contexto_embarazo)
+        resumen_clinico = interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo)
+        riesgo = texto_riesgo_preeclampsia(r_panel, contexto_embarazo)
         texto = (
             "Módulo aplicado: embarazo/HDP/PE. No se aplica módulo de HTA no embarazada.\n"
             + resumen_clinico + "\n" + riesgo + "\n"
@@ -4017,7 +4017,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     y_actual = pdf.get_y()
     espacio_restante = 260 - y_actual
     if espacio_restante > 38:
-        graf = crear_grafico_riesgo_preeclampsia_bytes(r, contexto_embarazo) if es_embarazo else None
+        graf = crear_grafico_riesgo_preeclampsia_bytes(r_panel, contexto_embarazo) if es_embarazo else None
         if graf is None:
             grafs = crear_graficos_dominios_individuales_bytes(r)
             graf = next(iter(grafs.values()), None) if grafs else None
@@ -6128,7 +6128,7 @@ def construir_fila_historial_app(usuario_info: Dict[str, Any], df: pd.DataFrame,
     score_pub = None
     if contexto_embarazo.get("embarazada"):
         try:
-            score_pub = calcular_score_preeclampsia_publicable(r, contexto_embarazo)
+            score_pub = calcular_score_preeclampsia_publicable(r_panel, contexto_embarazo)
         except Exception:
             score_pub = None
     fila = {
@@ -6638,9 +6638,9 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
 
     if contexto_embarazo and contexto_embarazo.get("embarazada"):
         story.append(_paper_paragraph("F. Módulo embarazo / HDP / PE", stl["PaperH"]))
-        story.append(_paper_paragraph(interpretar_hemodinamica_embarazo(r, contexto_embarazo), stl["PaperBody"]))
+        story.append(_paper_paragraph(interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo), stl["PaperBody"]))
         story.append(_paper_paragraph("Riesgo hemodinámico orientativo", stl["PaperH"]))
-        story.append(_paper_paragraph(texto_riesgo_preeclampsia(r, contexto_embarazo), stl["PaperBody"]))
+        story.append(_paper_paragraph(texto_riesgo_preeclampsia(r_panel, contexto_embarazo), stl["PaperBody"]))
     else:
         story.append(_paper_paragraph("F. Orientación terapéutica", stl["PaperH"]))
         story.append(_paper_paragraph(limpiar_referencias_obstetricas_en_linea(sugerencia_tratamiento_no_embarazada(r, df)), stl["PaperBody"]))
@@ -6679,7 +6679,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
 
     # Gráficos opcionales: se integran solo si entran sin romper el layout.
     try:
-        graf_pe = crear_grafico_riesgo_preeclampsia_bytes(r, contexto_embarazo) if es_embarazo else None
+        graf_pe = crear_grafico_riesgo_preeclampsia_bytes(r_panel, contexto_embarazo) if es_embarazo else None
         if graf_pe is not None:
             story.append(PageBreak())
             story.append(_paper_paragraph("I. Visualización de riesgo / acelerador", stl["PaperH"]))
@@ -6687,7 +6687,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     except Exception:
         pass
     try:
-        curva = crear_curva_impedancia_representativa_bytes(r)
+        curva = crear_curva_impedancia_representativa_bytes(r_panel)
         if curva is not None:
             story.append(_paper_paragraph("Curva de impedancia representativa", stl["PaperH"]))
             story.append(Image(curva, width=ancho, height=ancho*0.42, kind="proportional"))
@@ -7188,19 +7188,30 @@ contexto_embarazo = construir_contexto_embarazo(
     diagnostico_textual=embarazo_detectado.get("diagnostico_textual"),
 )
 
+# Panel principal: usar SIEMPRE valores ACOSTADO/CINTA como referencia diagnóstica.
+# El registro DE PIE se reserva para la respuesta ortostática y no debe reemplazar estos valores.
+r_acostado_cinta_panel, r_depie_panel = obtener_resumenes_ortostaticos(df_final)
+r_panel = dict(r)
+for _k in ["ic", "irv", "fc", "pas", "pad", "ca", "cft", "cftnr"]:
+    if limpiar_numero(r_acostado_cinta_panel.get(_k)) is not None:
+        r_panel[_k] = r_acostado_cinta_panel.get(_k)
+r_panel["posicion_referencia"] = r_acostado_cinta_panel.get("posicion") or r.get("posicion_referencia")
+r_panel["metodo_referencia"] = r_acostado_cinta_panel.get("metodo") or r.get("metodo_referencia")
+
+st.caption("Valores mostrados en las tarjetas: ACOSTADO/CINTA, patrón basal de referencia diagnóstica. El registro DE PIE se informa por separado como respuesta ortostática.")
 c1, c2, c3, c4 = st.columns(4)
 with c1:
-    st.markdown(f"<div class='metric-card'><b>IC</b><br>{fmt(r.get('ic'))}<br><span class='muted'>{clasificar_ic(r.get('ic'))}</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='metric-card'><b>IC - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('ic'))}<br><span class='muted'>{clasificar_ic(r_panel.get('ic'))}</span></div>", unsafe_allow_html=True)
 with c2:
-    st.markdown(f"<div class='metric-card'><b>IRV / RVS</b><br>{fmt(r.get('irv'),0)}<br><span class='muted'>{clasificar_irv(r.get('irv'))}</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='metric-card'><b>IRV / RVS - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('irv'),0)}<br><span class='muted'>{clasificar_irv(r_panel.get('irv'))}</span></div>", unsafe_allow_html=True)
 with c3:
-    st.markdown(f"<div class='metric-card'><b>CFT / CFTnr</b><br>{fmt(r.get('cft'))} / {fmt(r.get('cftnr'))}<br><span class='muted'>Estado volémico</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='metric-card'><b>CFT / CFTnr - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('cft'))} / {fmt(r_panel.get('cftnr'))}<br><span class='muted'>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr')).split('.')[0]}</span></div>", unsafe_allow_html=True)
 with c4:
-    st.markdown(f"<div class='metric-card'><b>CA</b><br>{fmt(r.get('ca'))}<br><span class='muted'>Complacencia arterial</span></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='metric-card'><b>CA - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('ca'))}<br><span class='muted'>Complacencia arterial basal</span></div>", unsafe_allow_html=True)
 
 
 # Gráfico dinámico IC vs IRV/RVS con ubicación real del paciente.
-graf_fenotipo_ui = crear_grafico_fenotipado_dinamico_bytes(r, df_final)
+graf_fenotipo_ui = crear_grafico_fenotipado_dinamico_bytes(r_panel, df_final)
 if graf_fenotipo_ui is not None:
     st.subheader("Fenotipado clínico automatizado")
     st.image(
@@ -7210,26 +7221,26 @@ if graf_fenotipo_ui is not None:
     )
 
 st.subheader("Interpretación automática")
-st.markdown(f"<div class='card'><b>Perfil hemodinámico:</b><br>{diagnostico_perfil_hemodinamico(r.get('ic'), r.get('irv'))}</div>", unsafe_allow_html=True)
-st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia(r.get('cft'), r.get('cftnr'))}</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='card'><b>Perfil hemodinámico:</b><br>{diagnostico_perfil_hemodinamico(r_panel.get('ic'), r_panel.get('irv'))}</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr'))}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='card'><b>Contractilidad:</b><br>{diagnostico_contractilidad(r.get('iv'), r.get('iac'), r.get('cts'))}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='card'><b>Acoplamiento ventrículo-arterial:</b><br>{diagnostico_acoplamiento(r.get('ea'), r.get('ees'), r.get('ava'))}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='card'><b>Análisis ortostático automático:</b><br>{interpretar_ortostatismo(df_final)}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='card'><b>Perfil hemodinámico integrado por dominios:</b><br>{perfil_hemodinamico_integrado(r, df_final)}</div>", unsafe_allow_html=True)
 if contexto_embarazo.get("embarazada"):
-    st.markdown(f"<div class='card'><b>Módulo embarazo - hemodinamia materna:</b><br>{interpretar_hemodinamica_embarazo(r, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='card'><b>Módulo riesgo de preeclampsia:</b><br>{texto_riesgo_preeclampsia(r, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
-    graf_pe_ui = crear_grafico_riesgo_preeclampsia_bytes(r, contexto_embarazo)
+    st.markdown(f"<div class='card'><b>Módulo embarazo - hemodinamia materna:</b><br>{interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Módulo riesgo de preeclampsia:</b><br>{texto_riesgo_preeclampsia(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
+    graf_pe_ui = crear_grafico_riesgo_preeclampsia_bytes(r_panel, contexto_embarazo)
     if graf_pe_ui is not None:
         st.image(graf_pe_ui, caption="Acelerador circular del score hemodinámico orientativo de riesgo de preeclampsia", use_container_width=True)
-    curva_ui = crear_curva_impedancia_representativa_bytes(r)
+    curva_ui = crear_curva_impedancia_representativa_bytes(r_panel)
     if curva_ui is not None:
         st.image(curva_ui, caption="Curva de cardiografía de impedancia representativa", use_container_width=True)
 
 
 if contexto_embarazo.get("embarazada"):
     st.subheader("Módulo paper clínico")
-    score_pub = calcular_score_preeclampsia_publicable(r, contexto_embarazo)
+    score_pub = calcular_score_preeclampsia_publicable(r_panel, contexto_embarazo)
     fen_pub = score_pub.get("fenotipo", {})
     st.markdown(
         f"<div class='card'><b>Score publicable PE/HDP:</b> {score_pub.get('score')}/100 - {score_pub.get('categoria')}<br>"
@@ -7238,14 +7249,14 @@ if contexto_embarazo.get("embarazada"):
         f"<b>Eje probable:</b> {fen_pub.get('eje_etiologico')}</div>",
         unsafe_allow_html=True,
     )
-    st.dataframe(tabla_score_paper_clinico_df(r, contexto_embarazo), use_container_width=True)
-    graf_pub = crear_grafico_score_paper_bytes(r, contexto_embarazo)
+    st.dataframe(tabla_score_paper_clinico_df(r_panel, contexto_embarazo), use_container_width=True)
+    graf_pub = crear_grafico_score_paper_bytes(r_panel, contexto_embarazo)
     if graf_pub is not None:
         st.image(graf_pub, caption="Aceleradores circulares de componentes auditables del score PE/HDP", use_container_width=True)
 
 st.subheader("Aceleradores circulares por dominio y métricas")
 st.caption("Cada acelerador está semaforizado: verde = normal/favorable, amarillo = precaución/intermedio, rojo = alterado.")
-for dominio, graf in crear_graficos_dominios_individuales_bytes(r).items():
+for dominio, graf in crear_graficos_dominios_individuales_bytes(r_panel).items():
     st.image(graf, caption=f"{dominio}: gauges semicirculares del dominio", use_container_width=True)
 
 st.subheader("Informe médico integrado")
