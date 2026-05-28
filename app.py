@@ -1666,21 +1666,40 @@ def clasificar_irv(irv: Any) -> str:
 
 
 def diagnostico_perfil_hemodinamico(ic: Any, irv: Any) -> str:
+    """Clasificación obligatoria y concisa: HIPODINAMIA, NORMODINAMIA o HIPERDINAMIA.
+
+    Regla clínica base:
+    - Hipodinamia: predominio de bajo flujo y/o resistencia vascular elevada.
+    - Hiperdinamia: predominio de alto flujo y/o resistencia vascular baja.
+    - Normodinamia: IC e IRV/RVS dentro de rango esperado.
+    """
     icv = limpiar_numero(ic)
     rv = limpiar_numero(irv)
-    if icv is None or rv is None:
-        return "Perfil hemodinámico no clasificable por datos incompletos."
-    if icv > 4.0 and rv < 1200:
-        return "Hiperdinamia: índice cardíaco elevado con resistencia vascular sistémica baja."
-    if icv < 2.5 and rv > 2000:
-        return "Hipodinamia: índice cardíaco bajo con resistencia vascular sistémica elevada."
-    if 2.5 <= icv <= 4.0 and rv > 2000:
-        return "Perfil circulatorio de resistencias vasculares inadecuadamente elevadas: índice cardíaco normal con resistencia vascular sistémica elevada."
-    if 2.5 <= icv <= 4.0 and rv < 1200:
-        return "Perfil circulatorio de baja resistencia vascular: índice cardíaco normal con resistencia vascular sistémica baja."
-    if 2.5 <= icv <= 4.0 and 1200 <= rv <= 2000:
-        return "Normodinamia: índice cardíaco y resistencia vascular sistémica dentro de rangos esperados."
-    return "Perfil mixto o de transición. Requiere integración con presión arterial, volemia, contractilidad y contexto clínico."
+    if icv is None and rv is None:
+        return "Patrón circulatorio no clasificable por datos incompletos."
+
+    if icv is not None and rv is not None:
+        if icv > 4.0 or rv < 1200:
+            return "Patrón circulatorio de HIPERDINAMIA: predominio de alto flujo y/o baja resistencia vascular."
+        if icv < 2.5 or rv > 2000:
+            return "Patrón circulatorio de HIPODINAMIA: predominio de bajo flujo y/o resistencia vascular elevada."
+        return "Patrón circulatorio de NORMODINAMIA: IC e IRV/RVS dentro de rango esperado."
+
+    if icv is not None:
+        if icv > 4.0:
+            return "Patrón circulatorio de HIPERDINAMIA: índice cardíaco elevado."
+        if icv < 2.5:
+            return "Patrón circulatorio de HIPODINAMIA: índice cardíaco bajo."
+        return "Patrón circulatorio de NORMODINAMIA: índice cardíaco dentro de rango esperado."
+
+    if rv is not None:
+        if rv < 1200:
+            return "Patrón circulatorio de HIPERDINAMIA: resistencia vascular baja."
+        if rv > 2000:
+            return "Patrón circulatorio de HIPODINAMIA: resistencia vascular elevada."
+        return "Patrón circulatorio de NORMODINAMIA: resistencia vascular dentro de rango esperado."
+
+    return "Patrón circulatorio no clasificable por datos incompletos."
 
 
 
@@ -1712,22 +1731,17 @@ def clasificacion_dinamica_obligatoria(r: Dict[str, Any], contexto: Optional[Dic
             return "Hiperdinamia"
         return "Normodinamia"
 
-    # No embarazada: clasificación hemodinámica práctica por ICG.
+    # No embarazada: salida obligatoria en tres patrones.
     if ic is not None and rvs is not None:
-        if 2.5 <= ic <= 4.0 and rvs > 2000:
-            return "Perfil circulatorio de resistencias vasculares inadecuadamente elevadas"
-        if ic > 4.0 and rvs < 1200:
+        if ic > 4.0 or rvs < 1200:
             return "Hiperdinamia"
-        if ic < 2.5 and rvs > 2000:
+        if ic < 2.5 or rvs > 2000:
             return "Hipodinamia"
-        if 2.5 <= ic <= 4.0 and 1200 <= rvs <= 2000:
-            return "Normodinamia"
+        return "Normodinamia"
     if (ic is not None and ic > 4.0) or (rvs is not None and rvs < 1200):
         return "Hiperdinamia"
-    if (ic is not None and ic < 2.5):
+    if (ic is not None and ic < 2.5) or (rvs is not None and rvs > 2000):
         return "Hipodinamia"
-    if rvs is not None and rvs > 2000:
-        return "Perfil circulatorio de resistencias vasculares inadecuadamente elevadas"
     return "Normodinamia"
 
 
@@ -1961,6 +1975,58 @@ def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
     return resultado
 
 
+def definir_patron_ortostatico(delta: Dict[str, Any]) -> str:
+    """Define un patrón de comportamiento ortostático claro y breve."""
+    dic = limpiar_numero(delta.get("delta_ic"))
+    dirv = limpiar_numero(delta.get("delta_irv"))
+    dfc = limpiar_numero(delta.get("delta_fc"))
+    dpas = limpiar_numero(delta.get("delta_pas"))
+
+    if dic is None and dirv is None and dfc is None:
+        return "PATRÓN ORTOSTÁTICO NO CLASIFICABLE"
+
+    caida_pas = dpas is not None and dpas <= -20
+    taquicardia = dfc is not None and dfc >= 30
+    bajo_flujo = dic is not None and dic <= -0.20
+    alto_flujo = dic is not None and dic >= 0.20
+    vasoconstriccion = dirv is not None and dirv >= 100
+    vasodilatacion = dirv is not None and dirv <= -100
+
+    if caida_pas or taquicardia:
+        return "PATRÓN ORTOSTÁTICO ALTERADO"
+    if bajo_flujo and vasoconstriccion:
+        return "PATRÓN ORTOSTÁTICO HIPODINÁMICO"
+    if alto_flujo and vasodilatacion:
+        return "PATRÓN ORTOSTÁTICO HIPERDINÁMICO"
+    if bajo_flujo:
+        return "PATRÓN ORTOSTÁTICO CON CAÍDA DE FLUJO"
+    if vasodilatacion:
+        return "PATRÓN ORTOSTÁTICO VASODILATADOR"
+    if vasoconstriccion:
+        return "PATRÓN ORTOSTÁTICO VASOCONSTRICTOR COMPENSADO"
+    return "PATRÓN ORTOSTÁTICO CONSERVADO"
+
+
+def descripcion_patron_ortostatico(patron: str) -> str:
+    """Descripción clínica breve para incorporar el significado del patrón en la conclusión."""
+    p = normalizar_txt(patron)
+    if "no clasificable" in p:
+        return "No hay datos comparables suficientes para definir la respuesta al cambio postural."
+    if "hipodinamico" in p or "caida de flujo" in p:
+        return "Respuesta con caída o incremento insuficiente del índice cardíaco en bipedestación; sugiere menor reserva hemodinámica o menor volumen efectivo circulante."
+    if "hiperdinamico" in p:
+        return "Respuesta con aumento exagerado del índice cardíaco o del volumen minuto en bipedestación; sugiere activación simpática aumentada o compensación circulatoria intensa."
+    if "vasodilatador" in p:
+        return "Respuesta con caída o aumento insuficiente de la resistencia vascular sistémica al ponerse de pie; sugiere vasoconstricción periférica inadecuada o vasodilatación relativa."
+    if "vasoconstrictor" in p:
+        return "Respuesta con aumento predominante de la resistencia vascular sistémica, manteniendo compensación tensional y perfusional."
+    if "alterado" in p:
+        return "Respuesta ortostática no fisiológica o insuficientemente compensada, por caída tensional, taquicardia marcada o combinación de respuestas desadaptativas."
+    if "conservado" in p:
+        return "Respuesta fisiológica adecuada al pasar de decúbito a bipedestación, con compensación cardiovascular preservada."
+    return "Patrón definido por la integración de índice cardíaco, resistencia vascular sistémica, frecuencia cardíaca y presión arterial durante el cambio postural."
+
+
 def interpretar_ortostatismo(df: pd.DataFrame) -> str:
     if df is None or len(df) < 2:
         return "No aplicable: se requieren dos registros comparables, basal/acostado y de pie."
@@ -1969,7 +2035,9 @@ def interpretar_ortostatismo(df: pd.DataFrame) -> str:
     if not d.get("detalle") or "No se pudieron" in d.get("detalle", ""):
         return d.get("detalle", "No se pudo realizar análisis ortostático automático por datos incompletos.")
 
-    return "Análisis ortostático automático: " + d["detalle"] + "."
+    patron = definir_patron_ortostatico(d)
+    descripcion = descripcion_patron_ortostatico(patron)
+    return f"<b>{patron}</b>. <b>Significado clínico:</b> {descripcion} <b>Cambios observados:</b> {d['detalle']}."
 
 
 # =========================================================
@@ -2033,17 +2101,14 @@ def evaluar_dominio_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
         }
 
     score = sum(scores) / len(scores)
-    if score >= 0.80:
-        estado = "Respuesta ortostática conservada"
-    elif score >= 0.50:
-        estado = "Respuesta ortostática subóptima"
-    else:
-        estado = "Respuesta ortostática alterada"
+    patron = definir_patron_ortostatico(d)
+
+    descripcion = descripcion_patron_ortostatico(patron)
 
     return {
         "score": score,
-        "estado": estado,
-        "detalle": estado + ". " + " | ".join(cambios),
+        "estado": patron,
+        "detalle": patron + ". " + descripcion + " Cambios: " + " | ".join(cambios),
     }
 
 
@@ -2141,7 +2206,7 @@ def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] 
     elif score_global >= 0.80:
         categoria = "perfil hemodinámico global conservado"
     elif score_global >= 0.50:
-        categoria = "perfil hemodinámico global subóptimo o de transición"
+        categoria = "perfil hemodinámico global subóptimo"
     else:
         categoria = "perfil hemodinámico global alterado"
 
@@ -2284,7 +2349,7 @@ def metricas_por_dominio(r: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def _valor_normalizado_acelerador(nombre: str, valor: Any) -> Optional[float]:
-    """Convierte una métrica a escala 0-100 para acelerador circular.
+    """Convierte una métrica a escala 0-100 para gauge semicircular.
     0 = muy bajo, 50 = centro del rango normal, 100 = muy alto.
     """
     v = limpiar_numero(valor)
@@ -2310,60 +2375,124 @@ def _dibujar_acelerador_circular(
     subtitulo: str = "",
     color_estado: Optional[str] = None,
 ) -> None:
-    """Dibuja un acelerador semicircular semaforizado con aguja y badge clínico."""
+    """Dibuja un gauge semicircular oscuro tipo tablero clínico.
+
+    Diseño solicitado: fondo oscuro, bandas amarillo-verde-rojo, aguja central,
+    valor de la métrica, estado clínico y rango normal. Mantiene la misma firma
+    para no romper el resto de la app ni la generación del PDF.
+    """
     import numpy as np
     import matplotlib.patches as patches
 
     ax.set_aspect("equal")
     ax.axis("off")
 
+    porcentaje = max(0, min(100, float(porcentaje)))
+    estado_txt = str(estado or "").upper()
     color_estado = color_estado or color_semaforo_por_estado(estado)
 
-    # Fondo semaforizado fijo: bajo/precaución, normal/favorable, alto/alterado.
+    # Fondo oscuro con borde suave, como tarjeta de monitor hemodinámico.
+    ax.set_facecolor("#17212B")
+    card = patches.FancyBboxPatch(
+        (-1.42, -0.55), 2.84, 1.72,
+        boxstyle="round,pad=0.045,rounding_size=0.08",
+        facecolor="#17212B",
+        edgecolor="#6B7280",
+        linewidth=1.1,
+        alpha=0.98,
+    )
+    ax.add_patch(card)
+
+    # Sombra interna sutil.
+    sombra = patches.FancyBboxPatch(
+        (-1.36, -0.49), 2.72, 1.60,
+        boxstyle="round,pad=0.02,rounding_size=0.07",
+        facecolor="#111827",
+        edgecolor="none",
+        alpha=0.22,
+    )
+    ax.add_patch(sombra)
+
+    # Arcos: bajo/precaución, normal, alto/alerta.
+    # El gauge ocupa el semicírculo superior de izquierda a derecha.
     segmentos = [
-        (-180, -120, "#F59E0B", "BAJO"),
-        (-120, -60, "#10B981", "NORMAL"),
-        (-60, 0, "#EF4444", "ALTO"),
+        (145, 205, "#FBBF24"),   # amarillo
+        (35, 145, "#34D399"),    # verde
+        (-25, 35, "#EF4444"),    # rojo
     ]
-    for t1, t2, color, _lab in segmentos:
-        arco = patches.Wedge((0, 0), 1.0, t1, t2, width=0.20, facecolor=color, edgecolor="white", linewidth=2, alpha=0.95)
+    for t1, t2, color in segmentos:
+        arco = patches.Wedge(
+            (0, 0), 0.82, t1, t2,
+            width=0.105,
+            facecolor=color,
+            edgecolor="#17212B",
+            linewidth=2.0,
+            alpha=0.96,
+        )
         ax.add_patch(arco)
 
-    # Halo/borde con el color clínico real de la métrica.
-    halo = patches.Wedge((0, 0), 1.08, -180, 0, width=0.035, facecolor=color_estado, edgecolor="white", linewidth=1, alpha=0.95)
-    ax.add_patch(halo)
-
-    # Marcas 0, 50, 100.
-    for pct, lab in [(0, "Bajo"), (50, "Normal"), (100, "Alto")]:
-        ang = np.deg2rad(-180 + pct * 1.8)
-        x1, y1 = 0.73 * np.cos(ang), 0.73 * np.sin(ang)
-        x2, y2 = 1.08 * np.cos(ang), 1.08 * np.sin(ang)
-        ax.plot([x1, x2], [y1, y2], color="#334155", linewidth=1)
-        ax.text(1.24 * np.cos(ang), 1.24 * np.sin(ang), lab, ha="center", va="center", fontsize=7, color="#334155")
-
-    porcentaje = max(0, min(100, float(porcentaje)))
-    ang = np.deg2rad(-180 + porcentaje * 1.8)
-    ax.plot([0, 0.72 * np.cos(ang)], [0, 0.72 * np.sin(ang)], color=color_estado, linewidth=4, solid_capstyle="round")
-    ax.add_patch(patches.Circle((0, 0), 0.060, color=color_estado))
-    ax.add_patch(patches.Circle((0, 0), 0.028, color="#FFFFFF"))
-
-    # Caja de estado semaforizada.
-    badge = patches.FancyBboxPatch(
-        (-0.82, -0.19), 1.64, 0.20,
-        boxstyle="round,pad=0.025,rounding_size=0.05",
-        facecolor=color_estado,
+    # Borde externo tenue para dar lectura de tablero.
+    borde = patches.Wedge(
+        (0, 0), 0.89, -25, 205,
+        width=0.018,
+        facecolor="#94A3B8",
         edgecolor="none",
-        alpha=0.95,
+        alpha=0.28,
     )
-    ax.add_patch(badge)
+    ax.add_patch(borde)
 
-    ax.text(0, 0.34, titulo, ha="center", va="center", fontsize=10, fontweight="bold", color="#0B4F8A")
-    ax.text(0, 0.13, valor_txt, ha="center", va="center", fontsize=9, color="#111827", fontweight="bold")
-    ax.text(0, -0.09, estado, ha="center", va="center", fontsize=7.4, fontweight="bold", color="#FFFFFF")
+    # Aguja: 0 -> izquierda, 100 -> derecha.
+    ang = np.deg2rad(205 - porcentaje * 2.30)
+    x, y = 0.67 * np.cos(ang), 0.67 * np.sin(ang)
+    ax.plot([0, x], [0, y], color="#D1D5DB", linewidth=4.0, solid_capstyle="round", zorder=10)
+    ax.plot([0, x * 0.92], [0, y * 0.92], color="#F8FAFC", linewidth=1.1, alpha=0.70, zorder=11)
+    ax.add_patch(patches.Circle((0, 0), 0.070, color="#CBD5E1", zorder=12))
+    ax.add_patch(patches.Circle((0, 0), 0.030, color="#94A3B8", zorder=13))
+
+    # Título y textos: alto contraste.
+    ax.text(
+        -1.28, 0.94, titulo,
+        ha="left", va="center",
+        fontsize=12.5, fontweight="bold",
+        color="#F8FAFC",
+    )
+
+    # Estado con semaforización textual: mantiene lectura clínica rápida.
+    estado_color = color_estado
+    if "NORMAL" in estado_txt or "FAVORABLE" in estado_txt:
+        estado_color = "#34D399"
+    elif "PRECA" in estado_txt or "INTERMED" in estado_txt or "SUB" in estado_txt:
+        estado_color = "#FBBF24"
+    elif "ALTER" in estado_txt or "ALTO" in estado_txt or "BAJO" in estado_txt:
+        estado_color = "#F87171" if "PRECA" not in estado_txt else "#FBBF24"
+
+    # Línea principal: métrica, valor y estado.
+    linea_valor = f"{titulo}:  {valor_txt}"
+    ax.text(
+        -1.08, -0.30, linea_valor,
+        ha="left", va="center",
+        fontsize=9.5, fontweight="bold",
+        color="#F8FAFC",
+        family="monospace",
+    )
+    ax.text(
+        0.55, -0.30, f"[{estado_txt}]",
+        ha="left", va="center",
+        fontsize=9.5, fontweight="bold",
+        color=estado_color,
+        family="monospace",
+    )
+
     if subtitulo:
-        ax.text(0, -0.33, subtitulo, ha="center", va="center", fontsize=7, color="#475569")
-    ax.set_xlim(-1.35, 1.35)
-    ax.set_ylim(-0.48, 1.28)
+        ax.text(
+            -0.95, -0.43, subtitulo,
+            ha="left", va="center",
+            fontsize=7.6,
+            color="#CBD5E1",
+        )
+
+    ax.set_xlim(-1.48, 1.48)
+    ax.set_ylim(-0.62, 1.20)
 
 def crear_acelerador_circular_bytes(
     porcentaje: Any,
@@ -2393,8 +2522,115 @@ def crear_acelerador_circular_bytes(
         return None
 
 
+
+
+def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
+    """Devuelve puntos reales del paciente para el gráfico IC vs IRV/RVS.
+
+    Si hay dos registros comparables, muestra basal/acostado y de pie con flecha.
+    Si no, muestra el valor integrado disponible.
+    """
+    puntos: List[Dict[str, Any]] = []
+    if df is not None and isinstance(df, pd.DataFrame) and len(df) >= 2:
+        basal, pie = obtener_resumenes_ortostaticos(df)
+        for etiqueta, fuente in [("Basal/acostado", basal), ("De pie", pie)]:
+            ic = limpiar_numero(fuente.get("ic"))
+            irv = limpiar_numero(fuente.get("irv"))
+            if ic is not None and irv is not None:
+                puntos.append({"etiqueta": etiqueta, "ic": ic, "irv": irv})
+    if not puntos:
+        ic = limpiar_numero(r.get("ic"))
+        irv = limpiar_numero(r.get("irv"))
+        if ic is not None and irv is not None:
+            puntos.append({"etiqueta": "Situación real", "ic": ic, "irv": irv})
+    return puntos
+
+
+def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Optional[io.BytesIO]:
+    """Gráfico dinámico del fenotipo circulatorio real del paciente.
+
+    Eje X: IRV/RVS. Eje Y: IC. El punto del paciente se ubica sobre zonas clínicas
+    de hipodinamia, normodinamia o hiperdinamia. Si existen mediciones basal y de pie,
+    se dibuja una flecha para mostrar el comportamiento ortostático real.
+    """
+    puntos = _puntos_fenotipado_paciente(r, df)
+    if not puntos:
+        return None
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as patches
+    except Exception:
+        return None
+
+    try:
+        xs = [float(p["irv"]) for p in puntos]
+        ys = [float(p["ic"]) for p in puntos]
+        x_min = max(500, min(800, min(xs) - 350))
+        x_max = max(2400, max(xs) + 450)
+        y_min = max(1.2, min(2.0, min(ys) - 0.6))
+        y_max = max(5.0, max(ys) + 0.8)
+
+        fig, ax = plt.subplots(figsize=(8.8, 5.2))
+        ax.set_facecolor("#F8FAFC")
+
+        # Zonas clínicas. Los límites se corresponden con la clasificación usada por la app.
+        zonas = [
+            (x_min, 1200, 4.0, y_max, "#D1FAE5", "HIPERDINAMIA\nvasodilatada"),
+            (1200, 2000, 2.5, 4.0, "#E0F2FE", "NORMODINAMIA"),
+            (2000, x_max, 4.0, y_max, "#FEF3C7", "HIPERDINAMIA\ncon poscarga elevada"),
+            (x_min, 1200, y_min, 2.5, "#FDE68A", "HIPODINAMIA\ncon baja poscarga"),
+            (1200, 2000, y_min, 2.5, "#FFEDD5", "HIPODINAMIA\npor bajo flujo"),
+            (2000, x_max, y_min, 2.5, "#FECACA", "HIPODINAMIA\nvasoconstrictora"),
+            (2000, x_max, 2.5, 4.0, "#FBCFE8", "Fenotipo\nvasoconstrictor"),
+            (x_min, 1200, 2.5, 4.0, "#CCFBF1", "Tendencia\nvasodilatada"),
+        ]
+        for x0, x1, y0, y1, color, texto in zonas:
+            ax.add_patch(patches.Rectangle((x0, y0), x1-x0, y1-y0, facecolor=color, alpha=0.46, edgecolor="white", linewidth=1.5))
+            ax.text((x0+x1)/2, (y0+y1)/2, texto, ha="center", va="center", fontsize=10, color="#0F172A", fontweight="bold", alpha=0.78)
+
+        ax.axvline(1200, color="#0F172A", linewidth=1.1, linestyle="--", alpha=0.65)
+        ax.axvline(2000, color="#0F172A", linewidth=1.1, linestyle="--", alpha=0.65)
+        ax.axhline(2.5, color="#0F172A", linewidth=1.1, linestyle="--", alpha=0.65)
+        ax.axhline(4.0, color="#0F172A", linewidth=1.1, linestyle="--", alpha=0.65)
+
+        # Punto(s) reales del paciente.
+        if len(puntos) >= 2:
+            p0, p1 = puntos[0], puntos[-1]
+            ax.annotate("", xy=(p1["irv"], p1["ic"]), xytext=(p0["irv"], p0["ic"]), arrowprops=dict(arrowstyle="->", lw=2.2, color="#111827"))
+        for idx, pto in enumerate(puntos):
+            marker = "o" if idx == 0 else "s"
+            ax.scatter(pto["irv"], pto["ic"], s=165, marker=marker, color="#111827", edgecolor="#FFFFFF", linewidth=2.2, zorder=5)
+            ax.text(
+                pto["irv"] + (x_max-x_min)*0.025,
+                pto["ic"] + (y_max-y_min)*0.035,
+                f"{pto['etiqueta']}\nIC {pto['ic']:.2f} | RVS {pto['irv']:.0f}",
+                fontsize=9,
+                fontweight="bold",
+                color="#111827",
+                bbox=dict(boxstyle="round,pad=0.35", fc="#FFFFFF", ec="#CBD5E1", alpha=0.94),
+                zorder=6,
+            )
+
+        patron = diagnostico_perfil_hemodinamico(puntos[-1].get("ic"), puntos[-1].get("irv"))
+        ax.set_title("Fenotipado clínico automatizado: situación real del paciente", fontsize=14, fontweight="bold", color="#0B4F8A")
+        ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=11, fontweight="bold")
+        ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=11, fontweight="bold")
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+        ax.grid(True, alpha=0.20)
+        ax.text(0.01, -0.18, f"Clasificación automática: {patron}", transform=ax.transAxes, fontsize=10, color="#0F172A", fontweight="bold")
+        plt.tight_layout()
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format="png", dpi=180, bbox_inches="tight")
+        plt.close(fig)
+        buffer.seek(0)
+        return buffer
+    except Exception:
+        return None
+
+
 def crear_grafico_dominios_bytes(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Optional[io.BytesIO]:
-    """Reemplaza el gráfico de barras global por aceleradores circulares por dominio."""
+    """Reemplaza el gráfico de barras global por gauges semicirculares por dominio."""
     try:
         import matplotlib.pyplot as plt
         import math
@@ -2433,7 +2669,7 @@ def crear_grafico_dominios_bytes(r: Dict[str, Any], df: Optional[pd.DataFrame] =
 
 
 def crear_grafico_metricas_por_dominio_bytes(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Optional[io.BytesIO]:
-    """Reemplaza barras agrupadas por aceleradores circulares de métricas disponibles."""
+    """Reemplaza barras agrupadas por gauges semicirculares de métricas disponibles."""
     grafs = crear_graficos_dominios_individuales_bytes(r)
     if not grafs:
         return None
@@ -2442,7 +2678,7 @@ def crear_grafico_metricas_por_dominio_bytes(r: Dict[str, Any], df: Optional[pd.
 
 
 def crear_graficos_dominios_individuales_bytes(r: Dict[str, Any]) -> Dict[str, io.BytesIO]:
-    """Genera un panel de aceleradores circulares por dominio.
+    """Genera un panel de gauges semicirculares por dominio.
     Cada acelerador muestra la posición de la métrica respecto de su rango de referencia.
     """
     try:
@@ -2479,7 +2715,7 @@ def crear_graficos_dominios_individuales_bytes(r: Dict[str, Any]) -> Dict[str, i
 
             for ax in axes_flat[len(items):]:
                 ax.axis("off")
-            fig.suptitle(f"{dominio}: aceleradores circulares", fontsize=14, fontweight="bold", color="#0B4F8A")
+            fig.suptitle(f"{dominio}: gauges semicirculares", fontsize=14, fontweight="bold", color="#0B4F8A")
             plt.tight_layout()
             buffer = io.BytesIO()
             fig.savefig(buffer, format="png", dpi=180, bbox_inches="tight")
@@ -2492,7 +2728,7 @@ def crear_graficos_dominios_individuales_bytes(r: Dict[str, Any]) -> Dict[str, i
 
 
 def crear_grafico_barras_bytes(labels: List[str], valores: List[Any], titulo: str) -> Optional[io.BytesIO]:
-    """Compatibilidad: donde antes había barras, ahora se muestran aceleradores circulares."""
+    """Compatibilidad: donde antes había barras, ahora se muestran gauges semicirculares."""
     try:
         import matplotlib.pyplot as plt
         import math
@@ -2773,14 +3009,14 @@ def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict
             elif ic < 3.8 and irv > 1500:
                 fenotipo = "HDP-AGA con patrón de mayor resistencia y menor flujo: vigilar posibilidad de disfunción placentaria no expresada aún o evolución hacia restricción de crecimiento."
             else:
-                fenotipo = "HDP-AGA con patrón hemodinámico mixto o de transición."
+                fenotipo = "HDP-AGA con patrón circulatorio definido según HIPODINAMIA, NORMODINAMIA o HIPERDINAMIA."
         elif hdp:
             if ic < 3.8 and irv > 1500:
                 fenotipo = "HDP con patrón bajo flujo/alta resistencia, orientador de fenotipo vascular-placentario; completar con crecimiento fetal y Doppler uterino."
             elif ic >= 3.8 and irv <= 1500:
                 fenotipo = "HDP con patrón alto flujo/resistencia baja-intermedia, orientador de fenotipo AGA/metabólico o influido por obesidad/volumen."
             else:
-                fenotipo = "HDP con patrón hemodinámico mixto; completar caracterización obstétrica."
+                fenotipo = "HDP con patrón circulatorio de NORMODINAMIA; completar caracterización obstétrica."
         else:
             if ic < 3.5 and irv > 1500:
                 fenotipo = "Gestante sin HDP informado pero con patrón de bajo flujo/alta resistencia; sugiere vigilancia estrecha si hay factores de riesgo obstétrico."
@@ -2796,7 +3032,7 @@ def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict
         elif ic >= 3.8 and irv <= 1500:
             riesgo = "INTERMEDIO: patrón alto flujo/resistencia baja-intermedia; valorar fenotipo AGA/metabólico, obesidad y volumen."
         else:
-            riesgo = "INTERMEDIO: patrón mixto; requiere seguimiento obstétrico-hemodinámico."
+            riesgo = "INTERMEDIO: patrón de NORMODINAMIA; requiere seguimiento obstétrico-hemodinámico."
     elif contexto.get("embarazada"):
         riesgo = "A contextualizar: no se informó HTA/HDP, pero se conserva interpretación hemodinámica materna."
     lineas.append(f"- Semaforización obstétrica integrada: {riesgo}")
@@ -3258,6 +3494,8 @@ La integración fue realizada usando el último valor clínico útil disponible 
 6. Análisis ortostático automático
 {orto}
 
+**Conclusión ortostática relevante:** el patrón ortostático se interpreta integrando cambios de IC, IRV/RVS, FC y presión arterial entre basal/acostado y bipedestación.
+
 7. Métricas por dominio
 {texto_tabla_metricas_por_dominio(r)}
 """.strip()
@@ -3460,6 +3698,24 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         pdf_texto(pdf, bloque, 10, bold=bloque[:2].isdigit() or bloque.startswith("INFORME"))
         pdf.ln(1)
 
+
+    # HOJA 2: Fenotipado clínico automatizado IC vs IRV/RVS.
+    graf_fenotipo = crear_grafico_fenotipado_dinamico_bytes(r, df)
+    if graf_fenotipo is not None:
+        pdf.add_page()
+        pdf.set_font("Arial", "B", 15)
+        pdf.multi_cell(0, 8, "FENOTIPADO CLINICO AUTOMATIZADO", align="C")
+        pdf.ln(2)
+        pdf_texto(pdf, "Ubicacion real del paciente en el plano indice cardiaco versus resistencia vascular sistemica. Si existen mediciones basal y de pie, la flecha muestra el comportamiento ortostatico real.", 9)
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(graf_fenotipo.getvalue())
+                tmp_path = tmp.name
+            pdf.image(tmp_path, x=12, w=185)
+            os.remove(tmp_path)
+        except Exception as e:
+            pdf_texto(pdf, f"No se pudo insertar el grafico de fenotipado dinamico: {e}", 9)
+
     # HOJA 2: Control de integración.
     pdf.add_page()
     pdf.set_font("Arial", "B", 15)
@@ -3498,7 +3754,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
                 pdf.image(tmp_path, x=25, w=160)
                 os.remove(tmp_path)
             except Exception as e:
-                pdf_texto(pdf, f"No se pudo insertar el acelerador circular de riesgo PE: {e}", 9)
+                pdf_texto(pdf, f"No se pudo insertar el gauge semicircular de riesgo PE: {e}", 9)
         curva = crear_curva_impedancia_representativa_bytes(r)
         if curva is not None:
             pdf.add_page()
@@ -3525,7 +3781,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         pdf.ln(2)
         pdf_texto(pdf, "Base conceptual: Ferrario et al. describen que la cardiografia de impedancia permite individualizar el tratamiento antihipertensivo segun IC/GC, RVS/SVRI y CFT/TFC.", 9)
 
-    # Hojas siguientes: aceleradores circulares individuales por cada dominio con sus métricas propias.
+    # Hojas siguientes: gauges semicirculares individuales por cada dominio con sus métricas propias.
     grafs_ind = crear_graficos_dominios_individuales_bytes(r)
     metricas_dom = metricas_por_dominio(r)
     for dominio, items in metricas_dom.items():
@@ -3542,9 +3798,9 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
                 pdf.image(tmp_path, x=15, w=180)
                 os.remove(tmp_path)
             except Exception as e:
-                pdf_texto(pdf, f"No se pudo insertar el acelerador circular del dominio: {e}", 9)
+                pdf_texto(pdf, f"No se pudo insertar el gauge semicircular del dominio: {e}", 9)
         else:
-            pdf_texto(pdf, "No hay metricas numericas suficientes para generar aceleradores circulares en este dominio.", 9)
+            pdf_texto(pdf, "No hay metricas numericas suficientes para generar gauges semicirculares en este dominio.", 9)
         pdf.ln(4)
         pdf_texto(pdf, "Metricas incluidas:", 11, True)
         if items:
@@ -4259,7 +4515,7 @@ def validar_hemodinamica_inteligente(df: pd.DataFrame, contexto_embarazo: Option
         if ic < 2.5 and irv > 1300:
             alertas.append("Coherencia compatible con hipodinamia: IC bajo + IRV/RVS elevada.")
         if 2.5 <= ic <= 4.0 and 900 <= irv <= 2000:
-            alertas.append("Coherencia compatible con normodinamia o transición hemodinámica leve.")
+            alertas.append("Coherencia compatible con normodinamia.")
 
     if pas is not None and pad is not None:
         if pas <= pad:
@@ -4482,7 +4738,7 @@ def clasificar_fenotipo_hdp_publicable(r: Dict[str, Any], contexto: Optional[Dic
                 certeza = "Alta"
                 regla.append("Crecimiento fetal restringido/SGA informado.")
             elif crecimiento_cat == "AGA":
-                fenotipo = "HDP-AGA con patrón hipodinámico: vigilar transición a compromiso placentario"
+                fenotipo = "HDP-AGA con patrón circulatorio de HIPODINAMIA: vigilar compromiso placentario"
                 regla.append("Crecimiento fetal AGA informado, pero patrón hemodinámico de resistencia elevada.")
         elif dinamia == "Hiperdinamia":
             eje = "Materno / metabólico-volémico"
@@ -4495,9 +4751,9 @@ def clasificar_fenotipo_hdp_publicable(r: Dict[str, Any], contexto: Optional[Dic
             if imc is not None and imc >= 30:
                 regla.append("IMC elevado, compatible con componente metabólico/volémico.")
         else:
-            eje = "Normodinámico / mixto"
-            fenotipo = "HDP normodinámica o mixta"
-            regla.append("IC y RVS/TPVR sin desviación extrema; requiere integrar PA, laboratorio y feto-placenta.")
+            eje = "Normodinámico"
+            fenotipo = "HDP normodinámica"
+            regla.append("IC y RVS/TPVR sin desviación extrema; integrar PA, laboratorio y feto-placenta.")
     else:
         if dinamia == "Hipodinamia":
             eje = "Riesgo vascular-placentario preclínico"
@@ -4582,7 +4838,7 @@ def calcular_score_preeclampsia_publicable(r: Dict[str, Any], contexto: Optional
         elif dinamia == "Hiperdinamia":
             hemo_pts = 16; hemo_razon = f"Hiperdinamia: IC {fmt(ic,2)} + RVS {fmt(irv,0)}; fenotipo materno/metabólico posible."
         else:
-            hemo_pts = 8; hemo_razon = f"Normodinamia/mixto: IC {fmt(ic,2)} + RVS {fmt(irv,0)}."
+            hemo_pts = 8; hemo_razon = f"Normodinamia: IC {fmt(ic,2)} + RVS {fmt(irv,0)}."
     add("Hemodinamia IC-RVS", hemo_pts, 30, hemo_razon)
 
     # 3. Feto-placenta: máximo 20
@@ -4712,7 +4968,7 @@ def dataset_paper_clinico_row(df: pd.DataFrame, contexto: Optional[Dict[str, Any
 
 
 def crear_grafico_score_paper_bytes(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Optional[io.BytesIO]:
-    """Panel de aceleradores circulares para los componentes auditables del score PE/HDP."""
+    """Panel de gauges semicirculares para los componentes auditables del score PE/HDP."""
     try:
         import matplotlib.pyplot as plt
         import math
@@ -6388,7 +6644,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     except Exception:
         pass
 
-    # BLOQUE FINAL OBLIGATORIO: aceleradores gráficos de métricas por dominio.
+    # BLOQUE FINAL OBLIGATORIO: gauges gráficos de métricas por dominio.
     # Se coloca al final del informe médico integrado, antes de la firma.
     story.append(PageBreak())
     story.append(_paper_paragraph("I. ACELERADORES GRAFICOS DE LAS METRICAS POR DOMINIO", stl["PaperH"]))
@@ -6418,9 +6674,9 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
             if len(filas_dom) > 1:
                 story.append(_paper_table(filas_dom, col_widths=[ancho*0.25, ancho*0.25, ancho*0.50], header=True))
         if not hay_graficos:
-            story.append(_paper_paragraph("No hay métricas numéricas suficientes para generar aceleradores gráficos por dominio.", stl["PaperBody"]))
+            story.append(_paper_paragraph("No hay métricas numéricas suficientes para generar gauges gráficos por dominio.", stl["PaperBody"]))
     except Exception as e:
-        story.append(_paper_paragraph(f"No se pudieron insertar los aceleradores gráficos por dominio: {e}", stl["PaperBody"]))
+        story.append(_paper_paragraph(f"No se pudieron insertar los gauges gráficos por dominio: {e}", stl["PaperBody"]))
 
     # CAPTURA OBLIGATORIA DEL INFORME ORIGINAL: versión completa del PDF del estudio original.
     capturas_originales = capturas_pdfs_originales_desde_sesion()
@@ -6892,6 +7148,17 @@ with c3:
 with c4:
     st.markdown(f"<div class='metric-card'><b>CA</b><br>{fmt(r.get('ca'))}<br><span class='muted'>Complacencia arterial</span></div>", unsafe_allow_html=True)
 
+
+# Gráfico dinámico IC vs IRV/RVS con ubicación real del paciente.
+graf_fenotipo_ui = crear_grafico_fenotipado_dinamico_bytes(r, df_final)
+if graf_fenotipo_ui is not None:
+    st.subheader("Fenotipado clínico automatizado")
+    st.image(
+        graf_fenotipo_ui,
+        caption="Gráfico dinámico IC vs IRV/RVS: ubicación real del paciente y, si corresponde, desplazamiento ortostático basal → de pie.",
+        use_container_width=True,
+    )
+
 st.subheader("Interpretación automática")
 st.markdown(f"<div class='card'><b>Perfil hemodinámico:</b><br>{diagnostico_perfil_hemodinamico(r.get('ic'), r.get('irv'))}</div>", unsafe_allow_html=True)
 st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia(r.get('cft'), r.get('cftnr'))}</div>", unsafe_allow_html=True)
@@ -6929,7 +7196,7 @@ if contexto_embarazo.get("embarazada"):
 st.subheader("Aceleradores circulares por dominio y métricas")
 st.caption("Cada acelerador está semaforizado: verde = normal/favorable, amarillo = precaución/intermedio, rojo = alterado.")
 for dominio, graf in crear_graficos_dominios_individuales_bytes(r).items():
-    st.image(graf, caption=f"{dominio}: aceleradores circulares del dominio", use_container_width=True)
+    st.image(graf, caption=f"{dominio}: gauges semicirculares del dominio", use_container_width=True)
 
 st.subheader("Informe médico integrado")
 informe = generar_informe_texto(df_final, contexto_embarazo)
