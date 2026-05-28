@@ -1780,17 +1780,23 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
     return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, RVS/IRV {rvs}."
 
 def diagnostico_volemia(cft: Any, cftnr: Any) -> str:
+    """Clasificación volémica obligatoria en tres categorías clínicas.
+
+    Salida deliberadamente concisa: NORMOVOLEMIA, HIPOVOLEMIA o HIPERVOLEMIA.
+    Se informa la base objetiva con CFT/CFTnr para trazabilidad del informe.
+    """
     cftv = limpiar_numero(cft)
     cftnrv = limpiar_numero(cftnr)
+    base = f" Base: CFT {fmt(cftv, 2)}; CFTnr {fmt(cftnrv, 2)}."
     if cftv is None and cftnrv is None:
-        return "Estado volémico no clasificable por datos incompletos."
+        return "VOLEMIA NO CLASIFICABLE: faltan CFT y CFTnr."
     alto = (cftv is not None and cftv > 35) or (cftnrv is not None and cftnrv > 35)
     bajo = (cftv is not None and cftv < 25) or (cftnrv is not None and cftnrv < 25)
     if alto:
-        return "Hipervolemia: CFT y/o CFTnr elevados."
+        return "HIPERVOLEMIA." + base
     if bajo:
-        return "Hipovolemia: CFT y/o CFTnr bajos."
-    return "Normovolemia: CFT y/o CFTnr en rango esperado."
+        return "HIPOVOLEMIA." + base
+    return "NORMOVOLEMIA." + base
 
 
 def diagnostico_contractilidad(iv: Any, iac: Any, cts: Any) -> str:
@@ -2040,6 +2046,39 @@ def interpretar_ortostatismo(df: pd.DataFrame) -> str:
     return f"<b>{patron}</b>. <b>Significado clínico:</b> {descripcion} <b>Cambios observados:</b> {d['detalle']}."
 
 
+def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Optional[Dict[str, Any]] = None) -> str:
+    """Diferencia el patrón hemodinámico de referencia del patrón en bipedestación.
+
+    Regla clínica solicitada:
+    - El patrón diagnóstico de referencia es el registro ACOSTADO/CINTA.
+    - El registro DE PIE describe la respuesta ortostática y no reemplaza el diagnóstico basal.
+    - Ambos se expresan solo como HIPODINAMIA, NORMODINAMIA o HIPERDINAMIA.
+    """
+    contexto = contexto or {}
+    r_basal, r_pie = obtener_resumenes_ortostaticos(df)
+
+    def linea(r_local: Dict[str, Any], titulo: str, referencia: bool = False) -> str:
+        if not r_local:
+            return f"- **{titulo}:** no disponible por falta de registro reconocible."
+        clase = clasificacion_dinamica_obligatoria(r_local, contexto).upper()
+        metodo = str(r_local.get("metodo") or "no reconocido").upper()
+        posicion = str(r_local.get("posicion") or "no reconocida").replace("_", " ").upper()
+        suf = " Referencia diagnóstica principal." if referencia else " Registro usado para respuesta ortostática; no reemplaza al patrón basal."
+        return (
+            f"- **{titulo}: {clase}.** "
+            f"IC {fmt(r_local.get('ic'), 2, ' L/min/m²')}; "
+            f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn·s·cm⁻⁵')}; "
+            f"método {metodo}; posición {posicion}.{suf}"
+        )
+
+    lineas = [
+        "**El patrón hemodinámico de referencia es el basal/acostado o CINTA.** El registro de pie se informa por separado para caracterizar la adaptación ortostática.",
+        linea(r_basal, "Patrón hemodinámico ACOSTADO/CINTA", referencia=True),
+        linea(r_pie, "Patrón hemodinámico DE PIE", referencia=False),
+    ]
+    return "\n".join(lineas)
+
+
 # =========================================================
 # GRÁFICOS Y DOMINIOS HEMODINÁMICOS
 # =========================================================
@@ -2214,12 +2253,17 @@ def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] 
     if ortostatico is not None:
         texto_orto = f" Dominio ortostático: {ortostatico.get('detalle', '')}"
 
+    texto_posicion = ""
+    if df is not None:
+        texto_posicion = " " + re.sub(r"\s+", " ", texto_patron_hemodinamico_acostado_y_de_pie(df, None)).strip()
+
     return (
         f"Integración global: {categoria}. "
         f"Función circulatoria: {perfil} "
         f"Volemia: {volemia} "
         f"Contractilidad: {contractilidad} "
         f"Rendimiento cardiovascular/acoplamiento: {acoplamiento}"
+        f"{texto_posicion}"
         f"{texto_orto}"
     )
 
@@ -3482,8 +3526,11 @@ La integración fue realizada usando el último valor clínico útil disponible 
 {perfil}
 {texto_clasificacion_dinamica(r, contexto_embarazo)}
 
-3. Estado volémico
-{volemia}
+2A. Patrón hemodinámico por posición
+{texto_patron_hemodinamico_acostado_y_de_pie(df, contexto_embarazo)}
+
+3. Diagnóstico de volemia
+**{volemia}**
 
 4. Contractilidad
 {contractilidad}
@@ -6461,10 +6508,12 @@ def _paper_conclusion_ejecutiva(r: Dict[str, Any], contexto_embarazo: Optional[D
             "preeclampsia por sí solo, pero identifica un perfil que justifica vigilancia intensiva e integración con proteinuria, "
             "laboratorio materno, Doppler uterino/umbilical, crecimiento fetal y tratamiento actual."
         )
+    volemia = diagnostico_volemia(r.get("cft"), r.get("cftnr"))
     return (
-        f"El estudio sugiere {dinamia.lower()} y permite orientar el razonamiento terapéutico según flujo, resistencia vascular, "
-        "volemia, contractilidad y acoplamiento ventrículo-arterial. La conducta debe individualizarse con clínica, comorbilidades "
-        "y respuesta terapéutica."
+        f"El estudio sugiere {dinamia.lower()} en el patrón basal/acostado o CINTA, que es la referencia diagnóstica principal. "
+        f"Diagnóstico de volemia: {volemia} "
+        "El registro de pie, cuando está disponible, debe diferenciarse como respuesta ortostática. "
+        "La conducta debe individualizarse con clínica, comorbilidades y respuesta terapéutica."
     )
 
 
