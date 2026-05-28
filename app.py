@@ -5967,6 +5967,122 @@ def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     return limpiar_patrones_prohibidos(base + bloque)
 
 
+
+
+# =========================================================
+# V23 - EMBARAZO / RIESGO DE PREECLAMPSIA
+# Regla obligatoria: la referencia hemodinámica obstétrica es ACOSTADO/CINTA.
+# El registro DE PIE se informa solo como respuesta ortostática y no modifica
+# el fenotipo materno ni el score de riesgo PE/HDP.
+# =========================================================
+
+def _referencia_obstetrica_acostado_cinta_txt(r: Optional[Dict[str, Any]] = None) -> str:
+    r = r or {}
+    metodo = str(r.get("metodo_referencia") or r.get("metodo") or "CINTA").upper()
+    posicion = str(r.get("posicion_referencia") or r.get("posicion") or "ACOSTADO").upper()
+    if "CINTA" not in metodo:
+        metodo = "CINTA/BASAL" if metodo in ["", "NO DISPONIBLE", "NONE"] else metodo
+    if "PIE" in posicion:
+        posicion = "ACOSTADO/BASAL"
+    return f"ACOSTADO/CINTA como referencia diagnóstica basal (posición: {posicion}; método: {metodo})"
+
+
+def _agregar_aviso_referencia_obstetrica(texto: str, r: Optional[Dict[str, Any]] = None) -> str:
+    aviso = (
+        "Referencia hemodinámica obstétrica: "
+        + _referencia_obstetrica_acostado_cinta_txt(r)
+        + ". Los valores usados para hemodinamia materna y riesgo de preeclampsia son IC, IRV/RVS, PA, FC, CFT/CFTnr y CA de ACOSTADO/CINTA. "
+        + "La medición DE PIE se reserva para comportamiento ortostático y no reemplaza el fenotipo basal."
+    )
+    t = str(texto or "")
+    if "Referencia hemodinámica obstétrica:" in t:
+        return limpiar_patrones_prohibidos(t)
+    return limpiar_patrones_prohibidos(aviso + "\n" + t)
+
+
+_interpretar_hemodinamica_embarazo_pre_v23 = interpretar_hemodinamica_embarazo
+
+def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    """Módulo embarazo: usa y declara ACOSTADO/CINTA como referencia basal."""
+    r_ref = dict(r or {})
+    texto = _interpretar_hemodinamica_embarazo_pre_v23(r_ref, contexto)
+    return _agregar_aviso_referencia_obstetrica(texto, r_ref)
+
+
+_calcular_riesgo_preeclampsia_pre_v23 = calcular_riesgo_preeclampsia
+
+def calcular_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Score PE: los componentes hemodinámicos se interpretan desde ACOSTADO/CINTA."""
+    r_ref = dict(r or {})
+    res = _calcular_riesgo_preeclampsia_pre_v23(r_ref, contexto)
+    try:
+        if res.get("aplicable"):
+            factores = list(res.get("factores", []))
+            nota = "Referencia hemodinámica del score: ACOSTADO/CINTA basal; el registro DE PIE no modifica el puntaje y queda para ortostatismo."
+            if nota not in factores:
+                factores.insert(0, nota)
+            res["factores"] = factores
+    except Exception:
+        pass
+    return res
+
+
+_texto_riesgo_preeclampsia_pre_v23 = texto_riesgo_preeclampsia
+
+def texto_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    texto = _texto_riesgo_preeclampsia_pre_v23(dict(r or {}), contexto)
+    return _agregar_aviso_referencia_obstetrica(texto, r)
+
+
+_crear_grafico_riesgo_preeclampsia_bytes_pre_v23 = crear_grafico_riesgo_preeclampsia_bytes
+
+def crear_grafico_riesgo_preeclampsia_bytes(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Optional[io.BytesIO]:
+    """Gauge PE calculado con la referencia ACOSTADO/CINTA que recibe el módulo."""
+    return _crear_grafico_riesgo_preeclampsia_bytes_pre_v23(dict(r or {}), contexto)
+
+
+_clasificar_fenotipo_hdp_publicable_pre_v23 = clasificar_fenotipo_hdp_publicable
+
+def clasificar_fenotipo_hdp_publicable(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    out = _clasificar_fenotipo_hdp_publicable_pre_v23(dict(r or {}), contexto)
+    try:
+        regla = str(out.get("regla") or "")
+        nota = "Referencia hemodinámica: ACOSTADO/CINTA basal."
+        if nota not in regla:
+            out["regla"] = (nota + " " + regla).strip()
+    except Exception:
+        pass
+    return out
+
+
+_calcular_score_preeclampsia_publicable_pre_v23 = calcular_score_preeclampsia_publicable
+
+def calcular_score_preeclampsia_publicable(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    out = _calcular_score_preeclampsia_publicable_pre_v23(dict(r or {}), contexto)
+    try:
+        if out.get("aplicable") and isinstance(out.get("componentes"), list):
+            comps = list(out["componentes"])
+            comps.insert(0, {
+                "Componente": "Referencia hemodinámica",
+                "Puntos": 0,
+                "Máximo": 0,
+                "Razón": "ACOSTADO/CINTA basal; el registro DE PIE se usa solo para respuesta ortostática.",
+            })
+            out["componentes"] = comps
+    except Exception:
+        pass
+    return out
+
+
+_texto_clasificacion_dinamica_pre_v23 = texto_clasificacion_dinamica
+
+def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    texto = _texto_clasificacion_dinamica_pre_v23(dict(r or {}), contexto)
+    if contexto and contexto.get("embarazada"):
+        texto += " Referencia obstétrica: ACOSTADO/CINTA basal; DE PIE solo para ortostatismo."
+    return limpiar_patrones_prohibidos(texto)
+
+
 # =========================================================
 # USUARIOS, CLAVES E HISTORIAL ACUMULADO
 # =========================================================
