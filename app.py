@@ -7566,7 +7566,10 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
 
 
 def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> bytes:
-    """PDF extenso profesional con estética tipo paper clínico (JAMA/Hypertension), basado en ReportLab."""
+    """PDF profesional tipo paper clinico.
+    Modulo clinico:  A B C D E F K + firma/sello.
+    Modulo embarazo: A B C E + grafico hemodinamia vs EG + K + firma/sello.
+    """
     try:
         from reportlab.platypus import SimpleDocTemplate, Spacer, PageBreak, Image, Table, TableStyle
         from reportlab.lib.pagesizes import A4
@@ -7592,179 +7595,115 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     stl = _paper_styles()
     story = []
 
+    titulo_modulo = "MODULO HEMODINAMIA EN EMBARAZO" if es_embarazo else TITULO_MODULO_NO_EMBARAZADA
     story += _paper_header_story(
-        TITULO_MODULO_NO_EMBARAZADA,
-        "Diagnóstico hemodinámico, pronóstico y orientación terapéutica"
+        titulo_modulo,
+        "Diagnostico hemodinamico, pronostico y orientacion terapeutica"
     )
+
+    # ── A. Datos del estudio y trazabilidad ──────────────────────────────────
     story.append(_paper_paragraph("A. Datos del estudio y trazabilidad", stl["PaperH"]))
     story.append(_paper_datos_paciente_table(r, contexto_embarazo, ancho))
     story.append(Spacer(1, 6))
 
+    # ── B. Glosario operativo ────────────────────────────────────────────────
     story.append(_paper_paragraph("B. Glosario operativo", stl["PaperH"]))
     glosario = [
-        ["Sigla", "Significado clínico"],
-        ["IC/CI", "Índice cardíaco. No confundir con ITC o índice de trabajo cardíaco."],
-        ["RVS/IRV", "Resistencia vascular sistémica."],
-        ["CFT/CFTnr", "Contenido de fluidos torácicos y contenido normalizado/indexado."],
-        ["EA/EES", "Acoplamiento ventrículo-arterial calculado como EA Capan / EES Capan."],
+        ["Sigla", "Significado clinico"],
+        ["IC/CI", "Indice cardiaco. No confundir con ITC o indice de trabajo cardiaco."],
+        ["RVS/IRV", "Resistencia vascular sistemica."],
+        ["CFT/CFTnr", "Contenido de fluidos toracicos y contenido normalizado/indexado."],
+        ["EA/EES", "Acoplamiento ventriculo-arterial calculado como EA Capan / EES Capan."],
     ]
     if es_embarazo:
         glosario[1:1] = [
-            ["HDP", "Trastornos hipertensivos del embarazo: hipertensión gestacional, preeclampsia y formas asociadas."],
-            ["PE", "Preeclampsia; requiere integración con proteinuria, órgano blanco y evaluación fetal."],
+            ["HDP", "Trastornos hipertensivos del embarazo: hipertension gestacional, preeclampsia y formas asociadas."],
+            ["PE", "Preeclampsia; requiere integracion con proteinuria, organo blanco y evaluacion fetal."],
         ]
     story.append(_paper_table(glosario, col_widths=[ancho*0.22, ancho*0.78], header=True))
     story.append(Spacer(1, 6))
 
-    story.append(_paper_paragraph("C. Parámetros integrados", stl["PaperH"]))
+    # ── C. Parámetros integrados ─────────────────────────────────────────────
+    story.append(_paper_paragraph("C. Parametros integrados", stl["PaperH"]))
     param = [
-        ["Variable", "Valor", "Interpretación"],
-        ["PAS / PAD", f"{_paper_fmt_val(r.get('pas'),0)} / {_paper_fmt_val(r.get('pad'),0)} mmHg", "Interpretar según valores de presión arterial, contexto clínico y tratamiento."],
-        ["FC", f"{_paper_fmt_val(r.get('fc'),0)} lpm", "Integrar con medicación, estado clínico y respuesta ortostática."],
+        ["Variable", "Valor", "Interpretacion"],
+        ["PAS / PAD", f"{_paper_fmt_val(r.get('pas'),0)} / {_paper_fmt_val(r.get('pad'),0)} mmHg", "Interpretar segun valores de presion arterial, contexto clinico y tratamiento."],
+        ["FC", f"{_paper_fmt_val(r.get('fc'),0)} lpm", "Integrar con medicacion, estado clinico y respuesta ortostatica."],
         ["IC", f"{_paper_fmt_val(r.get('ic'),2)} L/min/m2", "Bajo si <2,5 L/min/m2; elevado si >4,0 L/min/m2."],
         ["RVS/IRV", f"{_paper_fmt_val(r.get('irv'),0)} dyn.s.cm-5", "Elevada; eje de alta resistencia vascular."],
-        ["CFT / CFTnr", f"{_paper_fmt_val(r.get('cft'),2)} / {_paper_fmt_val(r.get('cftnr'),2)}", "Revisar unidad/lectura e integrar con clínica, edema, disnea, tratamiento y función renal."],
-        ["IV / IAC / CTS", f"{_paper_fmt_val(r.get('iv'),2)} / {_paper_fmt_val(r.get('iac'),2)} / {_paper_fmt_val(r.get('cts'),2)}", "Evaluación de onda sistólica y tiempos sistólicos."],
-        ["EA / EES / EA-EES", f"{_paper_fmt_val(r.get('ea'),2)} / {_paper_fmt_val(r.get('ees'),2)} / {_paper_fmt_val(r.get('ava'),2)}", "Acoplamiento VA en rango de precaución si EA/EES >1."],
-        ["DS / IDS", f"{_paper_fmt_val(r.get('ds'),2)} / {_paper_fmt_val(r.get('ids'),2)}", "Volumen sistólico bajo si está por debajo del rango esperado."],
+        ["CFT / CFTnr", f"{_paper_fmt_val(r.get('cft'),2)} / {_paper_fmt_val(r.get('cftnr'),2)}", "Revisar e integrar con clinica, edema, disnea, tratamiento y funcion renal."],
+        ["IV / IAC / CTS", f"{_paper_fmt_val(r.get('iv'),2)} / {_paper_fmt_val(r.get('iac'),2)} / {_paper_fmt_val(r.get('cts'),2)}", "Evaluacion de onda sistolica y tiempos sistolicos."],
+        ["EA / EES / EA-EES", f"{_paper_fmt_val(r.get('ea'),2)} / {_paper_fmt_val(r.get('ees'),2)} / {_paper_fmt_val(r.get('ava'),2)}", "Acoplamiento VA en rango de precaucion si EA/EES >1."],
+        ["DS / IDS", f"{_paper_fmt_val(r.get('ds'),2)} / {_paper_fmt_val(r.get('ids'),2)}", "Volumen sistolico bajo si esta por debajo del rango esperado."],
     ]
     story.append(_paper_table(param, col_widths=[ancho*0.23, ancho*0.27, ancho*0.50], header=True))
     story.append(Spacer(1, 6))
 
-    story.append(_paper_paragraph("D. Gráfico de cuadrantes hemodinámicos", stl["PaperH"]))
-    story.append(_paper_paragraph(
-        "El gráfico IC vs IRV/RVS muestra la situación real del paciente. El punto ACOSTADO/CINTA es la referencia diagnóstica principal; el punto DE PIE, si está disponible, describe solo la respuesta ortostática.",
-        stl["PaperBody"],
-    ))
-    try:
-        graf_cuadrantes = crear_grafico_fenotipado_dinamico_bytes(resumen_acostado_cinta_para_patron(df, r), df)
-        if graf_cuadrantes is not None:
-            story.append(Image(graf_cuadrantes, width=ancho, height=ancho*0.66, kind="proportional"))
-        else:
-            story.append(_paper_paragraph("No hay IC e IRV/RVS suficientes para generar el gráfico de cuadrantes.", stl["PaperBody"]))
-    except Exception as e:
-        story.append(_paper_paragraph(f"No se pudo insertar el gráfico de cuadrantes hemodinámicos: {e}", stl["PaperBody"]))
-    story.append(Spacer(1, 6))
+    if not es_embarazo:
+        # ── D. Gráfico de cuadrantes hemodinámicos (solo clínico) ────────────
+        story.append(_paper_paragraph("D. Grafico de cuadrantes hemodinamicos", stl["PaperH"]))
+        story.append(_paper_paragraph(
+            "El grafico IC vs IRV/RVS muestra la situacion real del paciente. El punto ACOSTADO/CINTA es la referencia diagnostica principal; el punto DE PIE, si esta disponible, describe solo la respuesta ortostatica.",
+            stl["PaperBody"],
+        ))
+        try:
+            graf_cuadrantes = crear_grafico_fenotipado_dinamico_bytes(resumen_acostado_cinta_para_patron(df, r), df)
+            if graf_cuadrantes is not None:
+                story.append(Image(graf_cuadrantes, width=ancho, height=ancho*0.66, kind="proportional"))
+            else:
+                story.append(_paper_paragraph("No hay IC e IRV/RVS suficientes para generar el grafico de cuadrantes.", stl["PaperBody"]))
+        except Exception as e:
+            story.append(_paper_paragraph(f"No se pudo insertar el grafico de cuadrantes hemodinamicos: {e}", stl["PaperBody"]))
+        story.append(Spacer(1, 6))
 
-    story.append(_paper_paragraph("E. Informe de dominios integrados resumido y didáctico", stl["PaperH"]))
+    # ── E. Informe de dominios integrados resumido y didáctico ───────────────
+    story.append(_paper_paragraph("E. Informe de dominios integrados resumido y didactico", stl["PaperH"]))
     story.append(_paper_paragraph(
-        "Los dominios se informan como resultados separados. Solo el dominio de función circulatoria define el patrón hemodinámico de referencia ACOSTADO/CINTA.",
+        "Los dominios se informan como resultados separados. Solo el dominio de funcion circulatoria define el patron hemodinamico de referencia ACOSTADO/CINTA.",
         stl["PaperBody"],
     ))
     story.append(_paper_dominios_integrados_table(r, df, ancho))
     story.append(Spacer(1, 6))
 
-    story.append(_paper_paragraph("F. Diagnóstico hemodinámico final", stl["PaperH"]))
-    story.append(_paper_paragraph(informe_dominios_integrados_texto(r, df, html=False), stl["PaperBody"]))
-    story.append(_paper_diagnostico_pronostico_table(r, contexto_embarazo, ancho))
-    story.append(Spacer(1, 6))
-
-    if contexto_embarazo and contexto_embarazo.get("embarazada"):
-        story.append(_paper_paragraph("G. Módulo embarazo / HDP / PE", stl["PaperH"]))
-        story.append(_paper_paragraph(interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo), stl["PaperBody"]))
-        try:
-            graf_materno = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
-            if graf_materno is not None:
-                story.append(_paper_paragraph("Gráfico diagnóstico de hemodinamia materna", stl["PaperH"]))
-                story.append(Image(graf_materno, width=ancho, height=ancho*0.58, kind="proportional"))
-        except Exception as e:
-            story.append(_paper_paragraph(f"No se pudo insertar el gráfico diagnóstico de hemodinamia materna: {e}", stl["PaperBody"]))
-        story.append(_paper_paragraph("Riesgo hemodinámico orientativo", stl["PaperH"]))
-        story.append(_paper_paragraph(texto_riesgo_preeclampsia(r_panel, contexto_embarazo), stl["PaperBody"]))
+    if not es_embarazo:
+        # ── F. Diagnóstico hemodinámico final (solo clínico) ─────────────────
+        story.append(_paper_paragraph("F. Diagnostico hemodinamico final", stl["PaperH"]))
+        story.append(_paper_paragraph(informe_dominios_integrados_texto(r, df, html=False), stl["PaperBody"]))
+        story.append(_paper_diagnostico_pronostico_table(r, contexto_embarazo, ancho))
+        story.append(Spacer(1, 6))
     else:
-        story.append(_paper_paragraph("G. Orientación terapéutica", stl["PaperH"]))
-        story.append(_paper_paragraph(limpiar_referencias_obstetricas_en_linea(sugerencia_tratamiento_no_embarazada(r, df)), stl["PaperBody"]))
+        # ── Módulo embarazo: gráfico hemodinamia materna vs edad gestacional ──
+        story.append(_paper_paragraph("Grafico: hemodinamia materna vs edad gestacional y situacion diagnostica", stl["PaperH"]))
+        story.append(_paper_paragraph(
+            "IC y RVS del paciente comparados con las curvas de referencia fisiologica gestacional. El panel inferior resume las conclusiones clinicas con semafor de riesgo.",
+            stl["PaperBody"],
+        ))
+        try:
+            graf_eg = crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(r_panel, contexto_embarazo)
+            if graf_eg is not None:
+                story.append(Image(graf_eg, width=ancho, height=ancho*0.72, kind="proportional"))
+            else:
+                story.append(_paper_paragraph("No hay datos suficientes para generar el grafico de hemodinamia vs edad gestacional.", stl["PaperBody"]))
+        except Exception as e:
+            story.append(_paper_paragraph(f"No se pudo insertar el grafico de hemodinamia vs edad gestacional: {e}", stl["PaperBody"]))
+        story.append(Spacer(1, 6))
 
+    # ── K. Referencias bibliográficas + captura del informe original ─────────
     story.append(PageBreak())
-    story.append(_paper_paragraph("H. Control de integración y trazabilidad", stl["PaperH"]))
-    try:
-        calidad = resumen_calidad_integracion(df)
-        tabla = calidad.get("tabla")
-        if tabla is not None and not tabla.empty:
-            rows = [["Variable", "Archivo 1", "Archivo 2", "Integrado", "Estado"]]
-            for _, fila in tabla.iterrows():
-                rows.append([fila.get("Variable"), fila.get("Archivo 1"), fila.get("Archivo 2"), fila.get("Valor integrado"), fila.get("Estado")])
-            story.append(_paper_table(rows, col_widths=[ancho*0.17, ancho*0.19, ancho*0.19, ancho*0.25, ancho*0.20], header=True))
-            if calidad.get("faltantes"):
-                story.append(_paper_paragraph("Variables críticas faltantes: " + ", ".join(calidad.get("faltantes")), stl["PaperBody"]))
-    except Exception as e:
-        story.append(_paper_paragraph(f"No se pudo construir la tabla de trazabilidad: {e}", stl["PaperBody"]))
-
-    story.append(Spacer(1, 6))
-    story.append(_paper_paragraph("I. Métricas por dominio", stl["PaperH"]))
-    try:
-        md = metricas_por_dominio(r)
-        for dominio, items in md.items():
-            story.append(_paper_paragraph(dominio, stl["PaperH"]))
-            rows = [["Métrica", "Valor", "Rango de referencia", "Estado"]]
-            if items:
-                for it in items:
-                    ref = "No disponible"
-                    if it.get("referencia_baja") is not None and it.get("referencia_alta") is not None:
-                        ref = f"{_paper_fmt_val(it.get('referencia_baja'))}-{_paper_fmt_val(it.get('referencia_alta'))} {it.get('unidad','')}"
-                    rows.append([it.get("variable"), f"{_paper_fmt_val(it.get('valor'))} {it.get('unidad','')}", ref, it.get("estado", "")])
-                story.append(_paper_table(rows, col_widths=[ancho*0.20, ancho*0.25, ancho*0.35, ancho*0.20], header=True))
-    except Exception as e:
-        story.append(_paper_paragraph(f"No se pudo construir métricas por dominio: {e}", stl["PaperBody"]))
-
-    # Gráficos opcionales: se integran solo si entran sin romper el layout.
-    try:
-        graf_pe = crear_grafico_riesgo_preeclampsia_bytes(r_panel, contexto_embarazo) if es_embarazo else None
-        if graf_pe is not None:
-            story.append(PageBreak())
-            story.append(_paper_paragraph("J. Visualización de riesgo / acelerador", stl["PaperH"]))
-            story.append(Image(graf_pe, width=ancho*0.82, height=ancho*0.45, kind="proportional"))
-    except Exception:
-        pass
-    try:
-        curva = crear_curva_impedancia_representativa_bytes(r_panel)
-        if curva is not None:
-            story.append(_paper_paragraph("Curva de impedancia representativa", stl["PaperH"]))
-            story.append(Image(curva, width=ancho, height=ancho*0.42, kind="proportional"))
-    except Exception:
-        pass
-
-    # BLOQUE FINAL OBLIGATORIO: gauges gráficos de métricas por dominio.
-    # Se coloca al final del informe médico integrado, antes de la firma.
-    story.append(PageBreak())
-    story.append(_paper_paragraph("J. ACELERADORES GRAFICOS DE LAS METRICAS POR DOMINIO", stl["PaperH"]))
+    story.append(_paper_paragraph("K. Referencias bibliograficas utilizadas", stl["PaperH"]))
     story.append(_paper_paragraph(
-        "Cada acelerador resume la posición de la métrica respecto de su rango clínico de referencia y permite una lectura visual semaforizada por dominio.",
+        "Bibliografia de soporte utilizada para el marco conceptual de cardiografia de impedancia, mecanica vascular, presion arterial, monitoreo ambulatorio e interpretacion hemodinamica.",
         stl["PaperBody"],
     ))
-    try:
-        grafs_dominios = crear_graficos_dominios_individuales_bytes(r)
-        metricas_dom = metricas_por_dominio(r)
-        hay_graficos = False
-        for dominio, items in metricas_dom.items():
-            graf = grafs_dominios.get(dominio) if isinstance(grafs_dominios, dict) else None
-            if graf is None:
-                continue
-            hay_graficos = True
-            story.append(Spacer(1, 8))
-            story.append(_paper_paragraph(f"Dominio: {dominio}", stl["PaperH"]))
-            story.append(Image(graf, width=ancho, height=ancho*0.48, kind="proportional"))
-            filas_dom = [["Métrica", "Valor", "Estado"]]
-            for it in items or []:
-                filas_dom.append([
-                    str(it.get("variable", "")),
-                    f"{_paper_fmt_val(it.get('valor'))} {it.get('unidad','')}",
-                    str(it.get("estado", "")),
-                ])
-            if len(filas_dom) > 1:
-                story.append(_paper_table(filas_dom, col_widths=[ancho*0.25, ancho*0.25, ancho*0.50], header=True))
-        if not hay_graficos:
-            story.append(_paper_paragraph("No hay métricas numéricas suficientes para generar gauges gráficos por dominio.", stl["PaperBody"]))
-    except Exception as e:
-        story.append(_paper_paragraph(f"No se pudieron insertar los gauges gráficos por dominio: {e}", stl["PaperBody"]))
+    for i, ref in enumerate(REFERENCIAS_BIBLIOGRAFICAS, start=1):
+        story.append(_paper_paragraph(f"{i}. {ref}", stl["PaperSmall"]))
 
-    # CAPTURA OBLIGATORIA DEL INFORME ORIGINAL: versión completa del PDF del estudio original.
     capturas_originales = capturas_pdfs_originales_desde_sesion()
     if capturas_originales:
-        story.append(PageBreak())
-        story.append(_paper_paragraph("K. CAPTURA DEL INFORME ORIGINAL DEL EQUIPO", stl["PaperH"]))
+        story.append(Spacer(1, 8))
+        story.append(_paper_paragraph("Captura del informe original del equipo", stl["PaperH"]))
         story.append(_paper_paragraph(
-            "Se incorpora la captura de la primera página del PDF original importado para mantener trazabilidad visual del estudio fuente dentro del informe médico integrado completo.",
+            "Se incorpora la captura de la primera pagina del PDF original importado para mantener trazabilidad visual del estudio fuente.",
             stl["PaperBody"],
         ))
         for cap in capturas_originales:
@@ -7774,25 +7713,12 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
                 story.append(Image(cap["imagen"], width=ancho, height=ancho*1.28, kind="proportional"))
             else:
                 story.append(_paper_paragraph(
-                    "No se pudo renderizar la captura del PDF original. Para activar esta función en Streamlit Cloud agregue pymupdf al requirements.txt.",
+                    "No se pudo renderizar la captura del PDF original. Para activar esta funcion en Streamlit Cloud agregue pymupdf al requirements.txt.",
                     stl["PaperBody"],
                 ))
-    else:
-        story.append(PageBreak())
-        story.append(_paper_paragraph("J. CAPTURA DEL INFORME ORIGINAL DEL EQUIPO", stl["PaperH"]))
-        story.append(_paper_paragraph("No se adjuntó PDF original o el archivo importado no era PDF.", stl["PaperBody"]))
 
-    # BIBLIOGRAFÍA OBLIGATORIA VISIBLE EN EL INFORME INTEGRADO.
-    story.append(PageBreak())
-    story.append(_paper_paragraph("K. REFERENCIAS BIBLIOGRÁFICAS UTILIZADAS", stl["PaperH"]))
-    story.append(_paper_paragraph(
-        "Bibliografía de soporte utilizada para el marco conceptual de cardiografía de impedancia, mecánica vascular, presión arterial, monitoreo ambulatorio e interpretación hemodinámica.",
-        stl["PaperBody"],
-    ))
-    for i, ref in enumerate(REFERENCIAS_BIBLIOGRAFICAS, start=1):
-        story.append(_paper_paragraph(f"{i}. {ref}", stl["PaperSmall"]))
-
-    story.append(Spacer(1, 8))
+    # ── Firma y sello ────────────────────────────────────────────────────────
+    story.append(Spacer(1, 10))
     sig = _paper_signature_flowable(width=110, height=52, usuario_info=st.session_state.get("usuario_actual", {}))
     if sig:
         sign_table = Table([[sig, _paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual", {})), stl["PaperSmall"])]], colWidths=[125, ancho-125])
