@@ -6381,6 +6381,182 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
     return buf
 
 
+def crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(
+    r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None
+) -> Optional[io.BytesIO]:
+    """
+    Grafico IC y RVS vs edad gestacional con curvas de referencia fisiologica,
+    punto real del paciente y panel de conclusiones clinicas remarcadas.
+    """
+    contexto = contexto or {}
+    if not contexto.get("embarazada"):
+        return None
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+        import io as _io
+    except Exception:
+        return None
+
+    ic_val = limpiar_numero((r or {}).get("ic"))
+    rvs_val = limpiar_numero((r or {}).get("irv"))
+    eg_val = limpiar_numero(contexto.get("edad_gestacional"))
+
+    if ic_val is None and rvs_val is None:
+        return None
+
+    semanas = np.array([6, 10, 14, 18, 22, 26, 30, 34, 38, 42], dtype=float)
+    ic_ref_centro = np.array([3.4, 3.6, 3.8, 4.2, 4.6, 4.9, 5.0, 4.9, 4.7, 4.5])
+    ic_ref_low    = np.array([3.2, 3.2, 3.2, 3.5, 3.8, 4.0, 4.0, 3.8, 3.6, 3.6])
+    ic_ref_high   = np.array([5.5, 5.5, 5.5, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0])
+    rvs_ref_centro = np.array([1200, 1100, 1050, 950, 900, 870, 870, 890, 920, 950])
+    rvs_ref_low    = np.array([850,  850,  850,  750, 750, 750, 750, 750, 750, 750])
+    rvs_ref_high   = np.array([1450, 1450, 1450, 1300, 1300, 1300, 1300, 1300, 1300, 1300])
+
+    c = clasificacion_hemodinamica_materna_gestacional(r, contexto)
+    dx = c.get("diagnostico", "NO CLASIFICABLE")
+    patron = c.get("patron_principal", "")
+    subtipo = c.get("subtipo", "")
+
+    color_punto = {
+        "NORMODINAMIA": "#2563EB",
+        "HIPERDINAMIA": "#16A34A",
+        "HIPODINAMIA":  "#DC2626",
+        "NO CLASIFICABLE": "#6B7280",
+    }.get(patron, "#111827")
+
+    hdp = bool(contexto.get("hdp", False))
+    crecimiento = str(contexto.get("crecimiento_fetal") or "No informado")
+    doppler = str(contexto.get("doppler_uterino") or "No informado")
+    tri_label = c.get("referencia", {}).get("label", "trimestre no especificado")
+    eg_label = f"EG {fmt(eg_val, 0)} sem" if eg_val is not None else "EG no especificada"
+
+    conclusiones: list = []
+    if patron == "HIPODINAMIA" and "VASOCONSTRICTORA" in subtipo:
+        simbolo_riesgo = "ROJO"
+        conclusiones.append("PATRON DE ALTO RIESGO: bajo flujo + resistencia elevada. Fenotipo compatible con disfuncion placentaria (Ferrazzi). Requiere evaluacion obstetrica urgente.")
+    elif patron == "HIPODINAMIA":
+        simbolo_riesgo = "AMARILLO"
+        conclusiones.append("PATRON DE PRECAUCION: indice cardiaco bajo para la edad gestacional. Descartar hipovolemia, depresion miocardica o suboptima adaptacion gestacional.")
+    elif patron == "NORMODINAMIA" and "VASOCONSTRICCION" in subtipo.upper():
+        simbolo_riesgo = "AMARILLO"
+        conclusiones.append("NORMODINAMIA CON VASOCONSTRICCION: flujo conservado pero resistencia elevada. Vigilar evolucion a fenotipo hipodindamico.")
+    elif patron == "HIPERDINAMIA" and "POSCARGA" in subtipo.upper():
+        simbolo_riesgo = "AMARILLO"
+        conclusiones.append("HIPERDINAMIA CON POSCARGA ELEVADA: coexistencia de alto flujo y resistencia aumentada sugiere estres hemodinamico.")
+    elif patron == "HIPERDINAMIA":
+        simbolo_riesgo = "VERDE"
+        conclusiones.append("PATRON FISIOLOGICO DEL EMBARAZO: alto flujo con resistencia baja, compatible con adaptacion hemodinamica gestacional normal.")
+    elif patron == "NORMODINAMIA":
+        simbolo_riesgo = "VERDE"
+        conclusiones.append("NORMODINAMIA GESTACIONAL: IC y RVS dentro del rango esperado para el trimestre. Continuar seguimiento obstetrico habitual.")
+    else:
+        simbolo_riesgo = "GRIS"
+        conclusiones.append("Datos insuficientes para clasificacion gestacional completa. Completar IC e IRV/RVS.")
+
+    if hdp:
+        conclusiones.append("HTA/HDP PRESENTE: integrar el patron hemodinamico con proteinuria, laboratorio, Doppler uterino y biometria fetal.")
+    if any(x in crecimiento.upper() for x in ["SGA", "RCIU", "FGR", "IUGR"]):
+        conclusiones.append(f"RESTRICCION DE CRECIMIENTO FETAL ({crecimiento}): coexistencia con hipodinamia/vasoconstriccion refuerza fenotipo placentario de alto riesgo.")
+    if any(x in doppler.lower() for x in ["alter", "aument", "notch", "incisura", "patolog"]):
+        conclusiones.append("DOPPLER UTERINO ALTERADO: hallazgo de alto peso para disfuncion placentaria.")
+    if ic_val is not None and rvs_val is not None:
+        conclusiones.append(f"PUNTO REAL: IC={fmt(ic_val,2)} L/min/m2 | RVS={fmt(rvs_val,0)} dyn.s.cm-5 en {eg_label} ({tri_label}).")
+    conclusiones.append("IMPORTANTE: grafico orientativo. No reemplaza la evaluacion obstetrica ni el criterio clinico individual.")
+
+    panel_color = {"ROJO":"#FEE2E2","AMARILLO":"#FEF9C3","VERDE":"#DCFCE7","GRIS":"#F1F5F9"}.get(simbolo_riesgo,"#F1F5F9")
+    border_color = {"ROJO":"#DC2626","AMARILLO":"#CA8A04","VERDE":"#16A34A","GRIS":"#94A3B8"}.get(simbolo_riesgo,"#94A3B8")
+    semaforo_txt = {"ROJO":"[RIESGO ALTO]","AMARILLO":"[PRECAUCION]","VERDE":"[NORMAL]","GRIS":"[SIN DATOS]"}.get(simbolo_riesgo,"")
+
+    fig, ax1 = plt.subplots(figsize=(12.5, 8.0), dpi=160)
+    fig.patch.set_facecolor("white")
+    ax1.set_facecolor("#F8FAFC")
+    ax2 = ax1.twinx()
+
+    ax1.fill_between(semanas, ic_ref_low, ic_ref_high, alpha=0.18, color="#2563EB")
+    ax2.fill_between(semanas, rvs_ref_low, rvs_ref_high, alpha=0.13, color="#DC2626")
+    ax1.plot(semanas, ic_ref_centro, color="#2563EB", lw=2.2, ls="--", label="IC ref. gestacional")
+    ax2.plot(semanas, rvs_ref_centro, color="#DC2626", lw=2.2, ls="--", label="RVS ref. gestacional")
+
+    for sw, lbl in [(14, "T1|T2"), (28, "T2|T3")]:
+        ax1.axvline(sw, color="#94A3B8", lw=1.5, ls=":", zorder=2)
+        ax1.text(sw + 0.3, 6.85, lbl, fontsize=9.5, color="#475569", va="top")
+
+    ax1.axvspan(4, 14, color="#EFF6FF", alpha=0.35, zorder=0)
+    ax1.axvspan(14, 28, color="#F0FDF4", alpha=0.35, zorder=0)
+    ax1.axvspan(28, 42, color="#FFF7ED", alpha=0.35, zorder=0)
+    ax1.text(9, 1.9, "1er Trimestre", fontsize=9.5, color="#1E40AF", ha="center", alpha=0.75)
+    ax1.text(21, 1.9, "2do Trimestre", fontsize=9.5, color="#166534", ha="center", alpha=0.75)
+    ax1.text(35, 1.9, "3er Trimestre", fontsize=9.5, color="#9A3412", ha="center", alpha=0.75)
+
+    if ic_val is not None and eg_val is not None:
+        ax1.scatter([eg_val], [ic_val], s=240, color=color_punto, edgecolor="white", linewidth=2.5, zorder=9,
+                    label=f"IC paciente: {fmt(ic_val,2)} L/min/m2")
+        ax1.annotate(f"IC: {fmt(ic_val,2)}", xy=(eg_val, ic_val), xytext=(14, 22), textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.4", fc="white", ec=color_punto, lw=1.8, alpha=0.96),
+            arrowprops=dict(arrowstyle="->", color=color_punto, lw=1.5),
+            fontsize=10.5, fontweight="bold", color=color_punto)
+
+    if rvs_val is not None and eg_val is not None:
+        ax2.scatter([eg_val], [rvs_val], s=240, color="#B45309", marker="D", edgecolor="white", linewidth=2.5, zorder=9,
+                    label=f"RVS paciente: {fmt(rvs_val,0)}")
+        ax2.annotate(f"RVS: {fmt(rvs_val,0)}", xy=(eg_val, rvs_val), xytext=(14, -28), textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="#B45309", lw=1.8, alpha=0.96),
+            arrowprops=dict(arrowstyle="->", color="#B45309", lw=1.5),
+            fontsize=10.5, fontweight="bold", color="#B45309")
+
+    ax1.set_xlim(4, 42)
+    ax1.set_ylim(1.5, 7.2)
+    ax2.set_ylim(400, 2100)
+    ax1.set_xlabel("Edad gestacional (semanas)", fontsize=12, fontweight="bold", color="#0F172A")
+    ax1.set_ylabel("Indice cardiaco - IC (L/min/m2)", fontsize=12, fontweight="bold", color="#2563EB")
+    ax2.set_ylabel("Resistencia vascular sistemica - RVS (dyn.s.cm-5)", fontsize=12, fontweight="bold", color="#DC2626")
+    ax1.tick_params(axis="y", labelcolor="#2563EB")
+    ax2.tick_params(axis="y", labelcolor="#DC2626")
+    ax1.set_xticks(list(range(6, 43, 4)))
+    ax1.grid(True, alpha=0.2)
+
+    ax1.set_title(
+        f"Hemodinamica materna vs edad gestacional  |  {eg_label}  |  {semaforo_txt}  {dx}",
+        fontsize=13, fontweight="bold", color="#0B3D6E", pad=12
+    )
+
+    lines1, labs1 = ax1.get_legend_handles_labels()
+    lines2, labs2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labs1 + labs2, loc="upper right", fontsize=9, framealpha=0.92)
+
+    fig.subplots_adjust(bottom=0.31)
+    panel_ax = fig.add_axes([0.04, 0.01, 0.92, 0.28])
+    panel_ax.set_facecolor(panel_color)
+    for spine in panel_ax.spines.values():
+        spine.set_edgecolor(border_color)
+        spine.set_linewidth(2.5)
+    panel_ax.set_xticks([])
+    panel_ax.set_yticks([])
+
+    cabecera = f"  {semaforo_txt}  CONCLUSIONES CLINICAS IMPORTANTES  -  MODULO HEMODINAMIA EN EMBARAZO"
+    panel_ax.text(0.01, 0.94, cabecera, transform=panel_ax.transAxes,
+                  fontsize=11, fontweight="bold", color=border_color, va="top")
+
+    y_txt = 0.74
+    for i, con in enumerate(conclusiones):
+        marker = ">" if i < len(conclusiones) - 1 else "i"
+        peso = "bold" if i == 0 else "normal"
+        color_txt = border_color if i == 0 else "#1E293B"
+        panel_ax.text(0.012, y_txt, f"  {marker}  {con}",
+                      transform=panel_ax.transAxes, fontsize=9.2,
+                      fontweight=peso, color=color_txt, va="top")
+        y_txt -= 0.155
+        if y_txt < 0.01:
+            break
+
+    buf = _io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
 _calcular_riesgo_preeclampsia_pre_v24 = calcular_riesgo_preeclampsia
 
 def calcular_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -8086,6 +8262,9 @@ if contexto_embarazo.get("embarazada"):
     graf_materno_ui = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
     if graf_materno_ui is not None:
         st.image(graf_materno_ui, caption="Gráfico diagnóstico de hemodinamia materna: punto real ACOSTADO/CINTA comparado con referencia gestacional", use_container_width=True)
+    graf_eg_ui = crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(r_panel, contexto_embarazo)
+    if graf_eg_ui is not None:
+        st.image(graf_eg_ui, caption="Hemodinamia materna vs edad gestacional: IC y RVS del paciente sobre curvas de referencia fisiológica gestacional, con conclusiones clínicas remarcadas", use_container_width=True)
     st.markdown(f"<div class='card'><b>Módulo riesgo de preeclampsia:</b><br>{texto_riesgo_preeclampsia(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
     graf_pe_ui = crear_grafico_riesgo_preeclampsia_bytes(r_panel, contexto_embarazo)
     if graf_pe_ui is not None:
