@@ -490,9 +490,10 @@ def rango_plausible(clave: str, valor: Any) -> bool:
         "fc": (35, 180),
         "ic": (0.8, 8.0),
         "vm": (0.5, 25.0),
-        "irv": (700, 6000),
+        "irv": (700, 6000),   # IRV indexado: dyn.seg.cm-5.m2
+        "rvs": (400, 4000),   # RVS no indexado: dyn.seg.cm-5
         "ca": (0.2, 8.0),
-        "cft": (5, 80),
+        "cft": (5, 120),       # CFT en kohms(-1): rango ampliado para cubrir valores en deshidratación
         "cftnr": (1, 200),
                 "iv": (0, 200),
         "iac": (0, 50),
@@ -576,7 +577,10 @@ VARIABLES_CGI: Dict[str, List[str]] = {
     "fc": ["frecuencia cardiaca", "frecuencia cardiaca media", "heart rate", " fc"],
 
     "ic": ["indice cardiaco", "cardiac index", " ic ", "ic l/min"],
-    "irv": ["indice resistencia vascular", "resistencia vascular sistemica", "resistencia vascular", "irv", "rvs", "svr"],
+    # IRV = Índice de Resistencia Vascular (indexado por SC, dyn.seg.cm-5.m2) — siempre preferir sobre RVS
+    "irv": ["indice de resistencia vascular", "indice resistencia vascular", "irv", "svri", "systemic vascular resistance index"],
+    # RVS = Resistencia Vascular Sistémica (no indexada, dyn.seg.cm-5) — usar solo si no hay IRV
+    "rvs": ["resistencia vascular sistemica", "resistencia vascular sistémica", "resistencia vascular", "rvs", "svr", "systemic vascular resistance"],
     "ca": ["complacencia arterial", "compliance arterial", "ca ml", " ca "],
     "cftnr": ["cftnr", "cft nr", "cft n.r", "cft n r", "cft normalizado", "cft index", "cft indice", "cft índice", "tfc index", "tfc indice", "tfc índice", "tfi", "contenido de fluidos toracicos normalizado", "contenido de fluidos torácicos normalizado", "contenido fluidos toracicos normalizado", "contenido fluidos torácicos normalizado", "thoracic fluid content index", "thoracic fluid index"],
     "cft": ["contenido de fluidos toracicos", "contenido de fluidos torácicos", "thoracic fluid", "cft", "tfc"],
@@ -741,6 +745,9 @@ def paciente_valido(valor: Any) -> bool:
     if re.search(r"\b(hc|h\.?c\.?|historia\s*clinica|historia|dni|documento|fecha|edad|obra\s*social|metodo|cinta|spot)\b", n):
         return False
     if re.search(r"^ecg$|^ekg$|electrocardiograma|mm\s*/?\s*seg|ohm|calibraci[oó]n|z[- ]?logic|cardiograf|impedancia", n):
+        return False
+    # Bloquear datos técnicos/fisiológicos que no son nombres de pacientes
+    if re.search(r"\bpulsos?\b|\bpulsos?\s*/\s*min\b|\blpm\b|\bfc\b|\bindice\b|\bcardiaco\b|\bvascular\b|\bsistol\b|\bdiastol\b|\bmmhg\b|\bdyn\b|\bseg\b", n, re.IGNORECASE):
         return False
     if re.fullmatch(r"[#\-–—_.\s0-9]+", s):
         return False
@@ -947,8 +954,8 @@ def extraer_contexto_clinico_pdf(lineas: List[str]) -> Dict[str, Any]:
 # =========================================================
 
 CLAVES_NUMERICAS = [
-    "pas_pad", "fc", "vm", "ic", "irv", "ca", "cftnr", "cft", "ih", "iv", "iac", "cts",
-    "ea", "ees", "ava", "ds", "ids", "z0"
+    "pas_pad", "fc", "vm", "ic", "irv", "rvs", "ca", "cftnr", "cft", "ih", "iv", "iac", "cts",
+    "ea", "ees", "ava", "ids", "ds", "z0"
 ]
 
 # Patrones más tolerantes para etiquetas exportadas por Z-Logic/CGI.
@@ -961,7 +968,9 @@ PATRONES_CLAVE = {
     "vm": r"(?:\bvm\b|volumen\s+minuto|cardiac\s+output|\bco\b)",
     # IC estricto: NO incluir ITC/índice de trabajo cardíaco.
     "ic": r"(?:[ií]ndice\s+card[ií]aco|indice\s+cardiaco|cardiac\s+index|\bci\b|\bic\b)(?!.*dz\s*/\s*dt)",
-    "irv": r"(?:[ií]ndice\s+(?:de\s+)?resistencia\s+vascular|resistencia\s+vascular\s+sist[eé]mica|\brvs\b|\birv\b|\bsvr\b)",
+    # IRV = indexado (con "índice"); RVS = no indexado. Patrones separados para distinguirlos.
+    "irv": r"(?:[ií]ndice\s+(?:de\s+)?resistencia\s+vascular|\birv\b|\bsvri\b)",
+    "rvs": r"(?:resistencia\s+vascular\s+sist[eé]mica|\brvs\b|\bsvr\b)",
     "ca": r"(?:complacencia\s+arterial|arterial\s+compliance|\bca\b)",
     "ih": r"(?:[ií]ndice\s+de\s+heather|heather|\bih\b)",
     "iv": r"(?:[ií]ndice\s+de\s+velocidad|velocity\s+index|\bvi\b|\biv\b)",
@@ -980,7 +989,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
     bloquea_ic_por_itc = es_linea_itc_no_ic(txt)
     halladas = []
     # Orden intencional: CFTnr antes que CFT para no confundir ambos.
-    orden = ["cftnr", "cft", "ih", "iac", "cts", "pas_pad", "fc", "vm", "ic", "irv", "ca", "iv", "ea", "ees", "ava", "ds", "ids", "z0"]
+    orden = ["cftnr", "cft", "ih", "iac", "cts", "pas_pad", "fc", "vm", "ic", "irv", "rvs", "ca", "iv", "ea", "ees", "ava", "ids", "ds", "z0"]
     for clave in orden:
         if clave == "ic" and (bloquea_ic_por_itc or not es_etiqueta_ic_explicita(txt)):
             continue
@@ -999,6 +1008,17 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
         txt_sin_cftnr = re.sub(PATRONES_CLAVE["cftnr"], " ", txt, flags=re.IGNORECASE)
         if not re.search(PATRONES_CLAVE["cft"], txt_sin_cftnr, flags=re.IGNORECASE):
             halladas.remove("cft")
+    # Si aparece IDS, no dejar que la misma línea sea interpretada también como DS.
+    # "Índice de Descarga Sistólica" contiene "descarga sistólica", que es DS → hay que eliminar DS.
+    if "ids" in halladas and "ds" in halladas:
+        txt_sin_ids = re.sub(PATRONES_CLAVE["ids"], " ", txt, flags=re.IGNORECASE)
+        if not re.search(PATRONES_CLAVE["ds"], txt_sin_ids, flags=re.IGNORECASE):
+            halladas.remove("ds")
+    # Si aparece IRV (indexado), no dejar que la misma línea sea interpretada como RVS (no indexado).
+    if "irv" in halladas and "rvs" in halladas:
+        txt_sin_irv = re.sub(PATRONES_CLAVE["irv"], " ", txt, flags=re.IGNORECASE)
+        if not re.search(PATRONES_CLAVE["rvs"], txt_sin_irv, flags=re.IGNORECASE):
+            halladas.remove("rvs")
     # Evita confundir ITC/índice de trabajo cardíaco con IC/índice cardíaco.
     if "ic" in halladas and re.search(r"\bitc\b|trabajo\s+card[ií]aco", txt, flags=re.IGNORECASE):
         halladas.remove("ic")
@@ -1094,7 +1114,7 @@ def aplicar_fallback_regex_global(lineas: List[str], filas: List[Dict[str, Any]]
 
     # Numéricos línea por línea y también con ventana de línea siguiente.
     ya = {str(f.get("variable", "")).upper() for f in filas}
-    for clave in ["cftnr", "cft", "ih", "iac", "cts", "fc", "ic", "irv", "ca", "iv", "ea", "ees", "ava", "ds", "ids", "z0"]:
+    for clave in ["cftnr", "cft", "ih", "iac", "cts", "fc", "ic", "irv", "rvs", "ca", "iv", "ea", "ees", "ava", "ids", "ds", "z0"]:
         var = clave.upper() if clave != "ava" else "AVA"
         if var in ya:
             continue
@@ -1288,7 +1308,7 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
                 "FC": res.get("FC"),
                 "IC": res.get("IC"),
                 "IRV": res.get("IRV"),
-                "RVS": res.get("IRV"),
+                "RVS": res.get("RVS"),
                 "CA": res.get("CA"),
                 "CFT": res.get("CFT"),
                 "CFTnr": res.get("CFTNR"),
@@ -1309,7 +1329,11 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
         if archivo_origen:
             pac_archivo = re.sub("[.]pdf$", "", archivo_origen, flags=re.IGNORECASE)
             pac_archivo = re.sub("[-_]*logic[0-9]*", "", pac_archivo, flags=re.IGNORECASE)
+            pac_archivo = re.sub(r"\d{2}[-/]\d{2}[-/]\d{2,4}", "", pac_archivo, flags=re.IGNORECASE)
+            pac_archivo = re.sub(r"\b(CGI|ObraSocial|informe|integrado|SD|basal|acostado|de\s*pie|spot|cinta|Z[-\s]?Logic)\b", "", pac_archivo, flags=re.IGNORECASE)
             pac_archivo = pac_archivo.replace("_", " ").replace("-", " ").strip()
+            if re.search(r"\bpulsos?\b|\blpm\b|\bmin\b", pac_archivo, re.IGNORECASE):
+                pac_archivo = None
 
         # Solo incluir el bloque de pie si tiene al menos IC o IRV (evita filas vacías)
         fila_ac = _construir_fila(bloque_ac, pac_archivo, "acostado")
@@ -1419,7 +1443,14 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
     if archivo_origen:
         paciente_archivo = re.sub("[.]pdf$", "", archivo_origen, flags=re.IGNORECASE)
         paciente_archivo = re.sub("[-_]*logic[0-9]*", "", paciente_archivo, flags=re.IGNORECASE)
+        # Eliminar segmentos técnicos comunes en nombres de archivo CGI:
+        # fechas (dd-mm-yyyy), "ObraSocial_SD", "Informe CGI integrado", "CGI", etc.
+        paciente_archivo = re.sub(r"\d{2}[-/]\d{2}[-/]\d{2,4}", "", paciente_archivo, flags=re.IGNORECASE)
+        paciente_archivo = re.sub(r"\b(CGI|ObraSocial|informe|integrado|SD|basal|acostado|de\s*pie|spot|cinta|Z[-\s]?Logic)\b", "", paciente_archivo, flags=re.IGNORECASE)
         paciente_archivo = paciente_archivo.replace("_", " ").replace("-", " ").strip()
+        # Si quedan solo palabras de datos técnicos, descartar todo
+        if re.search(r"\bpulsos?\b|\blpm\b|\bmin\b", paciente_archivo, re.IGNORECASE):
+            paciente_archivo = None
 
     # Recalcular AVA si no vino explícito.
     ava = resumen.get("AVA")
@@ -1449,8 +1480,9 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
         "PAD": resumen.get("PAD"),
         "FC": resumen.get("FC"),
         "IC": resumen.get("IC"),
+        # IRV = indexado (dyn.seg.cm-5.m2); RVS = no indexado (dyn.seg.cm-5). Columnas separadas.
         "IRV": resumen.get("IRV"),
-        "RVS": resumen.get("IRV"),
+        "RVS": resumen.get("RVS"),
         "CA": resumen.get("CA"),
         "CFT": resumen.get("CFT"),
         "CFTnr": resumen.get("CFTNR"),
@@ -1576,7 +1608,9 @@ SINONIMOS_COLUMNAS: Dict[str, List[str]] = {
     "PAD": ["pad", "diastolica", "diastólica", "dbp", "dia"],
     "FC": ["fc", "frecuencia cardiaca", "frecuencia cardíaca", "heart rate", "hr"],
     "IC": ["ic", "indice cardiaco", "índice cardíaco", "cardiac index", "ci"],
-    "IRV": ["irv", "rvs", "resistencia vascular sistemica", "resistencia vascular sistémica", "svr"],
+    # IRV = indexado; RVS = no indexado. Columnas separadas para distinguirlos correctamente.
+    "IRV": ["irv", "indice de resistencia vascular", "indice resistencia vascular", "índice de resistencia vascular", "índice resistencia vascular", "svri", "systemic vascular resistance index"],
+    "RVS": ["rvs", "resistencia vascular sistemica", "resistencia vascular sistémica", "resistencia vascular", "svr", "systemic vascular resistance"],
     "CA": ["ca", "complacencia arterial", "arterial compliance"],
     "CFTnr": ["cftnr", "cft nr", "cft n.r", "cft n r", "cft normalizado", "cft index", "cft indice", "cft índice", "tfc index", "tfc indice", "tfi", "contenido de fluidos toracicos normalizado", "contenido de fluidos torácicos normalizado", "thoracic fluid index"],
     "CFT": ["cft", "tfc", "contenido de fluidos toracicos", "contenido de fluidos torácicos", "thoracic fluid"],
@@ -1593,12 +1627,12 @@ SINONIMOS_COLUMNAS: Dict[str, List[str]] = {
 }
 
 ORDEN_VARIABLES_INFORME = [
-    "Paciente", "DNI", "Obra_Social", "Edad", "Fecha_Estudio", "Fecha_Nacimiento", "Diagnóstico", "Medicación", "Posición", "Texto_PDF", "PAS", "PAD", "FC", "IC", "IRV", "CA", "CFT", "CFTnr",
+    "Paciente", "DNI", "Obra_Social", "Edad", "Fecha_Estudio", "Fecha_Nacimiento", "Diagnóstico", "Medicación", "Posición", "Texto_PDF", "PAS", "PAD", "FC", "IC", "IRV", "RVS", "CA", "CFT", "CFTnr",
     "IH", "IV", "IAC", "CTS", "EA", "EES", "EA/EES", "DS", "IDS", "Z0"
 ]
 
 DOMINIOS_METRICAS = {
-    "Función circulatoria": ["IC", "IRV", "FC", "PAS", "PAD", "CA"],
+    "Función circulatoria": ["IC", "IRV", "RVS", "FC", "PAS", "PAD", "CA"],
     "Contractilidad": ["IH", "IV", "IAC", "CTS", "DS", "IDS"],
     "Volemia": ["CFT", "CFTnr", "Z0"],
     "Rendimiento CV / VA": ["EA", "EES", "EA/EES"],
@@ -1899,7 +1933,10 @@ def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
         "pad": buscar_col("PAD"),
         "fc": buscar_col("FC"),
         "ic": buscar_col("IC"),
-        "irv": buscar_col("IRV"),
+        # Siempre preferir IRV (indexado) sobre RVS (no indexado) para diagnóstico.
+        # IRV se informa en dyn.seg.cm-5.m2; RVS en dyn.seg.cm-5.
+        "irv": buscar_col("IRV") if es_valor_util(buscar_col("IRV")) else buscar_col("RVS"),
+        "rvs": buscar_col("RVS"),
         "ca": buscar_col("CA"),
         "cft": buscar_col("CFT"),
         "cftnr": buscar_col("CFTnr"),
@@ -1943,7 +1980,7 @@ def diagnostico_perfil_hemodinamico(ic: Any, irv: Any) -> str:
     Regla clínica base:
     - Hipodinamia: predominio de bajo flujo y/o resistencia vascular elevada.
     - Hiperdinamia: predominio de alto flujo y/o resistencia vascular baja.
-    - Normodinamia: IC e IRV/RVS dentro de rango esperado.
+    - Normodinamia: IC e IRV dentro de rango esperado.
     """
     icv = limpiar_numero(ic)
     rv = limpiar_numero(irv)
@@ -1955,7 +1992,7 @@ def diagnostico_perfil_hemodinamico(ic: Any, irv: Any) -> str:
             return "Patrón circulatorio de HIPERDINAMIA: predominio de alto flujo y/o baja resistencia vascular."
         if icv < 2.5 or rv > 2000:
             return "Patrón circulatorio de HIPODINAMIA: predominio de bajo flujo y/o resistencia vascular elevada."
-        return "Patrón circulatorio de NORMODINAMIA: IC e IRV/RVS dentro de rango esperado."
+        return "Patrón circulatorio de NORMODINAMIA: IC e IRV dentro de rango esperado."
 
     if icv is not None:
         if icv > 4.0:
@@ -1980,13 +2017,13 @@ def clasificacion_dinamica_obligatoria(r: Dict[str, Any], contexto: Optional[Dic
 
     Regla corregida de coherencia clínica:
     - El patrón hemodinámico de referencia se define con los valores ACOSTADO/CINTA.
-    - No se clasifica Hipodinamia si IC e IRV/RVS están en rango normal.
+    - No se clasifica Hipodinamia si IC e IRV están en rango normal.
     - Embarazo/HDP/PE usa la misma clasificación basal IC + IRV/RVS; los datos obstétricos
       modifican el riesgo clínico, pero no cambian el patrón circulatorio si la hemodinamia es normal.
 
     Rangos operativos usados por la app:
     - IC normal: 2,5 a 4,0 L/min/m².
-    - IRV/RVS normal: 1200 a 2000 dyn·s·cm⁻⁵.
+    - IRV/RVS normal: 1200 a 2000 dyn.s.cm-5.
     """
     ic = limpiar_numero((r or {}).get("ic"))
     rvs = limpiar_numero((r or {}).get("irv"))
@@ -2041,7 +2078,7 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
     contexto = contexto or {}
     clase = clasificacion_dinamica_obligatoria(r, contexto)
     ic = fmt(r.get("ic"), 2, " L/min/m²")
-    rvs = fmt(r.get("irv"), 0, " dyn·s·cm⁻⁵")
+    rvs = fmt(r.get("irv"), 0, " dyn.s.cm-5")
     pas = limpiar_numero(r.get("pas"))
     pad = limpiar_numero(r.get("pad"))
     fc = limpiar_numero(r.get("fc"))
@@ -2052,8 +2089,8 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
     if pam is not None and fc not in [None, 0]:
         map_hr_txt = fmt(pam / fc, 2)
     if contexto.get("embarazada"):
-        return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, RVS/IRV {rvs}, relación PAM/FC {map_hr_txt}. En embarazo se informa la hemodinamia basal ACOSTADO/CINTA; los datos obstétricos se integran como contexto clínico sin cambiar el patrón si IC e IRV/RVS están en rango normal."
-    return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, RVS/IRV {rvs}."
+        return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, IRV {rvs}, relación PAM/FC {map_hr_txt}. En embarazo se informa la hemodinamia basal ACOSTADO/CINTA; los datos obstétricos se integran como contexto clínico sin cambiar el patrón si IC e IRV están en rango normal."
+    return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, IRV {rvs}."
 
 def diagnostico_volemia(cft: Any, cftnr: Any) -> str:
     """Clasificación volémica obligatoria en tres categorías clínicas.
@@ -2171,7 +2208,8 @@ def extraer_resumen_ortostatico_desde_fila(fila: pd.Series) -> Dict[str, Any]:
         "posicion": detectar_posicion_fila(d),
         "metodo": detectar_metodo_fila(d),
         "ic": limpiar_numero(_valor_fila_case_insensitive(d, "IC", "ic", "indice cardiaco", "cardiac index", "ci")),
-        "irv": limpiar_numero(_valor_fila_case_insensitive(d, "IRV", "RVS", "SVR", "irv", "rvs")),
+        # Preferir IRV (indexado) sobre RVS (no indexado) para análisis ortostático
+        "irv": limpiar_numero(_valor_fila_case_insensitive(d, "IRV", "irv")) or limpiar_numero(_valor_fila_case_insensitive(d, "RVS", "rvs", "SVR")),
         "fc": limpiar_numero(_valor_fila_case_insensitive(d, "FC", "fc", "frecuencia cardiaca", "heart rate")),
         "pas": limpiar_numero(_valor_fila_case_insensitive(d, "PAS", "pas")),
         "pad": limpiar_numero(_valor_fila_case_insensitive(d, "PAD", "pad")),
@@ -2253,7 +2291,7 @@ def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
 
     pares = [
         ("ic", "delta_ic", "IC", "L/min/m²"),
-        ("irv", "delta_irv", "IRV/RVS", "dyn·s·cm⁻⁵"),
+        ("irv", "delta_irv", "IRV/RVS", "dyn.s.cm-5"),
         ("fc", "delta_fc", "FC", "lpm"),
         ("pas", "delta_pas", "PAS", "mmHg"),
         ("pad", "delta_pad", "PAD", "mmHg"),
@@ -2359,7 +2397,7 @@ def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Opti
         return (
             f"- **{titulo}: {clase}.** "
             f"IC {fmt(r_local.get('ic'), 2, ' L/min/m²')}; "
-            f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn·s·cm⁻⁵')}; "
+            f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn.s.cm-5')}; "
             f"método {metodo}; posición {posicion}.{suf}"
         )
 
@@ -2405,7 +2443,7 @@ def evaluar_dominio_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
 
     reglas = [
         ("IC", "delta_ic", 0.20, 1.00, "L/min/m²"),
-        ("IRV/RVS", "delta_irv", 100, 800, "dyn·s·cm⁻⁵"),
+        ("IRV/RVS", "delta_irv", 100, 800, "dyn.s.cm-5"),
         ("FC", "delta_fc", 3, 30, "lpm"),
     ]
 
@@ -2576,8 +2614,8 @@ def referencia_metrica(nombre: str) -> Optional[Tuple[float, float, str]]:
         "pad": (60, 89, "mmHg"),
         "fc": (60, 100, "lpm"),
         "ic": (2.5, 4.0, "L/min/m²"),
-        "irv": (1200, 2000, "dyn·s·cm⁻⁵"),
-        "rvs": (1200, 2000, "dyn·s·cm⁻⁵"),
+        "irv": (1200, 2000, "dyn.s.cm-5"),
+        "rvs": (1200, 2000, "dyn.s.cm-5"),
         "ca": (1.0, 3.0, "mL/mmHg"),
         "cft": (25, 35, "1/kΩ"),
         "cftnr": (25, 35, "1/kΩ/m²"),
@@ -2940,7 +2978,7 @@ def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.D
             ax.text(
                 pto["irv"] + (x_max-x_min)*0.025,
                 pto["ic"] + (y_max-y_min)*0.035,
-                f"{pto['etiqueta']}\nIC {pto['ic']:.2f} | RVS {pto['irv']:.0f}",
+                f"{pto['etiqueta']}\nIC {pto['ic']:.2f} | IRV {pto['irv']:.0f}",
                 fontsize=9,
                 fontweight="bold",
                 color="#111827",
@@ -2951,7 +2989,7 @@ def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.D
         punto_referencia = puntos[0]
         patron = diagnostico_perfil_hemodinamico(punto_referencia.get("ic"), punto_referencia.get("irv"))
         ax.set_title("Fenotipado clínico automatizado: patrón ACOSTADO/CINTA de referencia", fontsize=14, fontweight="bold", color="#0B4F8A")
-        ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=11, fontweight="bold")
+        ax.set_xlabel("Índice de Resistencia Vascular - IRV (dyn.s.cm-5.m2)", fontsize=11, fontweight="bold")
         ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=11, fontweight="bold")
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
@@ -3673,7 +3711,7 @@ def sugerencia_tratamiento_no_embarazada(r: Dict[str, Any], df: Optional[pd.Data
     if ic is not None:
         lineas.append(f"- Índice cardíaco (IC): {fmt(ic,2,' L/min/m²')}.")
     if rvs is not None:
-        lineas.append(f"- Resistencia vascular sistémica / IRV: {fmt(rvs,0,' dyn·s·cm⁻⁵')}.")
+        lineas.append(f"- Resistencia vascular sistémica / IRV: {fmt(rvs,0,' dyn.s.cm-5')}.")
     if cft is not None or cftnr is not None:
         lineas.append(f"- Contenido de fluido torácico: CFT {fmt(cft,2)}; CFTnr {fmt(cftnr,2)}.")
 
@@ -3975,7 +4013,7 @@ La integración fue realizada usando el último valor clínico útil disponible 
 - Presión arterial diastólica: {fmt(r.get('pad'), 0, ' mmHg')}
 - Frecuencia cardíaca: {fmt(r.get('fc'), 0, ' lpm')}
 - Índice cardíaco: {fmt(r.get('ic'), 2, ' L/min/m²')}
-- Resistencia vascular sistémica / IRV: {fmt(r.get('irv'), 0, ' dyn·s·cm⁻⁵')}
+- Resistencia vascular sistémica / IRV: {fmt(r.get('irv'), 0, ' dyn.s.cm-5')}
 - Complacencia arterial: {fmt(r.get('ca'), 2, ' mL/mmHg')}
 - CFT: {fmt(r.get('cft'), 2)}
 - CFTnr: {fmt(r.get('cftnr'), 2)}
@@ -4941,7 +4979,7 @@ RANGOS_INTELIGENTES_V15 = {
     "PAD": (30, 160, "mmHg"),
     "FC": (35, 180, "lpm"),
     "IC": (0.8, 8.0, "L/min/m²"),
-    "IRV/RVS": (700, 6000, "dyn·s·cm⁻⁵·m²"),
+    "IRV/RVS": (700, 6000, "dyn.s.cm-5.m2"),
     "CA": (0.2, 8.0, "mL/mmHg"),
     "CFT": (5, 90, "kΩ⁻¹"),
     "CFTnr": (1, 200, "índice"),
@@ -5735,7 +5773,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
         if "ava" not in halladas:
             halladas.append("ava")
     # Orden preferente para elastancias antes que abreviaturas cortas.
-    pref = ["cftnr", "cft", "ih", "iac", "cts", "pas_pad", "fc", "vm", "ic", "irv", "ea", "ees", "ava", "ca", "iv", "ds", "ids", "z0"]
+    pref = ["cftnr", "cft", "ih", "iac", "cts", "pas_pad", "fc", "vm", "ic", "irv", "rvs", "ea", "ees", "ava", "ca", "iv", "ids", "ds", "z0"]
     return sorted(list(dict.fromkeys(halladas)), key=lambda x: pref.index(x) if x in pref else 999)
 
 
@@ -5789,7 +5827,7 @@ PAD: presión arterial diastólica, expresada en mmHg.
 FC: frecuencia cardíaca, expresada en latidos por minuto.
 IC / CI: índice cardíaco, expresado en L/min/m². No debe confundirse con ITC.
 ITC: índice de trabajo cardíaco. Es una variable de trabajo ventricular y no reemplaza al IC.
-IRV / RVS / SVR / TPVR: índice de resistencia vascular sistémica o periférica total, expresado habitualmente en dyn·s·cm⁻⁵.
+IRV / RVS / SVR / TPVR: índice de resistencia vascular sistémica o periférica total, expresado habitualmente en dyn.s.cm-5.
 CA: complacencia arterial. Evalúa la capacidad arterial de amortiguar el volumen sistólico.
 CFT / TFC: contenido de fluidos torácicos.
 CFTnr / TFCI / TFI: contenido de fluidos torácicos normalizado o indexado.
@@ -6128,13 +6166,13 @@ def patron_circulatorio_simple_acostado_cinta(r: Dict[str, Any], contexto: Optio
 def diagnostico_perfil_hemodinamico_acostado_cinta(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
     patron = patron_circulatorio_simple_acostado_cinta(r, contexto)
     ic = fmt((r or {}).get("ic"), 2, " L/min/m²")
-    rvs = fmt((r or {}).get("irv"), 0, " dyn·s·cm⁻⁵")
+    rvs = fmt((r or {}).get("irv"), 0, " dyn.s.cm-5")
     if patron == "HIPERDINAMIA":
         significado = "predominio de alto flujo y/o baja resistencia vascular."
     elif patron == "HIPODINAMIA":
         significado = "predominio de bajo flujo y/o resistencia vascular elevada."
     else:
-        significado = "IC e IRV/RVS dentro del rango esperado."
+        significado = "IC e IRV dentro del rango esperado."
     return f"**Patrón hemodinámico de referencia ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}. Significado: {significado}"
 
 
@@ -6145,7 +6183,7 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
     contexto = contexto or {}
     patron = patron_circulatorio_simple_acostado_cinta(r, contexto)
     ic = fmt((r or {}).get("ic"), 2, " L/min/m²")
-    rvs = fmt((r or {}).get("irv"), 0, " dyn·s·cm⁻⁵")
+    rvs = fmt((r or {}).get("irv"), 0, " dyn.s.cm-5")
     pas = limpiar_numero((r or {}).get("pas"))
     pad = limpiar_numero((r or {}).get("pad"))
     fc = limpiar_numero((r or {}).get("fc"))
@@ -6154,7 +6192,7 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
         pam = pad + (pas - pad) / 3.0
         map_hr_txt = fmt(pam / fc, 2)
     if contexto.get("embarazada"):
-        return f"**Patrón circulatorio ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}; PAM/FC {map_hr_txt}. Si IC e IRV/RVS están en rango normal, el patrón es NORMODINAMIA. El registro de pie se interpreta solo como respuesta ortostática."
+        return f"**Patrón circulatorio ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}; PAM/FC {map_hr_txt}. Si IC e IRV están en rango normal, el patrón es NORMODINAMIA. El registro de pie se interpreta solo como respuesta ortostática."
     return f"**Patrón circulatorio ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}. El registro de pie se interpreta solo como respuesta ortostática."
 
 
@@ -6238,7 +6276,7 @@ def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Opti
         return (
             f"- **Patrón hemodinámico ACOSTADO/CINTA: {patron}.** "
             f"IC {fmt(r_local.get('ic'), 2, ' L/min/m²')}; "
-            f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn·s·cm⁻⁵')}; "
+            f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn.s.cm-5')}; "
             f"método {metodo}; posición {posicion}. **Referencia diagnóstica principal.**"
         )
 
@@ -6249,7 +6287,7 @@ def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Opti
         return (
             f"- **Registro DE PIE: respuesta ortostática con comportamiento {patron}.** "
             f"IC {fmt(r_local.get('ic'), 2, ' L/min/m²')}; "
-            f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn·s·cm⁻⁵')}. "
+            f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn.s.cm-5')}. "
             f"Este registro describe adaptación postural y **no reemplaza** al patrón ACOSTADO/CINTA."
         )
 
@@ -6375,7 +6413,7 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
         [
             "Patrón hemodinámico de referencia",
             patron,
-            f"Resultado calculado solo con ACOSTADO/CINTA. IC {fmt(rb.get('ic'), 2, ' L/min/m²')} e IRV/RVS {fmt(rb.get('irv'), 0, ' dyn·s·cm⁻⁵')}. Es el eje diagnóstico principal.",
+            f"Resultado calculado solo con ACOSTADO/CINTA. IC {fmt(rb.get('ic'), 2, ' L/min/m²')} e IRV/RVS {fmt(rb.get('irv'), 0, ' dyn.s.cm-5')}. Es el eje diagnóstico principal.",
         ],
         [
             "Volemia",
@@ -6661,7 +6699,7 @@ def clasificacion_hemodinamica_materna_gestacional(r: Dict[str, Any], contexto: 
             "patron_principal": "NO CLASIFICABLE",
             "subtipo": "datos insuficientes",
             "diagnostico": "NO CLASIFICABLE",
-            "interpretacion": "No se dispone simultáneamente de IC e IRV/RVS ACOSTADO/CINTA para clasificar la hemodinamia materna.",
+            "interpretacion": "No se dispone simultáneamente de IC e IRV ACOSTADO/CINTA para clasificar la hemodinamia materna.",
             "referencia": ref,
             "ic": ic,
             "rvs": rvs,
@@ -6706,7 +6744,7 @@ def clasificacion_hemodinamica_materna_gestacional(r: Dict[str, Any], contexto: 
         principal = "NORMODINAMIA"
         subtipo = "GESTACIONAL"
         dx = "NORMODINAMIA GESTACIONAL"
-        interp = "IC e IRV/RVS se ubican dentro del rango operativo esperado para la edad gestacional considerada."
+        interp = "IC e IRV se ubican dentro del rango operativo esperado para la edad gestacional considerada."
 
     return {
         "patron_principal": principal,
@@ -6749,9 +6787,9 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
         ref = c["referencia"]
         return (
             f"Clasificación dinámica materna ACOSTADO/CINTA: {c['diagnostico']}. "
-            f"Base: IC {fmt(c.get('ic'),2,' L/min/m²')}; IRV/RVS {fmt(c.get('rvs'),0,' dyn·s·cm⁻⁵')}. "
+            f"Base: IC {fmt(c.get('ic'),2,' L/min/m²')}; IRV/RVS {fmt(c.get('rvs'),0,' dyn.s.cm-5')}. "
             f"Referencia gestacional: {ref['label']} ({'EG ' + fmt(c.get('edad_gestacional'),0) + ' semanas' if c.get('edad_gestacional') is not None else 'EG no especificada'}); "
-            f"rango operativo esperado IC {fmt(ref['ic_low'],1)}-{fmt(ref['ic_high'],1)} L/min/m² y RVS {fmt(ref['rvs_low'],0)}-{fmt(ref['rvs_high'],0)} dyn·s·cm⁻⁵. "
+            f"rango operativo esperado IC {fmt(ref['ic_low'],1)}-{fmt(ref['ic_high'],1)} L/min/m² y RVS {fmt(ref['rvs_low'],0)}-{fmt(ref['rvs_high'],0)} dyn.s.cm-5. "
             "DE PIE se interpreta solo como respuesta ortostática."
         )
     return _texto_clasificacion_dinamica_pre_v24(r, contexto)
@@ -6781,8 +6819,8 @@ def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict
     else:
         lineas.append(f"- Edad gestacional no especificada; referencia usada: {ref['label']}.")
     lineas.append(f"- Patrón circulatorio materno ACOSTADO/CINTA: {c['diagnostico']}.")
-    lineas.append(f"- Base real del estudio: IC {fmt(c.get('ic'),2,' L/min/m²')}; IRV/RVS {fmt(c.get('rvs'),0,' dyn·s·cm⁻⁵')}.")
-    lineas.append(f"- Comparación con edad gestacional: para {ref['label']} se espera IC {fmt(ref['ic_low'],1)}-{fmt(ref['ic_high'],1)} L/min/m² y RVS {fmt(ref['rvs_low'],0)}-{fmt(ref['rvs_high'],0)} dyn·s·cm⁻⁵.")
+    lineas.append(f"- Base real del estudio: IC {fmt(c.get('ic'),2,' L/min/m²')}; IRV/RVS {fmt(c.get('rvs'),0,' dyn.s.cm-5')}.")
+    lineas.append(f"- Comparación con edad gestacional: para {ref['label']} se espera IC {fmt(ref['ic_low'],1)}-{fmt(ref['ic_high'],1)} L/min/m² y RVS {fmt(ref['rvs_low'],0)}-{fmt(ref['rvs_high'],0)} dyn.s.cm-5.")
     if c.get("ic") is not None and c.get("rvs") is not None:
         comp_ic_txt = "bajo para la edad gestacional" if c.get("ic") < ref["ic_low"] else ("alto para la edad gestacional" if c.get("ic") > ref["ic_high"] else "en rango para la edad gestacional")
         comp_rvs_txt = "elevada para la edad gestacional" if c.get("rvs") > ref["rvs_high"] else ("baja para la edad gestacional" if c.get("rvs") < ref["rvs_low"] else "en rango para la edad gestacional")
@@ -6883,7 +6921,7 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
     )
 
     ax.set_title(f"Hemodinamia materna según edad gestacional: {eg_label} ({tri_label})", fontsize=14, fontweight="bold", color="#0B3D6E", pad=14)
-    ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=12, fontweight="bold", labelpad=10)
+    ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn.s.cm-5)", fontsize=12, fontweight="bold", labelpad=10)
     ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=12, fontweight="bold", labelpad=10)
     ax.grid(True, alpha=0.22)
     ax.set_xlim(x_min, x_max)
@@ -6968,7 +7006,7 @@ def crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(
         conclusiones.append("NORMODINAMIA GESTACIONAL: IC y RVS dentro del rango esperado para el trimestre. Continuar seguimiento obstetrico habitual.")
     else:
         simbolo_riesgo = "GRIS"
-        conclusiones.append("Datos insuficientes para clasificacion gestacional completa. Completar IC e IRV/RVS.")
+        conclusiones.append("Datos insuficientes para clasificacion gestacional completa. Completar IC e IRV.")
 
     if hdp:
         conclusiones.append("HTA/HDP PRESENTE: integrar el patron hemodinamico con proteinuria, laboratorio, Doppler uterino y biometria fetal.")
@@ -7997,7 +8035,7 @@ def _paper_metricas_panel(r: Dict[str, Any], ancho_total: float):
     rows = [["Dominio", "Dato clave", "Lectura clínica", "Semáforo"]]
     rows += [
         ["Presión arterial", f"{_paper_fmt_val(r.get('pas'),0)}/{_paper_fmt_val(r.get('pad'),0)} mmHg; FC {_paper_fmt_val(r.get('fc'),0)} lpm", "Presión arterial interpretada según contexto clínico y tratamiento", "Precaución"],
-        ["Flujo / resistencia", f"IC {_paper_fmt_val(r.get('ic'),2)} L/min/m2; RVS/IRV {_paper_fmt_val(r.get('irv'),0)} dyn.s.cm-5", f"{dinamia}: bajo flujo/alta resistencia si IC bajo y RVS elevada", "Alto" if "Hipodinamia" in dinamia else "Precaución"],
+        ["Flujo / resistencia", f"IC {_paper_fmt_val(r.get('ic'),2)} L/min/m2; IRV {_paper_fmt_val(r.get('irv'),0)} dyn.s.cm-5", f"{dinamia}: bajo flujo/alta resistencia si IC bajo y RVS elevada", "Alto" if "Hipodinamia" in dinamia else "Precaución"],
         ["Volemia / fluidos", f"CFT {_paper_fmt_val(r.get('cft'),2)}; CFTnr {_paper_fmt_val(r.get('cftnr'),2)}", "Integrar con volemia clínica, función renal, edema, disnea y tratamiento", "Precaución"],
         ["Contractilidad / onda", f"IV {_paper_fmt_val(r.get('iv'),2)}; IAC {_paper_fmt_val(r.get('iac'),2)}; CTS {_paper_fmt_val(r.get('cts'),2)}; DS {_paper_fmt_val(r.get('ds'),2)}", "Aceleración/onda sistólica con volumen sistólico a correlacionar", "Precaución"],
         ["Acoplamiento VA", f"EA {_paper_fmt_val(r.get('ea'),2)}; EES {_paper_fmt_val(r.get('ees'),2)}; EA/EES {_paper_fmt_val(r.get('ava'),2)}", "Carga arterial relativa aumentada si EA/EES > 1", "Precaución"],
@@ -8013,7 +8051,7 @@ def _paper_diagnostico_pronostico_table(r: Dict[str, Any], contexto_embarazo: Op
     conducta = "Control clínico, PA seriada, evaluación de daño de órgano blanco, función renal, perfil metabólico y ajuste terapéutico individualizado según criterio médico."
     rows = [
         ["Diagnóstico hemodinámico", "Pronóstico orientativo", "Terapéutica posible / conducta"],
-        [f"{dinamia}. Clasificación basada en IC y RVS/IRV.", riesgo, conducta],
+        [f"{dinamia}. Clasificación basada en IC y IRV.", riesgo, conducta],
     ]
     return _paper_table(rows, col_widths=[ancho_total*0.31, ancho_total*0.31, ancho_total*0.38], header=True, compact=False)
 
@@ -8129,7 +8167,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     glosario = [
         ["Sigla", "Significado clinico"],
         ["IC/CI", "Indice cardiaco. No confundir con ITC o indice de trabajo cardiaco."],
-        ["RVS/IRV", "Resistencia vascular sistemica."],
+        ["IRV/RVS", "Indice de Resistencia Vascular (IRV, dyn.seg.cm-5.m2, indexado por SC). La sigla IRV es la correcta para el valor indexado; RVS es la resistencia no indexada."],
         ["CFT/CFTnr", "Contenido de fluidos toracicos y contenido normalizado/indexado."],
         ["EA/EES", "Acoplamiento ventriculo-arterial calculado como EA Capan / EES Capan."],
     ]
@@ -8192,7 +8230,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
             if graf_cuadrantes is not None:
                 story.append(Image(graf_cuadrantes, width=ancho, height=ancho*0.66, kind="proportional"))
             else:
-                story.append(_paper_paragraph("No hay IC e IRV/RVS suficientes para generar el grafico de cuadrantes.", stl["PaperBody"]))
+                story.append(_paper_paragraph("No hay IC e IRV suficientes para generar el grafico de cuadrantes.", stl["PaperBody"]))
         except Exception as e:
             story.append(_paper_paragraph(f"No se pudo insertar el grafico de cuadrantes hemodinamicos: {e}", stl["PaperBody"]))
         story.append(Spacer(1, 6))
