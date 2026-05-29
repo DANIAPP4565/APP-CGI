@@ -1113,6 +1113,9 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
                     cand = lineas[j].strip()
                     if not cand or cand in ["---", "--"]:
                         continue
+                    # Para IC: jamás tomar valor de una línea que contenga dz/dt
+                    if clave == "ic" and es_linea_itc_no_ic(cand):
+                        break
                     # Si aparece otra etiqueta y ya hay números plausibles en esta ventana, usar ventana; si no, seguir.
                     nums_cand = [n for n in numeros_en_texto(cand) if rango_plausible(clave, n)]
                     if nums_cand:
@@ -1136,12 +1139,25 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
     df_var = pd.DataFrame(filas)
 
     # Resolver duplicados: conserva la última aparición útil, porque en Z-Logic suele estar el resumen final más abajo.
+    # Excepción para IC: si hay una entrada cuya linea_origen es libre de dz/dt, se prioriza
+    # sobre cualquier entrada contaminada — evita que dz/dt max sobreescriba el Índice Cardíaco real.
     resumen: Dict[str, Any] = {}
+    _ic_limpio = None  # primera entrada de IC sin dz/dt en la línea origen
     for _, rr in df_var.iterrows():
         var = str(rr["variable"]).upper()
         val = rr.get("valor")
-        if es_valor_util(val):
+        if not es_valor_util(val):
+            continue
+        if var == "IC":
+            linea_src = str(rr.get("linea_origen", ""))
+            if not es_linea_itc_no_ic(linea_src) and _ic_limpio is None:
+                _ic_limpio = val  # primera lectura de IC sin contaminación
+            resumen[var] = val  # seguimos actualizando normalmente
+        else:
             resumen[var] = val
+    # Si encontramos un IC limpio, lo imponemos por encima del último duplicado
+    if _ic_limpio is not None:
+        resumen["IC"] = _ic_limpio
 
     paciente_archivo = None
     if archivo_origen:
