@@ -457,6 +457,31 @@ def es_linea_itc_no_ic(texto: Any) -> bool:
     return any(re.search(p, t, flags=re.IGNORECASE) for p in patrones_itc)
 
 
+def es_linea_dzdt_no_ic(texto: Any) -> bool:
+    """Bloquea que dZ/dt MAX, DZDT MAX o derivadas de impedancia se importen como IC.
+
+    dZ/dt MAX es una métrica de la señal de impedancia/contractilidad y NO equivale
+    al índice cardíaco (IC). Por seguridad, cualquier columna o línea que contenga
+    dZ/dt, dzdt, dz dt, dz/dt o dzdt max queda excluida del mapeo hacia IC.
+    """
+    t_raw = str(texto or "")
+    t = normalizar_txt(t_raw)
+    t_compacto = re.sub(r"[^a-z0-9]+", "", t)
+    patrones_dzdt = [
+        r"\bdz\s*/\s*dt\b",
+        r"\bdz\s*[-_ ]?dt\b",
+        r"\bdzdt\b",
+        r"\bdzdt\s*max\b",
+        r"\bdz\s*/\s*dt\s*max\b",
+        r"\bmax\s*dz\s*/\s*dt\b",
+        r"derivada\s+de\s+impedancia",
+        r"impedancia\s+diferencial",
+    ]
+    if any(re.search(p, t, flags=re.IGNORECASE) for p in patrones_dzdt):
+        return True
+    return "dzdt" in t_compacto or "dzdtmax" in t_compacto
+
+
 def contiene_sinonimo_seguro(nombre_col: str, sinonimo: str) -> bool:
     """Coincidencia segura de sinónimos.
 
@@ -892,18 +917,19 @@ PATRONES_CLAVE = {
 def claves_en_linea_robusto(linea: str) -> List[str]:
     txt = str(linea)
     bloquea_ic_por_itc = es_linea_itc_no_ic(txt)
+    bloquea_ic_por_dzdt = es_linea_dzdt_no_ic(txt)
     halladas = []
     # Orden intencional: CFTnr antes que CFT para no confundir ambos.
     orden = ["cftnr", "cft", "ih", "iac", "cts", "pas_pad", "fc", "vm", "ic", "irv", "ca", "iv", "ea", "ees", "ava", "ds", "ids", "z0"]
     for clave in orden:
-        if clave == "ic" and bloquea_ic_por_itc:
+        if clave == "ic" and (bloquea_ic_por_itc or bloquea_ic_por_dzdt):
             continue
         pat = PATRONES_CLAVE.get(clave)
         if pat and re.search(pat, txt, flags=re.IGNORECASE):
             halladas.append(clave)
     # Complemento con el detector por sinónimos existente.
     k = clave_por_linea(linea)
-    if k == "ic" and bloquea_ic_por_itc:
+    if k == "ic" and (bloquea_ic_por_itc or bloquea_ic_por_dzdt):
         k = None
     if k and k not in halladas:
         halladas.append(k)
@@ -914,7 +940,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
         if not re.search(PATRONES_CLAVE["cft"], txt_sin_cftnr, flags=re.IGNORECASE):
             halladas.remove("cft")
     # Evita confundir ITC/índice de trabajo cardíaco con IC/índice cardíaco.
-    if "ic" in halladas and re.search(r"\bitc\b|trabajo\s+card[ií]aco", txt, flags=re.IGNORECASE):
+    if "ic" in halladas and (re.search(r"\bitc\b|trabajo\s+card[ií]aco", txt, flags=re.IGNORECASE) or es_linea_dzdt_no_ic(txt)):
         halladas.remove("ic")
     return halladas
 
@@ -922,7 +948,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
 def extraer_numeros_post_etiqueta(linea: str, clave: str) -> List[float]:
     """Devuelve números preferentemente ubicados después del rótulo, evitando números de unidades."""
     txt = str(linea)
-    if clave == "ic" and es_linea_itc_no_ic(txt):
+    if clave == "ic" and (es_linea_itc_no_ic(txt) or es_linea_dzdt_no_ic(txt)):
         return []
     pat = PATRONES_CLAVE.get(clave)
     candidatos: List[float] = []
@@ -1338,9 +1364,13 @@ def canon_col(col: Any) -> str:
     n = normalizar_txt(n_original)
     n = re.sub(r"[^a-z0-9/]+", " ", n).strip()
 
-    # Bloqueo crítico: ITC/índice de trabajo cardíaco NO debe entrar como IC.
+    # Bloqueos críticos:
+    # - ITC/índice de trabajo cardíaco NO debe entrar como IC.
+    # - dZ/dt MAX / DZDT MAX NO debe entrar como IC.
     if es_linea_itc_no_ic(n_original):
         return "ITC"
+    if es_linea_dzdt_no_ic(n_original):
+        return "DZDT_MAX"
 
     pares = []
     for canon, sinonimos in SINONIMOS_COLUMNAS.items():
@@ -1350,8 +1380,8 @@ def canon_col(col: Any) -> str:
 
     for canon, s in pares:
         # Si el canon candidato es IC, aceptar solo etiquetas explícitas de índice cardíaco.
-        # Rechazar cualquier columna con trabajo cardíaco/ITC.
-        if canon == "IC" and es_linea_itc_no_ic(n_original):
+        # Rechazar cualquier columna con trabajo cardíaco/ITC o dZ/dt MAX.
+        if canon == "IC" and (es_linea_itc_no_ic(n_original) or es_linea_dzdt_no_ic(n_original)):
             continue
         if contiene_sinonimo_seguro(n_original, s):
             return canon
@@ -5594,11 +5624,11 @@ def _texto_completo_df_v19(df: pd.DataFrame) -> str:
     textos = []
     try:
         dfx = estandarizar_columnas_clinicas(df)
-        # Solo columnas de texto crudo del PDF — NO incluir filas estructuradas
-        # con valores numéricos ya extraídos (evita leer IC: 2.72 del dict de fila).
         for col in ["Texto_PDF", "Diagnóstico", "Medicación", "Posición", "origen", "Paciente"]:
             if col in dfx.columns:
                 textos.extend(str(v) for v in dfx[col].tolist() if es_valor_util(v))
+        for _, fila in dfx.iterrows():
+            textos.append(" | ".join(f"{k}: {v}" for k, v in fila.to_dict().items() if es_valor_util(v)))
     except Exception:
         pass
     return "\n".join(textos)
@@ -5641,12 +5671,7 @@ def _extraer_valor_cercano_v19(texto: Any, patron: str, variable: str, bloquear:
                 return plausibles[0]
 
         # Caso etiqueta en una línea y valor en la línea siguiente.
-        # Filtrar líneas bloqueadas (ej. dz/dt) de la ventana para no contaminar IC.
-        lineas_ventana = [
-            l for l in lineas[i+1:i+3]
-            if not (bloquear and bloquear(l))
-        ]
-        ventana = " ".join(lineas_ventana)
+        ventana = " ".join(lineas[i+1:i+3])
         if ventana:
             corte = re.search(etiquetas_corte, ventana, flags=re.IGNORECASE)
             segmento = ventana[:corte.start()] if corte else ventana
@@ -6553,7 +6578,7 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
     y_min = max(1.5, min(2.0, ref["ic_low"] - 1.2, ic - 1.0))
     y_max = max(6.5, ref["ic_high"] + 0.8, ic + 1.0)
 
-    fig, ax = plt.subplots(figsize=(15.0, 7.5), dpi=150)
+    fig, ax = plt.subplots(figsize=(10.8, 7.2), dpi=160)
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
@@ -6598,14 +6623,14 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
         fontsize=10.5, fontweight="bold", color="#0F172A"
     )
 
-    ax.set_title(f"Hemodinamia materna según edad gestacional: {eg_label} ({tri_label})", fontsize=14, fontweight="bold", color="#0B3D6E", pad=14)
+    ax.set_title(f"Hemodinamia materna según edad gestacional\n{eg_label} ({tri_label})", fontsize=14, fontweight="bold", color="#0B3D6E", pad=12)
     ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=12, fontweight="bold", labelpad=10)
     ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=12, fontweight="bold", labelpad=10)
     ax.grid(True, alpha=0.22)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
     ax.text(0.01, -0.11, f"Lectura: el punto ACOSTADO/CINTA se compara contra la referencia de {tri_label} ({eg_label}). DE PIE queda reservado para respuesta ortostática. Diagnóstico: {c['diagnostico']}.", transform=ax.transAxes, fontsize=9.5, color="#334155")
-    fig.tight_layout(pad=1.8)
+    fig.subplots_adjust(left=0.10, right=0.98, top=0.88, bottom=0.16)
     buf = _io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
@@ -8408,8 +8433,6 @@ if normalizar_obra_social(obra_social_manual):
     r = extraer_resumen_integrado(df_final)
 elif str(obra_social_manual).strip():
     st.warning("El campo Obra social contiene un dato técnico o inválido. Ingrese la cobertura médica real o deje el campo vacío.")
-st.subheader(TITULO_MODULO_NO_EMBARAZADA)
-
 # Detección automática desde diagnóstico/texto del PDF.
 # Ejemplo: "HTA EMB S20" = embarazada + probable HTA + semana 20.
 embarazo_detectado = detectar_contexto_embarazo_desde_texto(texto_total_dataframe(df_final))
@@ -8467,6 +8490,7 @@ _es_embarazo_ui = bool(contexto_embarazo.get("embarazada"))
 
 if not _es_embarazo_ui:
     # ── MÓDULO CLÍNICO ────────────────────────────────────────────────────────
+    st.subheader(TITULO_MODULO_NO_EMBARAZADA)
     graf_fenotipo_ui = crear_grafico_fenotipado_dinamico_bytes(r_panel, df_final)
     if graf_fenotipo_ui is not None:
         st.subheader("Fenotipado clínico automatizado")
