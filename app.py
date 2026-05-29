@@ -8208,6 +8208,307 @@ def agregar_capturas_originales_reportlab_story(story, ancho: float, max_captura
     except Exception:
         pass
 
+
+# =========================================================
+# BASE DE CONOCIMIENTO - HEMODINÁMICA PULSÁTIL / EDAD VASCULAR
+# Referencia: Azizzadeh et al. Scientific Reports 2024;14:23151.
+# Agrega cálculo LMS, z-score y percentiles para cfPWV, AIx, Pf y Pb.
+# =========================================================
+
+# Referencia bibliográfica añadida a la base de conocimiento de la app.
+_ref_lead_2024 = (
+    "Azizzadeh M, Karimi A, Breyer-Kohansal R, et al. Reference equations for pulse wave velocity, "
+    "augmentation index, amplitude of forward and backward wave in a European general adult population. "
+    "Scientific Reports. 2024;14:23151. doi:10.1038/s41598-024-74162-5."
+)
+try:
+    if _ref_lead_2024 not in REFERENCIAS_BIBLIOGRAFICAS:
+        REFERENCIAS_BIBLIOGRAFICAS.append(_ref_lead_2024)
+except Exception:
+    pass
+
+# Sinónimos/campos nuevos para extracción desde PDF/Excel.
+try:
+    VARIABLES_CGI.setdefault("sexo", []).extend(["sexo", "sex", "gender", "genero", "género", "masculino", "femenino", "male", "female"])
+    VARIABLES_CGI.setdefault("cf_pwv", []).extend([
+        "cfpwv", "cf pwv", "carotid femoral pulse wave velocity", "carotid-femoral pulse wave velocity",
+        "velocidad de onda de pulso carotido femoral", "velocidad de onda de pulso carótido femoral",
+        "vop carotido femoral", "vop carótido femoral", "vop cf", "cf-vop", "pwv cf"
+    ])
+    VARIABLES_CGI.setdefault("aix", []).extend(["aix", "augmentation index", "indice de aumento", "índice de aumento", "indice de aumentacion", "índice de aumentación"])
+    VARIABLES_CGI.setdefault("pf", []).extend(["pf", "forward wave", "onda anterograda", "onda anterógrada", "onda incidente", "amplitud onda anterograda", "amplitud pf"])
+    VARIABLES_CGI.setdefault("pb", []).extend(["pb", "backward wave", "onda retrograda", "onda retrógrada", "onda reflejada", "amplitud onda retrograda", "amplitud pb"])
+except Exception:
+    pass
+
+try:
+    SINONIMOS_COLUMNAS.setdefault("Sexo", ["sexo", "sex", "gender", "genero", "género"])
+    SINONIMOS_COLUMNAS.setdefault("cfPWV", ["cfpwv", "cf pwv", "cf-pwv", "vop cf", "cf-vop", "pwv cf", "velocidad de onda de pulso carotido femoral", "velocidad de onda de pulso carótido femoral", "carotid femoral pulse wave velocity", "carotid-femoral pulse wave velocity"])
+    SINONIMOS_COLUMNAS.setdefault("AIx", ["aix", "augmentation index", "indice de aumento", "índice de aumento", "indice de aumentacion", "índice de aumentación"])
+    SINONIMOS_COLUMNAS.setdefault("Pf", ["pf", "forward wave", "onda anterograda", "onda anterógrada", "onda incidente", "amplitud pf"])
+    SINONIMOS_COLUMNAS.setdefault("Pb", ["pb", "backward wave", "onda retrograda", "onda retrógrada", "onda reflejada", "amplitud pb"])
+    for _col in ["Sexo", "cfPWV", "AIx", "Pf", "Pb"]:
+        if _col not in ORDEN_VARIABLES_INFORME:
+            ORDEN_VARIABLES_INFORME.append(_col)
+    DOMINIOS_METRICAS.setdefault("Mecánica pulsátil / edad vascular", ["cfPWV", "AIx", "Pf", "Pb"])
+except Exception:
+    pass
+
+try:
+    PATRONES_CLAVE.update({
+        "cf_pwv": r"(?:\bcf\s*[-_ ]?\s*pwv\b|\bcfpwv\b|\bpwv\s*cf\b|\bvop\s*cf\b|\bcf\s*[-_ ]?\s*vop\b|velocidad\s+(?:de\s+)?onda\s+(?:de\s+)?pulso\s+car[oó]tido\s*[- ]?\s*femoral|carotid\s*[- ]?\s*femoral\s+pulse\s+wave\s+velocity)",
+        "aix": r"(?:\ba\s*i\s*x\b|\baix\b|augmentation\s+index|[ií]ndice\s+de\s+aumento|[ií]ndice\s+de\s+aumentaci[oó]n)",
+        "pf": r"(?:\bpf\b|forward\s+wave|onda\s+anter[oó]grada|onda\s+incidente|amplitud\s+(?:de\s+)?onda\s+anter[oó]grada)",
+        "pb": r"(?:\bpb\b|backward\s+wave|onda\s+retr[oó]grada|onda\s+reflejada|amplitud\s+(?:de\s+)?onda\s+retr[oó]grada)",
+    })
+    for _v in ["cf_pwv", "aix", "pf", "pb"]:
+        if _v not in CLAVES_NUMERICAS:
+            CLAVES_NUMERICAS.append(_v)
+except Exception:
+    pass
+
+# Tabla 3 del paper LEAD 2024. M y S son funciones de edad; L es constante por sexo.
+# En AIx se aplica el desplazamiento +100 para mantener valores positivos antes de LMS.
+LEAD_LMS_PULSATIL = {
+    "cf_pwv": {
+        "female": {"M": lambda age: math.exp(1.705 + 0.0073 * age), "S": lambda age: math.exp(-2.140 + 0.0074 * age), "L": -0.7200, "offset": 0.0, "unidad": "m/s", "nombre": "cfPWV"},
+        "male":   {"M": lambda age: math.exp(1.769 + 0.0070 * age), "S": lambda age: math.exp(-2.046 + 0.0058 * age), "L": -0.6307, "offset": 0.0, "unidad": "m/s", "nombre": "cfPWV"},
+    },
+    "aix": {
+        "female": {"M": lambda age: math.exp(3.976 + 0.2266 * math.log(age)), "S": lambda age: math.exp(-1.273 - 0.3239 * math.log(age)), "L": 1.6943, "offset": 100.0, "unidad": "%", "nombre": "AIx"},
+        "male":   {"M": lambda age: math.exp(3.815 + 0.2485 * math.log(age)), "S": lambda age: math.exp(-1.025 - 0.3617 * math.log(age)), "L": 1.0469, "offset": 100.0, "unidad": "%", "nombre": "AIx"},
+    },
+    "pf": {
+        "female": {"M": lambda age: math.exp(2.980 + 0.00548 * age), "S": lambda age: math.exp(-1.576 + 0.0035 * age), "L": 0.3488, "offset": 0.0, "unidad": "mmHg", "nombre": "Pf"},
+        "male":   {"M": lambda age: math.exp(3.133 + 0.0030 * age), "S": lambda age: math.exp(-1.382 - 0.0003 * age), "L": 0.1310, "offset": 0.0, "unidad": "mmHg", "nombre": "Pf"},
+    },
+    "pb": {
+        "female": {"M": lambda age: math.exp(1.998 + 0.0157 * age), "S": lambda age: math.exp(-1.371 + 0.0016 * age), "L": 0.3678, "offset": 0.0, "unidad": "mmHg", "nombre": "Pb"},
+        "male":   {"M": lambda age: math.exp(2.078 + 0.01258 * age), "S": lambda age: math.exp(-1.200 - 0.0011 * age), "L": 0.1720, "offset": 0.0, "unidad": "mmHg", "nombre": "Pb"},
+    },
+}
+
+
+def normalizar_sexo_lms(valor: Any) -> Optional[str]:
+    t = normalizar_txt(valor)
+    if not t:
+        return None
+    if re.search(r"\b(f|fem|femenino|mujer|female|woman)\b", t):
+        return "female"
+    if re.search(r"\b(m|masc|masculino|varon|varón|male|man)\b", t):
+        return "male"
+    return None
+
+
+def percentil_desde_z(z: float) -> float:
+    return 100.0 * (0.5 * (1.0 + math.erf(float(z) / math.sqrt(2.0))))
+
+
+def calcular_z_lms_pulsatil(metrica: str, valor: Any, edad: Any, sexo: Any) -> Optional[Dict[str, Any]]:
+    """Calcula z-score y percentil LMS para cfPWV, AIx, Pf y Pb.
+
+    Fórmula: z = (((Y/M)^L)-1)/(L*S), o z = ln(Y/M)/S si L=0.
+    Para AIx se usa Y = AIx + 100, como indica el paper LEAD.
+    """
+    metrica = str(metrica).lower().replace("cfpwv", "cf_pwv").replace("cf-pwv", "cf_pwv")
+    v = limpiar_numero(valor)
+    age = limpiar_numero(edad)
+    sex = normalizar_sexo_lms(sexo)
+    if metrica not in LEAD_LMS_PULSATIL or v is None or age is None or sex is None:
+        return None
+    if not (18 <= age <= 90):
+        return None
+    pars = LEAD_LMS_PULSATIL[metrica][sex]
+    y = v + float(pars.get("offset", 0.0))
+    if y <= 0:
+        return None
+    L = float(pars["L"])
+    M = float(pars["M"](age))
+    S = float(pars["S"](age))
+    if M <= 0 or S <= 0:
+        return None
+    if abs(L) < 1e-12:
+        z = math.log(y / M) / S
+    else:
+        z = ((y / M) ** L - 1.0) / (L * S)
+    p = percentil_desde_z(z)
+    if z >= 1.2816:
+        categoria = "Elevado para edad y sexo (≥ percentil 90)"
+        semaforo = "ROJO"
+    elif z <= -1.2816:
+        categoria = "Inferior al promedio poblacional / envejecimiento vascular favorable (≤ percentil 10)"
+        semaforo = "VERDE"
+    else:
+        categoria = "Esperado para edad y sexo (percentil 10-90)"
+        semaforo = "VERDE"
+    return {
+        "metrica": pars.get("nombre", metrica), "valor": v, "edad": age, "sexo": sex,
+        "L": L, "M": M, "S": S, "z": z, "percentil": p,
+        "categoria": categoria, "semaforo": semaforo, "unidad": pars.get("unidad", ""),
+    }
+
+
+def estimar_edad_vascular_lms(metrica: str, valor: Any, sexo: Any, edad_min: int = 18, edad_max: int = 90) -> Optional[float]:
+    metrica = str(metrica).lower().replace("cfpwv", "cf_pwv").replace("cf-pwv", "cf_pwv")
+    v = limpiar_numero(valor)
+    sex = normalizar_sexo_lms(sexo)
+    if metrica not in LEAD_LMS_PULSATIL or v is None or sex is None:
+        return None
+    pars = LEAD_LMS_PULSATIL[metrica][sex]
+    objetivo = v + float(pars.get("offset", 0.0))
+    if objetivo <= 0:
+        return None
+    mejor_edad, mejor_error = None, float("inf")
+    # Búsqueda fina cada 0,1 años contra la mediana M(edad).
+    for i in range(int((edad_max - edad_min) * 10) + 1):
+        age = edad_min + i / 10.0
+        try:
+            pred = float(pars["M"](age))
+            err = abs(pred - objetivo)
+            if err < mejor_error:
+                mejor_error, mejor_edad = err, age
+        except Exception:
+            pass
+    return mejor_edad
+
+
+def extraer_metricas_pulsatiles_desde_resumen(r: Dict[str, Any]) -> Dict[str, Any]:
+    edad = r.get("edad")
+    sexo = r.get("sexo") or r.get("Sexo")
+    out: Dict[str, Any] = {}
+    for key in ["cf_pwv", "aix", "pf", "pb"]:
+        zinfo = calcular_z_lms_pulsatil(key, r.get(key), edad, sexo)
+        if zinfo:
+            out[f"{key}_z"] = round(zinfo["z"], 3)
+            out[f"{key}_percentil"] = round(zinfo["percentil"], 1)
+            out[f"{key}_categoria_lms"] = zinfo["categoria"]
+            ev = estimar_edad_vascular_lms(key, r.get(key), sexo)
+            if ev is not None:
+                out[f"{key}_edad_vascular"] = round(ev, 1)
+    return out
+
+
+def texto_metricas_pulsatiles_lms(r: Dict[str, Any]) -> str:
+    edad = r.get("edad")
+    sexo = r.get("sexo") or r.get("Sexo")
+    if limpiar_numero(edad) is None or normalizar_sexo_lms(sexo) is None:
+        return "Mecánica pulsátil LMS: para calcular z-score, percentil y edad vascular se requiere edad y sexo del paciente."
+    lineas = []
+    for key, label in [("cf_pwv", "cfPWV"), ("aix", "AIx"), ("pf", "Pf"), ("pb", "Pb")]:
+        val = r.get(key)
+        if limpiar_numero(val) is None:
+            continue
+        zinfo = calcular_z_lms_pulsatil(key, val, edad, sexo)
+        ev = estimar_edad_vascular_lms(key, val, sexo)
+        if not zinfo:
+            continue
+        ev_txt = f"; edad vascular estimada {ev:.1f} años" if ev is not None else ""
+        lineas.append(
+            f"- {label}: {fmt(val, 2, ' ' + zinfo.get('unidad',''))}; z={zinfo['z']:.2f}; "
+            f"percentil={zinfo['percentil']:.1f}; {zinfo['categoria']}{ev_txt}."
+        )
+    if not lineas:
+        return "Mecánica pulsátil LMS: no se detectaron cfPWV, AIx, Pf o Pb en los datos importados."
+    return "Mecánica pulsátil LMS según referencia LEAD 2024 (ajustada por edad y sexo):\n" + "\n".join(lineas)
+
+
+def _buscar_valor_df_canonico(df: pd.DataFrame, canon: str) -> Any:
+    try:
+        if df is None or df.empty:
+            return None
+        dfx = estandarizar_columnas_clinicas(df)
+        dsel = seleccionar_df_diagnostico(dfx)
+        if dsel is None or dsel.empty:
+            dsel = dfx
+        if canon in dsel.columns:
+            for v in dsel[canon].tolist()[::-1]:
+                if es_valor_util(v):
+                    return v
+        if canon in dfx.columns:
+            for v in dfx[canon].tolist()[::-1]:
+                if es_valor_util(v):
+                    return v
+    except Exception:
+        pass
+    return None
+
+try:
+    _referencia_metrica_pre_lms = referencia_metrica
+    def referencia_metrica(nombre: str) -> Optional[Tuple[float, float, str]]:
+        n = normalizar_txt(nombre).replace(" ", "").replace("_", "")
+        refs_lms = {
+            "cfpwv": (0.0, 10.0, "m/s"), "cf-pwv": (0.0, 10.0, "m/s"),
+            "aix": (-30.0, 40.0, "%"), "pf": (0.0, 80.0, "mmHg"), "pb": (0.0, 50.0, "mmHg"),
+        }
+        if n in refs_lms:
+            return refs_lms[n]
+        return _referencia_metrica_pre_lms(nombre)
+except Exception:
+    pass
+
+try:
+    _extraer_resumen_integrado_pre_lms = extraer_resumen_integrado
+    def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
+        r = _extraer_resumen_integrado_pre_lms(df)
+        if not isinstance(r, dict):
+            r = {}
+        # Datos demográficos y métricas pulsátiles.
+        sexo = _buscar_valor_df_canonico(df, "Sexo")
+        if es_valor_util(sexo):
+            r["sexo"] = sexo
+        for canon, key in [("cfPWV", "cf_pwv"), ("AIx", "aix"), ("Pf", "pf"), ("Pb", "pb")]:
+            val = _buscar_valor_df_canonico(df, canon)
+            if limpiar_numero(val) is not None:
+                r[key] = limpiar_numero(val)
+        r.update(extraer_metricas_pulsatiles_desde_resumen(r))
+        return r
+except Exception:
+    pass
+
+try:
+    _metricas_por_dominio_pre_lms = metricas_por_dominio
+    def metricas_por_dominio(r: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+        out = _metricas_por_dominio_pre_lms(r)
+        puls = []
+        for key, var in [("cf_pwv", "cfPWV"), ("aix", "AIx"), ("pf", "Pf"), ("pb", "Pb")]:
+            val = r.get(key)
+            if limpiar_numero(val) is None:
+                continue
+            z = r.get(f"{key}_z")
+            pct = r.get(f"{key}_percentil")
+            cat = r.get(f"{key}_categoria_lms") or "Métrica pulsátil disponible"
+            estado = str(cat).upper()
+            color = "#EF4444" if "ELEVADO" in estado else "#10B981"
+            unidad = LEAD_LMS_PULSATIL[key]["female"].get("unidad", "")
+            puls.append({
+                "variable": var,
+                "valor": val,
+                "referencia_baja": None,
+                "referencia_alta": None,
+                "unidad": unidad,
+                "estado": f"{cat}" + (f"; z={z}; p={pct}" if z is not None and pct is not None else ""),
+                "color": color,
+                "zona": "alto" if "ELEVADO" in estado else "normal",
+                "score": None,
+            })
+        if puls:
+            out["Mecánica pulsátil / edad vascular"] = puls
+        return out
+except Exception:
+    pass
+
+try:
+    _generar_informe_texto_pre_lms = generar_informe_texto
+    def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> str:
+        base = _generar_informe_texto_pre_lms(df, contexto_embarazo)
+        r = extraer_resumen_integrado(df)
+        bloque_lms = texto_metricas_pulsatiles_lms(r)
+        if "Mecánica pulsátil LMS" in str(base):
+            return base
+        return str(base).rstrip() + "\n\n11. Base de conocimiento agregada: mecánica pulsátil, z-score y edad vascular\n" + bloque_lms
+except Exception:
+    pass
+
 # =========================================================
 # INTERFAZ
 # =========================================================
