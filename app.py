@@ -931,13 +931,24 @@ def extraer_contexto_clinico_pdf(lineas: List[str]) -> Dict[str, Any]:
             if val:
                 medicacion = val[:250]
 
-        if posicion is None and re.search(r"\b(posicion|posición|situacion|situación|postura|decubito|decúbito|acostad|supin|bipedest|de pie|parad|standing|supine)\b", n):
-            val = re.sub(r"(?i).*(posici[oó]n|situaci[oó]n|postura|estudio)\s*[:\-–—]?", "", raw).strip()
-            if not val or len(val) < 3:
-                val = " ".join(str(x).strip() for x in lineas[i+1:i+3] if str(x).strip())
-            val = limpiar_campo(val)
-            if val:
-                posicion = val[:120]
+        # Posición: SOLO aceptar si es un campo explícito con etiqueta (e.g. "Posición: acostado",
+        # "Situación: CINTA") O un encabezado de estudio (e.g. "ESTUDIO BASAL (CINTA)").
+        # NUNCA inferir posición desde texto libre, leyendas de gráficos o frases comparativas;
+        # eso causaría que el PDF acostado quede etiquetado como "de pie" si menciona esa posición
+        # en alguna comparación o leyenda.
+        if posicion is None:
+            # Opción 1: etiqueta explícita de posición con separador (: - –)
+            if re.search(r"\b(posici[oó]n|situaci[oó]n|postura)\s*[:\-–—]", raw, re.IGNORECASE):
+                val = re.sub(r"(?i).*(posici[oó]n|situaci[oó]n|postura)\s*[:\-–—]\s*", "", raw).strip()
+                val = limpiar_campo(val)
+                if val and len(val) >= 3:
+                    posicion = val[:120]
+            # Opción 2: encabezado de estudio explícito ("ESTUDIO BASAL", "ESTUDIO DE PIE", "ESTUDIO CINTA")
+            elif re.search(r"\bestudio\s+(basal|cinta|de\s+pie|spot|parad)\b", raw, re.IGNORECASE):
+                # Extraer solo la parte de posición del encabezado
+                m = re.search(r"\bestudio\s+(basal|cinta|de\s*pie|spot|parad[oa])\b", raw, re.IGNORECASE)
+                if m:
+                    posicion = m.group(0).strip()[:120]
 
     texto_completo = " | ".join(str(x).strip() for x in lineas if str(x).strip())
     return {
@@ -1159,24 +1170,42 @@ def aplicar_extraccion_tablas(lineas: List[str], filas: List[Dict[str, Any]]) ->
 def _detectar_separador_posicion(lineas: List[str]) -> Optional[int]:
     """Detecta el índice de la línea que marca el inicio del bloque DE PIE en el texto.
 
-    Algunos PDFs Z-Logic incluyen ambas posiciones en un único documento, separadas por
-    encabezados como 'DE PIE', 'BIPEDESTACIÓN', 'SPOT', 'ORTOSTATISMO', etc.
-    Devuelve el índice de esa línea separadora, o None si no existe.
-    Solo se considera separador si ANTES hay al menos una línea de acostado/basal.
+    SOLO aplica cuando un ÚNICO PDF contiene AMBAS posiciones separadas por un encabezado
+    explícito de sección (e.g. "ESTUDIO DE PIE", "BIPEDESTACIÓN", "SPOT").
+
+    Criterios ESTRICTOS para evitar falsos positivos en PDFs individuales:
+    1. La línea debe ser CORTA (≤ 40 chars una vez normalizada), es decir, es un título/encabezado,
+       no texto embebido en una oración, leyenda o gráfico de referencia.
+    2. La palabra clave de posición debe ocupar la mayor parte de la línea.
+    3. NUNCA disparar sobre líneas con otros datos hemodinámicos o demográficos en la misma línea.
+    4. Debe haber visto PRIMERO al menos 10 líneas de datos de la posición acostado/cinta
+       (para asegurarse de que el bloque basal es sustancial, no apenas un header).
+
+    Si no se cumplen estos criterios, devuelve None (= el PDF es de una sola posición).
     """
-    pat_pie = re.compile(
-        r"\b(de\s*pie|bipedest|parad[oa]|ortostat|standing|upright|spot\b)",
+    # Patrón de encabezado explícito de sección DE PIE (debe ser la mayor parte de la línea)
+    pat_header_pie = re.compile(
+        r"^[\s*#\-=_]*(?:estudio\s+)?(?:de\s*pie|bipedestaci[oó]n|ortostatismo|standing|upright|estudio\s+spot)[\s*#\-=_]*$",
         re.IGNORECASE
     )
+    # Patrón de datos de posición acostado/basal (para contar líneas sustanciales)
     pat_ac = re.compile(
-        r"\b(acostado|decubito|dec[uú]bito|supino|basal|cinta\b|lying|supine)",
+        r"\b(acostado|dec[uú]bito|supino|basal|cinta\b|lying|supine|estudio\s+basal)",
         re.IGNORECASE
     )
-    vio_acostado = False
+    # Patrón de datos hemodinámicos numéricos (si está en la misma línea que "de pie", NO es encabezado)
+    pat_datos = re.compile(r"\d+[.,]\d+|\b\d{3,}\b")
+
+    lineas_ac_vistas = 0
     for i, lin in enumerate(lineas):
-        if not vio_acostado and pat_ac.search(lin):
-            vio_acostado = True
-        if vio_acostado and pat_pie.search(lin):
+        lin_strip = lin.strip()
+        if pat_ac.search(lin_strip):
+            lineas_ac_vistas += 1
+        # Solo considerar separador si ya vimos suficiente contenido del bloque acostado
+        if lineas_ac_vistas < 5:
+            continue
+        # La línea debe coincidir exactamente con el patrón de encabezado de sección
+        if pat_header_pie.match(lin_strip) and not pat_datos.search(lin_strip):
             return i
     return None
 
@@ -1496,7 +1525,9 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
         "DS": resumen.get("DS"),
         "IDS": resumen.get("IDS"),
         "Z0": resumen.get("Z0"),
-        "origen_parser": "PDF extraído y estructurado con parser robusto",
+        # origen_parser incluye la posición detectada para que detectar_posicion_fila pueda usarla
+        # sin necesidad de escanear el Texto_PDF completo (que puede contener "de pie" fuera de contexto).
+        "origen_parser": "PDF extraído con parser robusto — posición: " + (contexto_pdf.get("Posición") or "no reconocida"),
     }
 
     df_final = pd.DataFrame([fila_resumen])
@@ -1796,22 +1827,31 @@ def normalizar_metodo_estudio(texto: Any) -> str:
 
 
 def detectar_posicion_fila(fila: Dict[str, Any]) -> str:
+    """Determina la posición clínica de una fila.
+
+    SOLO usa columnas explícitas de posición: el campo "Posición" (extraído del PDF
+    con criterios estrictos) y el "origen_parser" (que se fija explícitamente al parsear
+    bloques de PDFs con dos posiciones).
+
+    NO usa Texto_PDF, Diagnóstico, Paciente ni origen genérico, porque esos campos
+    pueden contener "de pie" o "basal" en contextos que no son la posición del estudio
+    (leyendas de gráficos, diagnósticos clínicos, comparaciones, etc.) y causarían
+    asignaciones incorrectas que intercambian acostado/de pie.
+    """
     partes = []
-    for col in ["Posición", "Diagnóstico", "origen", "origen_parser", "Paciente"]:
+    # Solo columnas con información de posición confiable y explícita
+    for col in ["Posición", "origen_parser"]:
         if col in fila and es_valor_util(fila.get(col)):
             partes.append(str(fila.get(col)))
-    if "Texto_PDF" in fila and es_valor_util(fila.get("Texto_PDF")):
-        partes.append(str(fila.get("Texto_PDF"))[:3000])
     return normalizar_posicion_estudio(" | ".join(partes))
 
 
 def detectar_metodo_fila(fila: Dict[str, Any]) -> str:
+    # Solo columnas con información de método confiable (no Texto_PDF completo)
     partes = []
-    for col in ["Posición", "Diagnóstico", "origen", "origen_parser", "Paciente"]:
+    for col in ["Posición", "origen_parser"]:
         if col in fila and es_valor_util(fila.get(col)):
             partes.append(str(fila.get(col)))
-    if "Texto_PDF" in fila and es_valor_util(fila.get("Texto_PDF")):
-        partes.append(str(fila.get("Texto_PDF"))[:3000])
     return normalizar_metodo_estudio(" | ".join(partes))
 
 
