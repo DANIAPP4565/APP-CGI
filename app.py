@@ -393,84 +393,6 @@ def numeros_en_texto(texto: Any) -> List[float]:
     return vals
 
 
-
-
-# =========================================================
-# IC ESTRICTO: nunca importar dZ/dt MAX, ITC, IV, IAC, IH u otra métrica como IC
-# =========================================================
-
-def es_fuente_ic_prohibida(texto: Any) -> bool:
-    """Bloquea fuentes que no son Índice Cardíaco.
-
-    Objetivo clínico: IC debe venir solamente de IC / Índice Cardíaco / Cardiac Index.
-    No se acepta dZ/dt MAX, ITC, IV, IAC, IH, DS/IDS, CFT, CA, RVS/IRV ni variables por posición de tabla.
-    """
-    t = normalizar_txt(texto)
-    t2 = re.sub(r"[^a-z0-9/]+", " ", t).strip()
-    patrones = [
-        r"\bdz\s*/?\s*dt\b", r"\bdzdt\b", r"\bd\s*z\s*/\s*d\s*t\b", r"max\s+dz", r"dz\s*dt\s*max",
-        r"\bitc\b", r"indice\s+(?:de\s+)?trabajo\s+cardiaco", r"trabajo\s+cardiaco",
-        r"\biv\b", r"indice\s+(?:de\s+)?velocidad", r"velocity\s+index",
-        r"\biac\b", r"\baci\b", r"indice\s+(?:de\s+)?aceleracion", r"acceleration\s+index",
-        r"\bih\b", r"indice\s+(?:de\s+)?heather", r"heather",
-        r"\bcft\b", r"\btfc\b", r"contenido\s+(?:de\s+)?fluidos",
-        r"\birv\b", r"\brvs\b", r"\bsvr\b", r"resistencia\s+vascular",
-        r"\bca\b", r"complacencia\s+arterial", r"arterial\s+compliance",
-        r"\bds\b", r"\bids\b", r"stroke\s+volume", r"stroke\s+index", r"descarga\s+sistolica",
-        r"\bz0\b", r"impedancia\s+basal",
-        r"\bfc\b", r"frecuencia\s+cardiaca", r"heart\s+rate",
-    ]
-    return any(re.search(p, t2, flags=re.IGNORECASE) for p in patrones)
-
-
-def es_etiqueta_ic_explicita(texto: Any) -> bool:
-    """Acepta únicamente etiquetas explícitas de Índice Cardíaco."""
-    if es_fuente_ic_prohibida(texto):
-        return False
-    t = normalizar_txt(texto)
-    t2 = re.sub(r"[^a-z0-9/]+", " ", t).strip()
-    patrones_ic = [
-        r"(?<![a-z0-9])ic(?![a-z0-9])",
-        r"(?<![a-z0-9])ci(?![a-z0-9])",
-        r"indice\s+cardiaco",
-        r"index\s+cardiaco",
-        r"cardiac\s+index",
-    ]
-    return any(re.search(p, t2, flags=re.IGNORECASE) for p in patrones_ic)
-
-
-def extraer_ic_estricto_de_texto(texto: Any) -> Optional[float]:
-    """Extrae IC solo desde una línea con etiqueta explícita de IC.
-
-    Si no encuentra una fuente segura, devuelve None; es preferible dejar IC vacío
-    antes que importar dZ/dt MAX u otra variable.
-    """
-    lineas = str(texto or "").splitlines()
-    if len(lineas) <= 1:
-        lineas = re.split(r"\s{2,}|\|", str(texto or ""))
-    for i, lin in enumerate(lineas):
-        lin = str(lin).strip()
-        if not lin or not es_etiqueta_ic_explicita(lin):
-            continue
-        # Buscar valor inmediatamente posterior a la etiqueta IC/CI/Índice cardíaco.
-        patron = r"(?:\bIC\b|\bCI\b|[ÍI]ndice\s+card[íi]aco|Indice\s+cardiaco|Cardiac\s+Index)\s*[:=\-–—]?\s*([-+]?\d+(?:[\.,]\d+)?)"
-        m = re.search(patron, lin, flags=re.IGNORECASE)
-        if m:
-            v = limpiar_numero(m.group(1))
-            if rango_plausible("ic", v):
-                return v
-        nums = [n for n in numeros_en_texto(lin) if rango_plausible("ic", n)]
-        if nums:
-            return nums[0]
-        # Si el rótulo IC está solo en una línea, aceptar el primer número plausible de la línea siguiente.
-        if i + 1 < len(lineas):
-            prox = str(lineas[i + 1]).strip()
-            if prox and not es_fuente_ic_prohibida(prox):
-                nums2 = [n for n in numeros_en_texto(prox) if rango_plausible("ic", n)]
-                if nums2:
-                    return nums2[0]
-    return None
-
 def rango_plausible(clave: str, valor: Any) -> bool:
     """Evita que el parser tome números de otra variable cercana."""
     v = limpiar_numero(valor)
@@ -974,7 +896,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
     # Orden intencional: CFTnr antes que CFT para no confundir ambos.
     orden = ["cftnr", "cft", "ih", "iac", "cts", "pas_pad", "fc", "vm", "ic", "irv", "ca", "iv", "ea", "ees", "ava", "ds", "ids", "z0"]
     for clave in orden:
-        if clave == "ic" and (bloquea_ic_por_itc or not es_etiqueta_ic_explicita(txt)):
+        if clave == "ic" and bloquea_ic_por_itc:
             continue
         pat = PATRONES_CLAVE.get(clave)
         if pat and re.search(pat, txt, flags=re.IGNORECASE):
@@ -1000,7 +922,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
 def extraer_numeros_post_etiqueta(linea: str, clave: str) -> List[float]:
     """Devuelve números preferentemente ubicados después del rótulo, evitando números de unidades."""
     txt = str(linea)
-    if clave == "ic" and (es_linea_itc_no_ic(txt) or not es_etiqueta_ic_explicita(txt)):
+    if clave == "ic" and es_linea_itc_no_ic(txt):
         return []
     pat = PATRONES_CLAVE.get(clave)
     candidatos: List[float] = []
@@ -1106,7 +1028,7 @@ def aplicar_fallback_regex_global(lineas: List[str], filas: List[Dict[str, Any]]
 def aplicar_extraccion_tablas(lineas: List[str], filas: List[Dict[str, Any]]) -> None:
     """Detecta líneas con varias etiquetas y una fila de valores siguiente."""
     for i, linea in enumerate(lineas[:-1]):
-        claves = [k for k in claves_en_linea_robusto(linea) if k in CLAVES_NUMERICAS and k not in ["pas_pad", "ic"]]
+        claves = [k for k in claves_en_linea_robusto(linea) if k in CLAVES_NUMERICAS and k != "pas_pad"]
         # Quitar duplicados manteniendo orden.
         claves = list(dict.fromkeys(claves))
         if len(claves) < 2:
@@ -1207,16 +1129,6 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
 
     # Tercer barrido: rescate global de lo que haya quedado incompleto.
     aplicar_fallback_regex_global(lineas, filas)
-
-    # IC estricto: eliminar cualquier IC cuya línea de origen no sea una fuente explícita de Índice Cardíaco
-    # y agregar, si existe, el IC tomado de una línea segura del texto completo.
-    filas = [
-        f for f in filas
-        if str(f.get("variable", "")).upper() != "IC" or es_etiqueta_ic_explicita(f.get("linea_origen", ""))
-    ]
-    ic_seguro = extraer_ic_estricto_de_texto("\n".join(lineas))
-    if ic_seguro is not None:
-        filas.append({"variable": "IC", "valor": ic_seguro, "valor_2": None, "linea_origen": "IC explícito estricto"})
 
     if not filas:
         return pd.DataFrame(registros)
@@ -1949,8 +1861,6 @@ def _valor_fila_case_insensitive(fila: Dict[str, Any], *claves: str) -> Any:
     for clave in claves:
         k = normalizar_txt(clave).replace(" ", "_")
         if k in mapa and es_valor_util(mapa[k]):
-            if k in ["ic", "ci", "indice_cardiaco", "índice_cardíaco", "cardiac_index"] and not es_etiqueta_ic_explicita(clave):
-                continue
             return mapa[k]
 
     equivalencias = {
@@ -2030,24 +1940,10 @@ def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Di
     if basal.empty:
         basal = dfx[dfx["Posición_reconocida"] != "de_pie"]
 
-    # Respaldo clínico obligatorio: si hay dos archivos/filas y la detección textual
-    # marca erróneamente todo como DE PIE, usar la primera fila como ACOSTADO/CINTA basal.
-    if basal.empty and len(dfx) >= 2:
-        basal = dfx.iloc[[0]]
-
     pie = dfx[dfx["Posición_reconocida"] == "de_pie"]
-    # Si no se reconoció DE PIE pero hay dos registros, usar la última fila como respuesta ortostática.
-    if pie.empty and len(dfx) >= 2:
-        pie = dfx.iloc[[-1]]
 
     r_basal = extraer_resumen_ortostatico_desde_fila(basal.iloc[0]) if not basal.empty else {}
     r_pie = extraer_resumen_ortostatico_desde_fila(pie.iloc[-1]) if not pie.empty else {}
-
-    if r_basal:
-        r_basal["posicion"] = r_basal.get("posicion") if r_basal.get("posicion") != "de_pie" else "acostado"
-        r_basal["metodo"] = r_basal.get("metodo") or "cinta"
-    if r_pie and len(dfx) >= 2:
-        r_pie["posicion"] = "de_pie"
 
     return r_basal, r_pie
 
@@ -2677,25 +2573,37 @@ def crear_acelerador_circular_bytes(
 
 
 def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
-    """Devuelve puntos reales del paciente para el gráfico IC vs IRV/RVS.
+    """Devuelve puntos para el gráfico IC vs IRV/RVS.
 
-    Si hay dos registros comparables, muestra Acostado/CINTA como referencia diagnóstica y De pie como respuesta ortostática con flecha.
-    Si no, muestra el valor integrado disponible.
+    - Punto 0 (círculo): ACOSTADO/CINTA — referencia diagnóstica principal.
+    - Punto 1 (cuadrado): DE PIE — solo comportamiento ortostático.
+    - Si hay df con ambas posiciones, se extraen de obtener_resumenes_ortostaticos.
+    - Si basal no se puede leer del df, se usa el resumen r (que ya es CINTA por V21).
+    - Si no hay punto De pie disponible, solo se muestra el punto basal.
     """
     puntos: List[Dict[str, Any]] = []
-    if df is not None and isinstance(df, pd.DataFrame) and len(df) >= 2:
-        basal, pie = obtener_resumenes_ortostaticos(df)
-        ic_b = limpiar_numero(basal.get("ic")); irv_b = limpiar_numero(basal.get("irv"))
-        ic_p = limpiar_numero(pie.get("ic")); irv_p = limpiar_numero(pie.get("irv"))
-        if ic_b is not None and irv_b is not None:
-            puntos.append({"etiqueta": "ACOSTADO/CINTA\nreferencia", "ic": ic_b, "irv": irv_b})
-        if ic_p is not None and irv_p is not None:
-            puntos.append({"etiqueta": "DE PIE\nrespuesta ortostática", "ic": ic_p, "irv": irv_p})
-    if not puntos:
-        ic = limpiar_numero(r.get("ic"))
-        irv = limpiar_numero(r.get("irv"))
-        if ic is not None and irv is not None:
-            puntos.append({"etiqueta": "Acostado/CINTA (referencia)", "ic": ic, "irv": irv})
+
+    # -- Punto basal (ACOSTADO/CINTA) --
+    ic_basal, irv_basal = None, None
+    if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
+        r_basal, r_pie = obtener_resumenes_ortostaticos(df)
+        ic_basal = limpiar_numero(r_basal.get("ic"))
+        irv_basal = limpiar_numero(r_basal.get("irv"))
+        # Si el df basal tiene el valor, añadir punto De pie también
+        if ic_basal is not None and irv_basal is not None:
+            puntos.append({"etiqueta": "Acostado/CINTA (referencia)", "ic": ic_basal, "irv": irv_basal})
+        ic_pie = limpiar_numero(r_pie.get("ic"))
+        irv_pie = limpiar_numero(r_pie.get("irv"))
+        if ic_pie is not None and irv_pie is not None:
+            puntos.append({"etiqueta": "De pie (respuesta ortostática)", "ic": ic_pie, "irv": irv_pie})
+
+    # Fallback: si no se pudo leer basal del df, usar resumen r (que por V21 ya es CINTA)
+    if not any(p["etiqueta"].startswith("Acostado") for p in puntos):
+        ic_r = limpiar_numero(r.get("ic"))
+        irv_r = limpiar_numero(r.get("irv"))
+        if ic_r is not None and irv_r is not None:
+            puntos.insert(0, {"etiqueta": "Acostado/CINTA (referencia)", "ic": ic_r, "irv": irv_r})
+
     return puntos
 
 
@@ -2723,7 +2631,7 @@ def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.D
         y_min = max(1.2, min(2.0, min(ys) - 0.6))
         y_max = max(5.0, max(ys) + 0.8)
 
-        fig, ax = plt.subplots(figsize=(12.5, 7.0))
+        fig, ax = plt.subplots(figsize=(15.0, 5.8))
         ax.set_facecolor("#F8FAFC")
 
         # Zonas clínicas. Los límites se corresponden con la clasificación usada por la app.
@@ -2746,33 +2654,64 @@ def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.D
         ax.axhline(2.5, color="#0F172A", linewidth=1.1, linestyle="--", alpha=0.65)
         ax.axhline(4.0, color="#0F172A", linewidth=1.1, linestyle="--", alpha=0.65)
 
-        # Punto(s) reales del paciente.
-        if len(puntos) >= 2:
-            p0, p1 = puntos[0], puntos[-1]
-            ax.annotate("", xy=(p1["irv"], p1["ic"]), xytext=(p0["irv"], p0["ic"]), arrowprops=dict(arrowstyle="->", lw=2.2, color="#111827"))
-        for idx, pto in enumerate(puntos):
-            marker = "o" if idx == 0 else "s"
-            ax.scatter(pto["irv"], pto["ic"], s=165, marker=marker, color="#111827", edgecolor="#FFFFFF", linewidth=2.2, zorder=5)
-            ax.text(
-                pto["irv"] + (x_max-x_min)*0.025,
-                pto["ic"] + (y_max-y_min)*0.035,
-                f"{pto['etiqueta']}\nIC {pto['ic']:.2f} | RVS {pto['irv']:.0f}",
-                fontsize=9,
-                fontweight="bold",
-                color="#111827",
-                bbox=dict(boxstyle="round,pad=0.35", fc="#FFFFFF", ec="#CBD5E1", alpha=0.94),
-                zorder=6,
+        # Punto de referencia = ACOSTADO/CINTA (siempre puntos[0])
+        # Punto ortostático = DE PIE (puntos[1] si existe)
+        p_basal = puntos[0]
+        p_pie = puntos[1] if len(puntos) >= 2 else None
+
+        # Flecha de desplazamiento ortostático: ACOSTADO → DE PIE
+        if p_pie is not None:
+            ax.annotate(
+                "", xy=(p_pie["irv"], p_pie["ic"]),
+                xytext=(p_basal["irv"], p_basal["ic"]),
+                arrowprops=dict(arrowstyle="-|>", lw=2.4, color="#374151",
+                                mutation_scale=18, connectionstyle="arc3,rad=0.08"),
+                zorder=7,
             )
 
-        punto_referencia = puntos[0]
-        patron = diagnostico_perfil_hemodinamico(punto_referencia.get("ic"), punto_referencia.get("irv"))
-        ax.set_title("Fenotipado clínico automatizado: patrón ACOSTADO/CINTA de referencia", fontsize=14, fontweight="bold", color="#0B4F8A")
+        # Punto ACOSTADO/CINTA — círculo azul sólido (referencia diagnóstica)
+        ax.scatter(p_basal["irv"], p_basal["ic"], s=200, marker="o",
+                   color="#1D4ED8", edgecolor="#FFFFFF", linewidth=2.5, zorder=8, label="ACOSTADO/CINTA")
+        ax.text(
+            p_basal["irv"] + (x_max - x_min) * 0.025,
+            p_basal["ic"] + (y_max - y_min) * 0.040,
+            f"ACOSTADO/CINTA (referencia)\nIC {p_basal['ic']:.2f} | RVS {p_basal['irv']:.0f}",
+            fontsize=9, fontweight="bold", color="#1D4ED8",
+            bbox=dict(boxstyle="round,pad=0.35", fc="#EFF6FF", ec="#BFDBFE", alpha=0.97),
+            zorder=9,
+        )
+
+        # Punto DE PIE — cuadrado gris oscuro (solo comportamiento ortostático)
+        if p_pie is not None:
+            ax.scatter(p_pie["irv"], p_pie["ic"], s=180, marker="s",
+                       color="#374151", edgecolor="#FFFFFF", linewidth=2.2, zorder=8, label="DE PIE")
+            ax.text(
+                p_pie["irv"] + (x_max - x_min) * 0.025,
+                p_pie["ic"] - (y_max - y_min) * 0.060,
+                f"DE PIE (ortostático)\nIC {p_pie['ic']:.2f} | RVS {p_pie['irv']:.0f}",
+                fontsize=9, fontweight="bold", color="#374151",
+                bbox=dict(boxstyle="round,pad=0.35", fc="#F9FAFB", ec="#D1D5DB", alpha=0.94),
+                zorder=9,
+            )
+
+        # Leyenda compacta
+        ax.legend(loc="upper right", fontsize=9, framealpha=0.92)
+
+        # Clasificación diagnóstica siempre del punto ACOSTADO/CINTA
+        patron = diagnostico_perfil_hemodinamico(p_basal.get("ic"), p_basal.get("irv"))
+        ax.set_title("Fenotipado clínico automatizado — referencia: ACOSTADO/CINTA", fontsize=14, fontweight="bold", color="#0B4F8A")
         ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=11, fontweight="bold")
         ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=11, fontweight="bold")
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
         ax.grid(True, alpha=0.20)
-        ax.text(0.01, -0.18, f"Clasificación automática del patrón ACOSTADO/CINTA: {patron}", transform=ax.transAxes, fontsize=10, color="#0F172A", fontweight="bold")
+        ax.text(0.01, -0.18,
+                f"Clasificación ACOSTADO/CINTA: {patron}",
+                transform=ax.transAxes, fontsize=10, color="#1D4ED8", fontweight="bold")
+        if p_pie is not None:
+            ax.text(0.01, -0.26,
+                    "DE PIE: solo para análisis ortostático — no modifica diagnóstico principal.",
+                    transform=ax.transAxes, fontsize=9, color="#6B7280", style="italic")
         plt.tight_layout()
         buffer = io.BytesIO()
         fig.savefig(buffer, format="png", dpi=180, bbox_inches="tight")
@@ -5699,11 +5638,11 @@ def _texto_completo_df_v19(df: pd.DataFrame) -> str:
     textos = []
     try:
         dfx = estandarizar_columnas_clinicas(df)
+        # Solo columnas de texto crudo del PDF — NO incluir filas estructuradas
+        # con valores numéricos ya extraídos (evita leer IC: 2.72 del dict de fila).
         for col in ["Texto_PDF", "Diagnóstico", "Medicación", "Posición", "origen", "Paciente"]:
             if col in dfx.columns:
                 textos.extend(str(v) for v in dfx[col].tolist() if es_valor_util(v))
-        for _, fila in dfx.iterrows():
-            textos.append(" | ".join(f"{k}: {v}" for k, v in fila.to_dict().items() if es_valor_util(v)))
     except Exception:
         pass
     return "\n".join(textos)
@@ -5746,7 +5685,12 @@ def _extraer_valor_cercano_v19(texto: Any, patron: str, variable: str, bloquear:
                 return plausibles[0]
 
         # Caso etiqueta en una línea y valor en la línea siguiente.
-        ventana = " ".join(lineas[i+1:i+3])
+        # Filtrar líneas bloqueadas (ej. dz/dt) de la ventana para no contaminar IC.
+        lineas_ventana = [
+            l for l in lineas[i+1:i+3]
+            if not (bloquear and bloquear(l))
+        ]
+        ventana = " ".join(lineas_ventana)
         if ventana:
             corte = re.search(etiquetas_corte, ventana, flags=re.IGNORECASE)
             segmento = ventana[:corte.start()] if corte else ventana
@@ -5859,7 +5803,10 @@ _extraer_resumen_integrado_v19_base_eaees = extraer_resumen_integrado
 def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
     """Override final V20: EA/EES siempre derivado de EA Capan/EES Capan."""
     r = _extraer_resumen_integrado_v19_base_eaees(df)
-    return forzar_ea_ees_derivado_en_resumen(r)
+    r = forzar_ea_ees_derivado_en_resumen(r)
+    # V21: todas las métricas hemodinámicas diagnósticas provienen de ACOSTADO/CINTA.
+    r = resumen_acostado_cinta_para_patron(df, r)
+    return r
 
 
 _diagnostico_acoplamiento_pre_v20 = diagnostico_acoplamiento
