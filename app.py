@@ -2601,7 +2601,7 @@ def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame]
 
 def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
     perfil = diagnostico_perfil_hemodinamico(r.get("ic"), r.get("irv"))
-    volemia = diagnostico_volemia(r.get("cft"), r.get("cftnr"))
+    volemia = diagnostico_volemia(r.get("cft"), r.get("cftnr"), sexo=r.get("sexo"), embarazo=bool((contexto_embarazo or {}).get("embarazada", False)) if "contexto_embarazo" in globals() else False)
     contractilidad = diagnostico_contractilidad(r.get("iv"), r.get("iac"), r.get("cts"))
     acoplamiento = diagnostico_acoplamiento(r.get("ea"), r.get("ees"), r.get("ava"))
     ortostatico = evaluar_dominio_ortostatico(df) if df is not None else None
@@ -3987,7 +3987,7 @@ def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     r = extraer_resumen_integrado(df)
     calidad = resumen_calidad_integracion(df)
     perfil = diagnostico_perfil_hemodinamico(r.get("ic"), r.get("irv"))
-    volemia = diagnostico_volemia(r.get("cft"), r.get("cftnr"))
+    volemia = diagnostico_volemia(r.get("cft"), r.get("cftnr"), sexo=r.get("sexo"), embarazo=bool((contexto_embarazo or {}).get("embarazada", False)) if "contexto_embarazo" in globals() else False)
     contractilidad = diagnostico_contractilidad(r.get("iv"), r.get("iac"), r.get("cts"))
     acoplamiento = diagnostico_acoplamiento(r.get("ea"), r.get("ees"), r.get("ava"))
     orto = interpretar_ortostatismo(df)
@@ -4650,7 +4650,7 @@ def construir_fila_paciente_integrada(df: pd.DataFrame, contexto_embarazo: Optio
         "IDS": limpiar_numero(r.get("ids")),
         "Z0": limpiar_numero(r.get("z0")),
         "Perfil_hemodinamico": diagnostico_perfil_hemodinamico(r.get("ic"), r.get("irv")),
-        "Estado_volemico": diagnostico_volemia(r.get("cft"), r.get("cftnr")),
+        "Estado_volemico": diagnostico_volemia(r.get("cft"), r.get("cftnr"), sexo=r.get("sexo"), embarazo=bool((contexto_embarazo or {}).get("embarazada", False)) if "contexto_embarazo" in globals() else False),
         "Contractilidad": diagnostico_contractilidad(r.get("iv"), r.get("iac"), r.get("cts")),
         "Acoplamiento_VA": diagnostico_acoplamiento(r.get("ea"), r.get("ees"), r.get("ava")),
         "Tiene_registro_de_pie": bool(r.get("df_de_pie_disponible")),
@@ -6282,7 +6282,7 @@ def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] 
     Volemia, contractilidad, acoplamiento y ortostatismo se informan como dominios complementarios.
     """
     patron_ref = diagnostico_perfil_hemodinamico_acostado_cinta(r, None)
-    volemia = diagnostico_volemia((r or {}).get("cft"), (r or {}).get("cftnr"))
+    volemia = diagnostico_volemia((r or {}).get("cft"), (r or {}).get("cftnr"), sexo=(r or {}).get("sexo"))
     contractilidad = diagnostico_contractilidad((r or {}).get("iv"), (r or {}).get("iac"), (r or {}).get("cts"))
     acoplamiento = diagnostico_acoplamiento((r or {}).get("ea"), (r or {}).get("ees"), (r or {}).get("ava"))
     texto_posicion = ""
@@ -6551,7 +6551,7 @@ def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         lineas.append(f"Conducta: {res_pe.get('conducta','Ver módulo embarazo.')}")
     else:
         # Módulo clínico: dominios sin métricas
-        volemia = diagnostico_volemia(r_local.get("cft"), r_local.get("cftnr"))
+        volemia = diagnostico_volemia(r_local.get("cft"), r_local.get("cftnr"), sexo=r_local.get("sexo"))
         contractilidad = diagnostico_contractilidad(r_local.get("iv"), r_local.get("iac"), r_local.get("cts"))
         acopl = diagnostico_acoplamiento(r_local.get("ea"), r_local.get("ees"), r_local.get("ava"))
         lineas.append(f"Volemia: {volemia.split('.')[0]}")
@@ -7698,7 +7698,7 @@ def construir_fila_historial_app(usuario_info: Dict[str, Any], df: pd.DataFrame,
         "EES_Capan": limpiar_numero(r.get("ees")),
         "EA_EES_calculado": limpiar_numero(r.get("ava")),
         "perfil_hemodinamico": diagnostico_perfil_hemodinamico(r.get("ic"), r.get("irv")),
-        "estado_volemico": diagnostico_volemia(r.get("cft"), r.get("cftnr")),
+        "estado_volemico": diagnostico_volemia(r.get("cft"), r.get("cftnr"), sexo=r.get("sexo"), embarazo=bool((contexto_embarazo or {}).get("embarazada", False)) if "contexto_embarazo" in globals() else False),
         "contractilidad": diagnostico_contractilidad(r.get("iv"), r.get("iac"), r.get("cts")),
         "acoplamiento_va": diagnostico_acoplamiento(r.get("ea"), r.get("ees"), r.get("ava")),
         "informe_texto": informe_txt,
@@ -8105,7 +8105,7 @@ def _paper_conclusion_ejecutiva(r: Dict[str, Any], contexto_embarazo: Optional[D
             "preeclampsia por sí solo, pero identifica un perfil que justifica vigilancia intensiva e integración con proteinuria, "
             "laboratorio materno, Doppler uterino/umbilical, crecimiento fetal y tratamiento actual."
         )
-    volemia = diagnostico_volemia(r.get("cft"), r.get("cftnr"))
+    volemia = diagnostico_volemia(r.get("cft"), r.get("cftnr"), sexo=r.get("sexo"), embarazo=bool((contexto_embarazo or {}).get("embarazada", False)) if "contexto_embarazo" in globals() else False)
     return (
         f"El estudio sugiere {dinamia.lower()} en el patrón basal/acostado o CINTA, que es la referencia diagnóstica principal. "
         f"Diagnóstico de volemia: {volemia} "
@@ -8284,7 +8284,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         ))
         _c2 = clasificacion_hemodinamica_materna_gestacional(r_cinta, contexto_embarazo)
         _pe = calcular_riesgo_preeclampsia(r_cinta, contexto_embarazo)
-        _vol_txt = diagnostico_volemia(r_panel.get("cft"), r_panel.get("cftnr")).split(".")[0]
+        _vol_txt = diagnostico_volemia(r_panel.get("cft"), r_panel.get("cftnr"), sexo=r_panel.get("sexo")).split(".")[0]
         _crecimiento = str((contexto_embarazo or {}).get("crecimiento_fetal") or "No informado")
         _doppler = str((contexto_embarazo or {}).get("doppler_uterino") or "No informado")
         dominios_emb = [
@@ -8585,6 +8585,157 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+
+# =========================================================
+# V_FINAL_CFT_SEXO - Algoritmo de volemia por CFT con umbrales por sexo
+# =========================================================
+# Regla clínica incorporada:
+# - Hombres: CFT > 34 1/kOhm = HIPERVOLEMIA.
+# - Mujeres: CFT > 24 1/kOhm = HIPERVOLEMIA.
+# - CFT <= umbral = NORMOVOLEMIA / perfil equilibrado si el resto del contexto acompaña.
+# - CFTnr se informa como soporte, pero la decisión principal usa CFT y sexo.
+# - En hipertensión no obstétrica, si CFT está elevado, el informe sugiere evaluar componente
+#   de retención de volumen y considerar diurético tiazídico según criterio clínico.
+# - Si CFT se normaliza y la presión arterial continúa elevada, reevaluar IRV/RVS.
+
+try:
+    VARIABLES_CGI.setdefault("sexo", ["sexo", "sex", "género", "genero", "gender"])
+except Exception:
+    pass
+try:
+    SINONIMOS_COLUMNAS.setdefault("Sexo", ["sexo", "sex", "género", "genero", "gender"])
+    if "Sexo" not in ORDEN_VARIABLES_INFORME:
+        # Insertar Sexo después de Edad para conservar el orden clínico.
+        _idx = ORDEN_VARIABLES_INFORME.index("Edad") + 1 if "Edad" in ORDEN_VARIABLES_INFORME else 4
+        ORDEN_VARIABLES_INFORME.insert(_idx, "Sexo")
+except Exception:
+    pass
+
+
+def normalizar_sexo_clinico(valor: Any) -> Optional[str]:
+    """Devuelve 'Mujer', 'Hombre' o None.
+
+    Acepta F/M, femenino/masculino, mujer/hombre, female/male.
+    """
+    if not es_valor_util(valor):
+        return None
+    t = normalizar_txt(valor)
+    t2 = re.sub(r"[^a-z0-9]+", " ", t).strip()
+    if re.search(r"\b(f|fem|femenino|mujer|female|woman)\b", t2):
+        return "Mujer"
+    if re.search(r"\b(m|masc|masculino|hombre|male|man)\b", t2):
+        return "Hombre"
+    return None
+
+
+def extraer_sexo_desde_texto_clinico(texto: Any) -> Optional[str]:
+    if not es_valor_util(texto):
+        return None
+    s = str(texto)
+    patrones = [
+        r"(?:sexo|sex|g[eé]nero|genero|gender)\s*[:=\-–—]?\s*(femenino|masculino|mujer|hombre|female|male|f\b|m\b)",
+        r"\b(paciente\s+femenin[ao]|paciente\s+masculin[ao])\b",
+    ]
+    for pat in patrones:
+        m = re.search(pat, s, flags=re.IGNORECASE)
+        if m:
+            val = m.group(1) if m.lastindex else m.group(0)
+            sexo = normalizar_sexo_clinico(val)
+            if sexo:
+                return sexo
+    return None
+
+
+def umbral_cft_por_sexo(sexo: Any) -> Tuple[Optional[float], str]:
+    sx = normalizar_sexo_clinico(sexo)
+    if sx == "Hombre":
+        return 34.0, "Hombre"
+    if sx == "Mujer":
+        return 24.0, "Mujer"
+    return None, "Sexo no especificado"
+
+
+def diagnostico_volemia(cft: Any, cftnr: Any = None, sexo: Any = None, embarazo: bool = False) -> str:
+    """Diagnóstico de volemia basado en CFT con umbral diferenciado por sexo.
+
+    El CFT es la variable decisoria principal. CFTnr se informa como soporte y trazabilidad.
+    """
+    cftv = limpiar_numero(cft)
+    cftnrv = limpiar_numero(cftnr)
+    umbral, sexo_norm = umbral_cft_por_sexo(sexo)
+
+    if cftv is None:
+        return f"VOLEMIA NO DEFINIBLE POR CFT: falta CFT. Base: CFT {fmt(cftv,2)}; CFTnr {fmt(cftnrv,2)}; sexo: {sexo_norm}."
+
+    # Si no hay sexo, resolver los extremos seguros y pedir revisión solo en zona dependiente del sexo.
+    if umbral is None:
+        base = f" Base: CFT {fmt(cftv,2)}; CFTnr {fmt(cftnrv,2)}; sexo no especificado."
+        if cftv > 34:
+            return "HIPERVOLEMIA." + base + " CFT supera el umbral masculino y femenino. Reevaluar IRV/RVS si la presión arterial continúa elevada tras normalizar el componente volémico."
+        if cftv <= 24:
+            return "NORMOVOLEMIA." + base + " CFT no supera el umbral femenino ni masculino."
+        return "VOLEMIA DEPENDIENTE DEL SEXO: registrar sexo biológico para clasificar CFT entre 24 y 34 1/kOhm." + base
+
+    base = f" Base: CFT {fmt(cftv,2)} 1/kOhm; umbral {sexo_norm} > {fmt(umbral,0)}; CFTnr {fmt(cftnrv,2)}."
+    if cftv > umbral:
+        accion = " Sugiere exceso de volumen/retención de líquidos."
+        if embarazo:
+            accion += " En embarazo/HDP integrar con edema, proteinuria, función renal, síntomas respiratorios y criterio obstétrico."
+        else:
+            accion += " En módulo clínico no obstétrico considerar agregar o titular diurético tiazídico según PA, función renal, ionograma y tratamiento vigente. Si CFT se normaliza y la PA sigue elevada, reevaluar IRV/RVS para descartar vasoconstricción residual."
+        return "HIPERVOLEMIA." + base + accion
+
+    return "NORMOVOLEMIA." + base + " Perfil equilibrado si presión arterial, IRV/RVS y el resto de dominios son concordantes."
+
+
+# Agregar sexo al resumen integrado final sin modificar el parser de base.
+try:
+    _extraer_resumen_integrado_pre_cft_sexo = extraer_resumen_integrado
+    def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
+        r = _extraer_resumen_integrado_pre_cft_sexo(df)
+        out = dict(r or {})
+        sexo = None
+        try:
+            df_std = estandarizar_columnas_clinicas(df)
+            if "Sexo" in df_std.columns:
+                for v in df_std["Sexo"].tolist()[::-1]:
+                    sexo = normalizar_sexo_clinico(v)
+                    if sexo:
+                        break
+            if not sexo:
+                textos = []
+                for col in ["Sexo", "Diagnóstico", "Texto_PDF", "Texto_PDF_global"]:
+                    if col in df_std.columns:
+                        textos.extend([str(x) for x in df_std[col].tolist() if es_valor_util(x)])
+                textos.append(str(out.get("texto_global", "")))
+                sexo = extraer_sexo_desde_texto_clinico(" | ".join(textos))
+        except Exception:
+            sexo = None
+        out["sexo"] = sexo
+        return out
+except Exception:
+    pass
+
+# Actualizar salida de dominios para pasar sexo/embarazo cuando esté disponible.
+try:
+    _evaluar_dominios_pre_cft_sexo = evaluar_dominios
+    def evaluar_dominios(r: Dict[str, Any]) -> Dict[str, Any]:
+        out = _evaluar_dominios_pre_cft_sexo(r)
+        try:
+            cft = (r or {}).get("cft")
+            cftnr = (r or {}).get("cftnr")
+            sexo = (r or {}).get("sexo")
+            embarazo = bool((r or {}).get("embarazada", False))
+            if "Volemia" in out:
+                out["Volemia"]["detalle"] = diagnostico_volemia(cft, cftnr, sexo=sexo, embarazo=embarazo)
+        except Exception:
+            pass
+        return out
+except Exception:
+    pass
+
+
 with st.sidebar:
     st.success(f"Usuario: {usuario_actual.get('nombre', usuario_actual.get('usuario', ''))}")
     if usuario_actual.get("matricula"):
@@ -8820,7 +8971,7 @@ if not contexto_embarazo.get("embarazada"):
     with c2:
         st.markdown(f"<div class='metric-card'><b>IRV / RVS - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('irv'),0)}<br><span class='muted'>{clasificar_irv(r_panel.get('irv'))}</span></div>", unsafe_allow_html=True)
     with c3:
-        st.markdown(f"<div class='metric-card'><b>CFT / CFTnr - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('cft'))} / {fmt(r_panel.get('cftnr'))}<br><span class='muted'>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr')).split('.')[0]}</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><b>CFT / CFTnr - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('cft'))} / {fmt(r_panel.get('cftnr'))}<br><span class='muted'>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr'), sexo=r_panel.get('sexo'), embarazo=bool((contexto_embarazo or {}).get('embarazada', False))).split('.')[0]}</span></div>", unsafe_allow_html=True)
     with c4:
         st.markdown(f"<div class='metric-card'><b>CA - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('ca'))}<br><span class='muted'>Complacencia arterial basal</span></div>", unsafe_allow_html=True)
 
@@ -8839,7 +8990,7 @@ if not _es_embarazo_ui:
         )
     st.subheader("Interpretación automática")
     st.markdown(f"<div class='card'><b>Perfil hemodinámico:</b><br>{diagnostico_perfil_hemodinamico(r_panel.get('ic'), r_panel.get('irv'))}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr'))}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr'), sexo=r_panel.get('sexo'), embarazo=bool((contexto_embarazo or {}).get('embarazada', False)))}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Contractilidad:</b><br>{diagnostico_contractilidad(r.get('iv'), r.get('iac'), r.get('cts'))}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Acoplamiento ventrículo-arterial:</b><br>{diagnostico_acoplamiento(r.get('ea'), r.get('ees'), r.get('ava'))}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Análisis ortostático automático:</b><br>{interpretar_ortostatismo(df_final)}</div>", unsafe_allow_html=True)
