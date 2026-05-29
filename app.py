@@ -7852,18 +7852,41 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
 
     # ── C. Parámetros integrados ─────────────────────────────────────────────
     story.append(_paper_paragraph("C. Parametros integrados", stl["PaperH"]))
-    param = [
-        ["Variable", "Valor", "Interpretacion"],
-        ["PAS / PAD", f"{_paper_fmt_val(r.get('pas'),0)} / {_paper_fmt_val(r.get('pad'),0)} mmHg", "Interpretar segun valores de presion arterial, contexto clinico y tratamiento."],
-        ["FC", f"{_paper_fmt_val(r.get('fc'),0)} lpm", "Integrar con medicacion, estado clinico y respuesta ortostatica."],
-        ["IC", f"{_paper_fmt_val(r.get('ic'),2)} L/min/m2", "Bajo si <2,5 L/min/m2; elevado si >4,0 L/min/m2."],
-        ["RVS/IRV", f"{_paper_fmt_val(r.get('irv'),0)} dyn.s.cm-5", "Elevada; eje de alta resistencia vascular."],
-        ["CFT / CFTnr", f"{_paper_fmt_val(r.get('cft'),2)} / {_paper_fmt_val(r.get('cftnr'),2)}", "Revisar e integrar con clinica, edema, disnea, tratamiento y funcion renal."],
-        ["IV / IAC / CTS", f"{_paper_fmt_val(r.get('iv'),2)} / {_paper_fmt_val(r.get('iac'),2)} / {_paper_fmt_val(r.get('cts'),2)}", "Evaluacion de onda sistolica y tiempos sistolicos."],
-        ["EA / EES / EA-EES", f"{_paper_fmt_val(r.get('ea'),2)} / {_paper_fmt_val(r.get('ees'),2)} / {_paper_fmt_val(r.get('ava'),2)}", "Acoplamiento VA en rango de precaucion si EA/EES >1."],
-        ["DS / IDS", f"{_paper_fmt_val(r.get('ds'),2)} / {_paper_fmt_val(r.get('ids'),2)}", "Volumen sistolico bajo si esta por debajo del rango esperado."],
-    ]
-    story.append(_paper_table(param, col_widths=[ancho*0.23, ancho*0.27, ancho*0.50], header=True))
+    if es_embarazo:
+        # Tabla C adaptada a hemodinamica gestacional
+        _eg_v  = limpiar_numero((contexto_embarazo or {}).get("edad_gestacional"))
+        _c_gest = clasificacion_hemodinamica_materna_gestacional(r_panel, contexto_embarazo)
+        _ref_g  = _c_gest.get("referencia", {})
+        _tri_lbl = _ref_g.get("label", "trimestre no especificado")
+        _dx_gest = _c_gest.get("diagnostico", "No clasificable")
+        _ic_rng  = f"{_paper_fmt_val(_ref_g.get('ic_low'),1)}-{_paper_fmt_val(_ref_g.get('ic_high'),1)} L/min/m2"
+        _rvs_rng = f"{_paper_fmt_val(_ref_g.get('rvs_low'),0)}-{_paper_fmt_val(_ref_g.get('rvs_high'),0)} dyn.s.cm-5"
+        _hdp_txt = "Si" if (contexto_embarazo or {}).get("hdp") else "No/no informado"
+        param = [
+            ["Variable", "Valor del paciente", "Referencia gestacional / Interpretacion"],
+            ["EG / Trimestre", f"{_paper_fmt_val(_eg_v,0)} semanas" if _eg_v else "No informada", f"{_tri_lbl.capitalize()}"],
+            ["PAS / PAD", f"{_paper_fmt_val(r_panel.get('pas'),0)} / {_paper_fmt_val(r_panel.get('pad'),0)} mmHg", "Normal en embarazo: <140/90 mmHg. PA >=140/90 orienta HDP."],
+            ["FC", f"{_paper_fmt_val(r_panel.get('fc'),0)} lpm", "Normal: 60-100 lpm. Taquicardia frecuente en T2/T3."],
+            ["IC (indice cardiaco)", f"{_paper_fmt_val(r_panel.get('ic'),2)} L/min/m2", f"Ref. {_tri_lbl}: {_ic_rng}. IC aumenta fisiologicamente en T2/T3."],
+            ["RVS / IRV", f"{_paper_fmt_val(r_panel.get('irv'),0)} dyn.s.cm-5", f"Ref. {_tri_lbl}: {_rvs_rng}. RVS cae en T2 por vasodilatacion gestacional."],
+            ["Clasificacion gestacional", _dx_gest, "Comparacion IC e IRV vs rango operativo del trimestre (ACOSTADO/CINTA)."],
+            ["HDP / HTA obstetrica", _hdp_txt, "HDP presente orienta fenotipo vascular-placentario si IC bajo + RVS alta."],
+            ["CFT / CFTnr", f"{_paper_fmt_val(r_panel.get('cft'),2)} / {_paper_fmt_val(r_panel.get('cftnr'),2)}", "Fluidos toracicos. Elevado en preeclampsia con sobrecarga de volumen."],
+            ["IV / IAC", f"{_paper_fmt_val(r_panel.get('iv'),2)} / {_paper_fmt_val(r_panel.get('iac'),2)}", "Funcion aortica sistolica. Valores bajos pueden acompanar disfuncion en HDP."],
+        ]
+    else:
+        param = [
+            ["Variable", "Valor", "Interpretacion"],
+            ["PAS / PAD", f"{_paper_fmt_val(r.get('pas'),0)} / {_paper_fmt_val(r.get('pad'),0)} mmHg", "Interpretar segun valores de presion arterial, contexto clinico y tratamiento."],
+            ["FC", f"{_paper_fmt_val(r.get('fc'),0)} lpm", "Integrar con medicacion, estado clinico y respuesta ortostatica."],
+            ["IC", f"{_paper_fmt_val(r.get('ic'),2)} L/min/m2", "Bajo si <2,5 L/min/m2; elevado si >4,0 L/min/m2."],
+            ["RVS/IRV", f"{_paper_fmt_val(r.get('irv'),0)} dyn.s.cm-5", "Elevada; eje de alta resistencia vascular."],
+            ["CFT / CFTnr", f"{_paper_fmt_val(r.get('cft'),2)} / {_paper_fmt_val(r.get('cftnr'),2)}", "Revisar e integrar con clinica, edema, disnea, tratamiento y funcion renal."],
+            ["IV / IAC / CTS", f"{_paper_fmt_val(r.get('iv'),2)} / {_paper_fmt_val(r.get('iac'),2)} / {_paper_fmt_val(r.get('cts'),2)}", "Evaluacion de onda sistolica y tiempos sistolicos."],
+            ["EA / EES / EA-EES", f"{_paper_fmt_val(r.get('ea'),2)} / {_paper_fmt_val(r.get('ees'),2)} / {_paper_fmt_val(r.get('ava'),2)}", "Acoplamiento VA en rango de precaucion si EA/EES >1."],
+            ["DS / IDS", f"{_paper_fmt_val(r.get('ds'),2)} / {_paper_fmt_val(r.get('ids'),2)}", "Volumen sistolico bajo si esta por debajo del rango esperado."],
+        ]
+    story.append(_paper_table(param, col_widths=[ancho*0.26, ancho*0.24, ancho*0.50], header=True))
     story.append(Spacer(1, 6))
 
     if not es_embarazo:
@@ -7885,11 +7908,34 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
 
     # ── E. Informe de dominios integrados resumido y didáctico ───────────────
     story.append(_paper_paragraph("E. Informe de dominios integrados resumido y didactico", stl["PaperH"]))
-    story.append(_paper_paragraph(
-        "Los dominios se informan como resultados separados. Solo el dominio de funcion circulatoria define el patron hemodinamico de referencia ACOSTADO/CINTA.",
-        stl["PaperBody"],
-    ))
-    story.append(_paper_dominios_integrados_table(r, df, ancho))
+    if es_embarazo:
+        story.append(_paper_paragraph(
+            "Dominios interpretados en contexto gestacional. El patron hemodinamico se compara con la referencia fisiologica del trimestre.",
+            stl["PaperBody"],
+        ))
+        _c2 = clasificacion_hemodinamica_materna_gestacional(r_panel, contexto_embarazo)
+        _pe = calcular_riesgo_preeclampsia(r_panel, contexto_embarazo)
+        _vol_txt = diagnostico_volemia(r_panel.get("cft"), r_panel.get("cftnr")).split(".")[0]
+        _crecimiento = str((contexto_embarazo or {}).get("crecimiento_fetal") or "No informado")
+        _doppler = str((contexto_embarazo or {}).get("doppler_uterino") or "No informado")
+        dominios_emb = [
+            ["Dominio", "Resultado", "Interpretacion gestacional"],
+            ["Patron hemodinamico gestacional (ACOSTADO/CINTA)", _c2.get("diagnostico","N/D"),
+             _c2.get("interpretacion","Ver clasificacion gestacional.")],
+            ["Volemia / fluidos toracicos", _vol_txt,
+             f"CFT {_paper_fmt_val(r_panel.get('cft'),2)} / CFTnr {_paper_fmt_val(r_panel.get('cftnr'),2)}. En HDP puede reflejar sobrecarga o hipovolemia relativa."],
+            ["Fenotipo materno sugerido", _c2.get("subtipo","N/D"),
+             "Basado en relacion IC/RVS vs referencia gestacional y presencia de HDP."],
+            ["Crecimiento fetal / Doppler", _crecimiento, f"Doppler uterino: {_doppler}. Integrar con biometria fetal y criterios obstetricos."],
+            ["Score riesgo PE (orientativo)", f"{_pe.get('puntaje','N/D')}/10 — {_pe.get('categoria','')}", _pe.get("conducta","Ver modulo PE.")],
+        ]
+        story.append(_paper_table(dominios_emb, col_widths=[ancho*0.26, ancho*0.24, ancho*0.50], header=True))
+    else:
+        story.append(_paper_paragraph(
+            "Los dominios se informan como resultados separados. Solo el dominio de funcion circulatoria define el patron hemodinamico de referencia ACOSTADO/CINTA.",
+            stl["PaperBody"],
+        ))
+        story.append(_paper_dominios_integrados_table(r, df, ancho))
     story.append(Spacer(1, 6))
 
     if not es_embarazo:
