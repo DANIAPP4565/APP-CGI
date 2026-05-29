@@ -7815,6 +7815,8 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
                 r_panel[_k] = r_ref_pdf.get(_k)
     except Exception:
         r_panel = dict(r)
+    # r_cinta: referencia garantizada ACOSTADO/CINTA para módulo embarazo
+    r_cinta = resumen_acostado_cinta_para_patron(df, r)
     es_embarazo = bool(contexto_embarazo and contexto_embarazo.get("embarazada"))
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=1.15*cm, leftMargin=1.15*cm, topMargin=1.0*cm, bottomMargin=1.0*cm)
@@ -7855,7 +7857,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     if es_embarazo:
         # Tabla C adaptada a hemodinamica gestacional
         _eg_v  = limpiar_numero((contexto_embarazo or {}).get("edad_gestacional"))
-        _c_gest = clasificacion_hemodinamica_materna_gestacional(r_panel, contexto_embarazo)
+        _c_gest = clasificacion_hemodinamica_materna_gestacional(r_cinta, contexto_embarazo)
         _ref_g  = _c_gest.get("referencia", {})
         _tri_lbl = _ref_g.get("label", "trimestre no especificado")
         _dx_gest = _c_gest.get("diagnostico", "No clasificable")
@@ -7865,14 +7867,14 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         param = [
             ["Variable", "Valor del paciente", "Referencia gestacional / Interpretacion"],
             ["EG / Trimestre", f"{_paper_fmt_val(_eg_v,0)} semanas" if _eg_v else "No informada", f"{_tri_lbl.capitalize()}"],
-            ["PAS / PAD", f"{_paper_fmt_val(r_panel.get('pas'),0)} / {_paper_fmt_val(r_panel.get('pad'),0)} mmHg", "Normal en embarazo: <140/90 mmHg. PA >=140/90 orienta HDP."],
-            ["FC", f"{_paper_fmt_val(r_panel.get('fc'),0)} lpm", "Normal: 60-100 lpm. Taquicardia frecuente en T2/T3."],
-            ["IC (indice cardiaco)", f"{_paper_fmt_val(r_panel.get('ic'),2)} L/min/m2", f"Ref. {_tri_lbl}: {_ic_rng}. IC aumenta fisiologicamente en T2/T3."],
-            ["RVS / IRV", f"{_paper_fmt_val(r_panel.get('irv'),0)} dyn.s.cm-5", f"Ref. {_tri_lbl}: {_rvs_rng}. RVS cae en T2 por vasodilatacion gestacional."],
+            ["PAS / PAD", f"{_paper_fmt_val(r_cinta.get('pas'),0)} / {_paper_fmt_val(r_cinta.get('pad'),0)} mmHg", "Normal en embarazo: <140/90 mmHg. PA >=140/90 orienta HDP."],
+            ["FC", f"{_paper_fmt_val(r_cinta.get('fc'),0)} lpm", "Normal: 60-100 lpm. Taquicardia frecuente en T2/T3."],
+            ["IC (indice cardiaco)", f"{_paper_fmt_val(r_cinta.get('ic'),2)} L/min/m2", f"Ref. {_tri_lbl}: {_ic_rng}. IC aumenta fisiologicamente en T2/T3."],
+            ["RVS / IRV", f"{_paper_fmt_val(r_cinta.get('irv'),0)} dyn.s.cm-5", f"Ref. {_tri_lbl}: {_rvs_rng}. RVS cae en T2 por vasodilatacion gestacional."],
             ["Clasificacion gestacional", _dx_gest, "Comparacion IC e IRV vs rango operativo del trimestre (ACOSTADO/CINTA)."],
             ["HDP / HTA obstetrica", _hdp_txt, "HDP presente orienta fenotipo vascular-placentario si IC bajo + RVS alta."],
-            ["CFT / CFTnr", f"{_paper_fmt_val(r_panel.get('cft'),2)} / {_paper_fmt_val(r_panel.get('cftnr'),2)}", "Fluidos toracicos. Elevado en preeclampsia con sobrecarga de volumen."],
-            ["IV / IAC", f"{_paper_fmt_val(r_panel.get('iv'),2)} / {_paper_fmt_val(r_panel.get('iac'),2)}", "Funcion aortica sistolica. Valores bajos pueden acompanar disfuncion en HDP."],
+            ["CFT / CFTnr", f"{_paper_fmt_val(r_cinta.get('cft'),2)} / {_paper_fmt_val(r_cinta.get('cftnr'),2)}", "Fluidos toracicos. Elevado en preeclampsia con sobrecarga de volumen."],
+            ["IV / IAC", f"{_paper_fmt_val(r_cinta.get('iv'),2)} / {_paper_fmt_val(r_cinta.get('iac'),2)}", "Funcion aortica sistolica. Valores bajos pueden acompanar disfuncion en HDP."],
         ]
     else:
         param = [
@@ -7913,8 +7915,8 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
             "Dominios interpretados en contexto gestacional. El patron hemodinamico se compara con la referencia fisiologica del trimestre.",
             stl["PaperBody"],
         ))
-        _c2 = clasificacion_hemodinamica_materna_gestacional(r_panel, contexto_embarazo)
-        _pe = calcular_riesgo_preeclampsia(r_panel, contexto_embarazo)
+        _c2 = clasificacion_hemodinamica_materna_gestacional(r_cinta, contexto_embarazo)
+        _pe = calcular_riesgo_preeclampsia(r_cinta, contexto_embarazo)
         _vol_txt = diagnostico_volemia(r_panel.get("cft"), r_panel.get("cftnr")).split(".")[0]
         _crecimiento = str((contexto_embarazo or {}).get("crecimiento_fetal") or "No informado")
         _doppler = str((contexto_embarazo or {}).get("doppler_uterino") or "No informado")
@@ -7923,7 +7925,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
             ["Patron hemodinamico gestacional (ACOSTADO/CINTA)", _c2.get("diagnostico","N/D"),
              _c2.get("interpretacion","Ver clasificacion gestacional.")],
             ["Volemia / fluidos toracicos", _vol_txt,
-             f"CFT {_paper_fmt_val(r_panel.get('cft'),2)} / CFTnr {_paper_fmt_val(r_panel.get('cftnr'),2)}. En HDP puede reflejar sobrecarga o hipovolemia relativa."],
+             f"CFT {_paper_fmt_val(r_cinta.get('cft'),2)} / CFTnr {_paper_fmt_val(r_cinta.get('cftnr'),2)}. En HDP puede reflejar sobrecarga o hipovolemia relativa."],
             ["Fenotipo materno sugerido", _c2.get("subtipo","N/D"),
              "Basado en relacion IC/RVS vs referencia gestacional y presencia de HDP."],
             ["Crecimiento fetal / Doppler", _crecimiento, f"Doppler uterino: {_doppler}. Integrar con biometria fetal y criterios obstetricos."],
