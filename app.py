@@ -6151,11 +6151,58 @@ def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] 
 
 _generar_informe_texto_pre_v22 = generar_informe_texto
 
+_generar_informe_texto_pre_resumido = generar_informe_texto
+
 def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> str:
-    base = _generar_informe_texto_pre_v22(df, contexto_embarazo)
-    r_local = resumen_acostado_cinta_para_patron(df, extraer_resumen_integrado(df))
-    bloque = "\n\nINFORME DE DOMINIOS INTEGRADOS RESUMIDO Y DIDÁCTICO\n" + informe_dominios_integrados_texto(r_local, df, html=False)
-    return limpiar_patrones_prohibidos(base + bloque)
+    """Informe resumido: max 10 renglones con patrones de dominio, sin métricas individuales."""
+    contexto_embarazo = contexto_embarazo or {}
+    r = extraer_resumen_integrado(df)
+    r_local = resumen_acostado_cinta_para_patron(df, r)
+    es_emb = bool(contexto_embarazo.get("embarazada"))
+
+    lineas: List[str] = []
+
+    # Encabezado paciente (1 línea)
+    paciente = r.get("paciente") or "No especificado"
+    fecha = r.get("fecha") or "No disponible"
+    eg = contexto_embarazo.get("edad_gestacional")
+    eg_txt = f" | EG: {fmt(eg,0)} semanas" if eg else ""
+    lineas.append(f"Paciente: {paciente} | Fecha estudio: {fecha}{eg_txt}")
+
+    # Patrón hemodinámico principal (1 línea)
+    patron = clasificacion_dinamica_obligatoria(r_local, contexto_embarazo)
+    lineas.append(f"Patrón hemodinámico (ACOSTADO/CINTA): {patron}")
+
+    if es_emb:
+        # Módulo embarazo: clasificación gestacional
+        c_gest = clasificacion_hemodinamica_materna_gestacional(r_local, contexto_embarazo)
+        lineas.append(f"Clasificación gestacional: {c_gest.get('diagnostico','N/D')}")
+        hdp = bool(contexto_embarazo.get("hdp"))
+        lineas.append(f"HDP/HTA obstétrica: {'sí' if hdp else 'no/no informado'} | Crecimiento fetal: {contexto_embarazo.get('crecimiento_fetal') or 'no informado'} | Doppler: {contexto_embarazo.get('doppler_uterino') or 'no informado'}")
+        res_pe = calcular_riesgo_preeclampsia(r_local, contexto_embarazo)
+        lineas.append(f"Score riesgo PE: {res_pe.get('puntaje','N/D')}/10 — {res_pe.get('categoria','N/D')}")
+        lineas.append(f"Conducta: {res_pe.get('conducta','Ver módulo embarazo.')}")
+    else:
+        # Módulo clínico: dominios sin métricas
+        volemia = diagnostico_volemia(r_local.get("cft"), r_local.get("cftnr"))
+        contractilidad = diagnostico_contractilidad(r_local.get("iv"), r_local.get("iac"), r_local.get("cts"))
+        acopl = diagnostico_acoplamiento(r_local.get("ea"), r_local.get("ees"), r_local.get("ava"))
+        lineas.append(f"Volemia: {volemia.split('.')[0]}")
+        lineas.append(f"Contractilidad: {contractilidad.split('.')[0]}")
+        lineas.append(f"Acoplamiento VA: {acopl.split('.')[0]}")
+        ort = interpretar_ortostatismo(df)
+        if ort and "No " not in ort[:6]:
+            lineas.append(f"Ortostatismo: {ort.split('.')[0]}")
+        # Sugerencia terapéutica sintetizada
+        st_txt = sugerencia_tratamiento_no_embarazada(r_local, df)
+        fenotipos_line = next((l for l in st_txt.splitlines() if "Fenotipo terapéutico" in l), "")
+        if fenotipos_line:
+            lineas.append(fenotipos_line.strip())
+
+    # Advertencia final (1 línea)
+    lineas.append("Advertencia: informe orientativo. Integrar con clínica, laboratorio y criterio médico individual.")
+
+    return "\n".join(lineas[:10])
 
 
 
@@ -8343,16 +8390,17 @@ for _k in ["ic", "irv", "fc", "pas", "pad", "ca", "cft", "cftnr"]:
 r_panel["posicion_referencia"] = r_acostado_cinta_panel.get("posicion") or r.get("posicion_referencia")
 r_panel["metodo_referencia"] = r_acostado_cinta_panel.get("metodo") or r.get("metodo_referencia")
 
-st.caption("Valores mostrados en las tarjetas: ACOSTADO/CINTA, patrón basal de referencia diagnóstica. El registro DE PIE se informa por separado como respuesta ortostática.")
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    st.markdown(f"<div class='metric-card'><b>IC - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('ic'))}<br><span class='muted'>{clasificar_ic(r_panel.get('ic'))}</span></div>", unsafe_allow_html=True)
-with c2:
-    st.markdown(f"<div class='metric-card'><b>IRV / RVS - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('irv'),0)}<br><span class='muted'>{clasificar_irv(r_panel.get('irv'))}</span></div>", unsafe_allow_html=True)
-with c3:
-    st.markdown(f"<div class='metric-card'><b>CFT / CFTnr - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('cft'))} / {fmt(r_panel.get('cftnr'))}<br><span class='muted'>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr')).split('.')[0]}</span></div>", unsafe_allow_html=True)
-with c4:
-    st.markdown(f"<div class='metric-card'><b>CA - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('ca'))}<br><span class='muted'>Complacencia arterial basal</span></div>", unsafe_allow_html=True)
+if not contexto_embarazo.get("embarazada"):
+    st.caption("Valores mostrados en las tarjetas: ACOSTADO/CINTA, patrón basal de referencia diagnóstica. El registro DE PIE se informa por separado como respuesta ortostática.")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(f"<div class='metric-card'><b>IC - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('ic'))}<br><span class='muted'>{clasificar_ic(r_panel.get('ic'))}</span></div>", unsafe_allow_html=True)
+    with c2:
+        st.markdown(f"<div class='metric-card'><b>IRV / RVS - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('irv'),0)}<br><span class='muted'>{clasificar_irv(r_panel.get('irv'))}</span></div>", unsafe_allow_html=True)
+    with c3:
+        st.markdown(f"<div class='metric-card'><b>CFT / CFTnr - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('cft'))} / {fmt(r_panel.get('cftnr'))}<br><span class='muted'>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr')).split('.')[0]}</span></div>", unsafe_allow_html=True)
+    with c4:
+        st.markdown(f"<div class='metric-card'><b>CA - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('ca'))}<br><span class='muted'>Complacencia arterial basal</span></div>", unsafe_allow_html=True)
 
 
 _es_embarazo_ui = bool(contexto_embarazo.get("embarazada"))
