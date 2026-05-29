@@ -874,7 +874,7 @@ PATRONES_CLAVE = {
     "fc": r"(?:frecuencia\s+card[ií]aca|frecuencia\s+cardiaca|heart\s+rate|\bhr\b|\bfc\b)",
     "vm": r"(?:\bvm\b|volumen\s+minuto|cardiac\s+output|\bco\b)",
     # IC estricto: NO incluir ITC/índice de trabajo cardíaco.
-    "ic": r"(?:[ií]ndice\s+card[ií]aco|indice\s+cardiaco|cardiac\s+index|\bci\b|\bic\b)",
+    "ic": r"(?:[ií]ndice\s+card[ií]aco|indice\s+cardiaco|cardiac\s+index|\bci\b|\bic\b)(?!.*dz\s*/\s*dt)",
     "irv": r"(?:[ií]ndice\s+(?:de\s+)?resistencia\s+vascular|resistencia\s+vascular\s+sist[eé]mica|\brvs\b|\birv\b|\bsvr\b)",
     "ca": r"(?:complacencia\s+arterial|arterial\s+compliance|\bca\b)",
     "ih": r"(?:[ií]ndice\s+de\s+heather|heather|\bih\b)",
