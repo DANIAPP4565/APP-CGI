@@ -5641,7 +5641,12 @@ def _extraer_valor_cercano_v19(texto: Any, patron: str, variable: str, bloquear:
                 return plausibles[0]
 
         # Caso etiqueta en una línea y valor en la línea siguiente.
-        ventana = " ".join(lineas[i+1:i+3])
+        # Filtrar líneas bloqueadas (ej. dz/dt) de la ventana para no contaminar IC.
+        lineas_ventana = [
+            l for l in lineas[i+1:i+3]
+            if not (bloquear and bloquear(l))
+        ]
+        ventana = " ".join(lineas_ventana)
         if ventana:
             corte = re.search(etiquetas_corte, ventana, flags=re.IGNORECASE)
             segmento = ventana[:corte.start()] if corte else ventana
