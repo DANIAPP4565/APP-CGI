@@ -5594,11 +5594,11 @@ def _texto_completo_df_v19(df: pd.DataFrame) -> str:
     textos = []
     try:
         dfx = estandarizar_columnas_clinicas(df)
+        # Solo columnas de texto crudo del PDF — NO incluir filas estructuradas
+        # con valores numéricos ya extraídos (evita leer IC: 2.72 del dict de fila).
         for col in ["Texto_PDF", "Diagnóstico", "Medicación", "Posición", "origen", "Paciente"]:
             if col in dfx.columns:
                 textos.extend(str(v) for v in dfx[col].tolist() if es_valor_util(v))
-        for _, fila in dfx.iterrows():
-            textos.append(" | ".join(f"{k}: {v}" for k, v in fila.to_dict().items() if es_valor_util(v)))
     except Exception:
         pass
     return "\n".join(textos)
