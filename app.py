@@ -393,6 +393,84 @@ def numeros_en_texto(texto: Any) -> List[float]:
     return vals
 
 
+
+
+# =========================================================
+# IC ESTRICTO: nunca importar dZ/dt MAX, ITC, IV, IAC, IH u otra métrica como IC
+# =========================================================
+
+def es_fuente_ic_prohibida(texto: Any) -> bool:
+    """Bloquea fuentes que no son Índice Cardíaco.
+
+    Objetivo clínico: IC debe venir solamente de IC / Índice Cardíaco / Cardiac Index.
+    No se acepta dZ/dt MAX, ITC, IV, IAC, IH, DS/IDS, CFT, CA, RVS/IRV ni variables por posición de tabla.
+    """
+    t = normalizar_txt(texto)
+    t2 = re.sub(r"[^a-z0-9/]+", " ", t).strip()
+    patrones = [
+        r"\bdz\s*/?\s*dt\b", r"\bdzdt\b", r"\bd\s*z\s*/\s*d\s*t\b", r"max\s+dz", r"dz\s*dt\s*max",
+        r"\bitc\b", r"indice\s+(?:de\s+)?trabajo\s+cardiaco", r"trabajo\s+cardiaco",
+        r"\biv\b", r"indice\s+(?:de\s+)?velocidad", r"velocity\s+index",
+        r"\biac\b", r"\baci\b", r"indice\s+(?:de\s+)?aceleracion", r"acceleration\s+index",
+        r"\bih\b", r"indice\s+(?:de\s+)?heather", r"heather",
+        r"\bcft\b", r"\btfc\b", r"contenido\s+(?:de\s+)?fluidos",
+        r"\birv\b", r"\brvs\b", r"\bsvr\b", r"resistencia\s+vascular",
+        r"\bca\b", r"complacencia\s+arterial", r"arterial\s+compliance",
+        r"\bds\b", r"\bids\b", r"stroke\s+volume", r"stroke\s+index", r"descarga\s+sistolica",
+        r"\bz0\b", r"impedancia\s+basal",
+        r"\bfc\b", r"frecuencia\s+cardiaca", r"heart\s+rate",
+    ]
+    return any(re.search(p, t2, flags=re.IGNORECASE) for p in patrones)
+
+
+def es_etiqueta_ic_explicita(texto: Any) -> bool:
+    """Acepta únicamente etiquetas explícitas de Índice Cardíaco."""
+    if es_fuente_ic_prohibida(texto):
+        return False
+    t = normalizar_txt(texto)
+    t2 = re.sub(r"[^a-z0-9/]+", " ", t).strip()
+    patrones_ic = [
+        r"(?<![a-z0-9])ic(?![a-z0-9])",
+        r"(?<![a-z0-9])ci(?![a-z0-9])",
+        r"indice\s+cardiaco",
+        r"index\s+cardiaco",
+        r"cardiac\s+index",
+    ]
+    return any(re.search(p, t2, flags=re.IGNORECASE) for p in patrones_ic)
+
+
+def extraer_ic_estricto_de_texto(texto: Any) -> Optional[float]:
+    """Extrae IC solo desde una línea con etiqueta explícita de IC.
+
+    Si no encuentra una fuente segura, devuelve None; es preferible dejar IC vacío
+    antes que importar dZ/dt MAX u otra variable.
+    """
+    lineas = str(texto or "").splitlines()
+    if len(lineas) <= 1:
+        lineas = re.split(r"\s{2,}|\|", str(texto or ""))
+    for i, lin in enumerate(lineas):
+        lin = str(lin).strip()
+        if not lin or not es_etiqueta_ic_explicita(lin):
+            continue
+        # Buscar valor inmediatamente posterior a la etiqueta IC/CI/Índice cardíaco.
+        patron = r"(?:\bIC\b|\bCI\b|[ÍI]ndice\s+card[íi]aco|Indice\s+cardiaco|Cardiac\s+Index)\s*[:=\-–—]?\s*([-+]?\d+(?:[\.,]\d+)?)"
+        m = re.search(patron, lin, flags=re.IGNORECASE)
+        if m:
+            v = limpiar_numero(m.group(1))
+            if rango_plausible("ic", v):
+                return v
+        nums = [n for n in numeros_en_texto(lin) if rango_plausible("ic", n)]
+        if nums:
+            return nums[0]
+        # Si el rótulo IC está solo en una línea, aceptar el primer número plausible de la línea siguiente.
+        if i + 1 < len(lineas):
+            prox = str(lineas[i + 1]).strip()
+            if prox and not es_fuente_ic_prohibida(prox):
+                nums2 = [n for n in numeros_en_texto(prox) if rango_plausible("ic", n)]
+                if nums2:
+                    return nums2[0]
+    return None
+
 def rango_plausible(clave: str, valor: Any) -> bool:
     """Evita que el parser tome números de otra variable cercana."""
     v = limpiar_numero(valor)
@@ -455,101 +533,6 @@ def es_linea_itc_no_ic(texto: Any) -> bool:
         r"left\s+cardiac\s+work\s+index",
     ]
     return any(re.search(p, t, flags=re.IGNORECASE) for p in patrones_itc)
-
-
-def es_linea_dzdt_no_ic(texto: Any) -> bool:
-    """Bloquea que dZ/dt MAX, DZDT MAX o derivadas de impedancia se importen como IC.
-
-    dZ/dt MAX es una métrica de la señal de impedancia/contractilidad y NO equivale
-    al índice cardíaco (IC). Por seguridad, cualquier columna o línea que contenga
-    dZ/dt, dzdt, dz dt, dz/dt o dzdt max queda excluida del mapeo hacia IC.
-    """
-    t_raw = str(texto or "")
-    t = normalizar_txt(t_raw)
-    t_compacto = re.sub(r"[^a-z0-9]+", "", t)
-    patrones_dzdt = [
-        r"\bdz\s*/\s*dt\b",
-        r"\bdz\s*[-_ ]?dt\b",
-        r"\bdzdt\b",
-        r"\bdzdt\s*max\b",
-        r"\bdz\s*/\s*dt\s*max\b",
-        r"\bmax\s*dz\s*/\s*dt\b",
-        r"derivada\s+de\s+impedancia",
-        r"impedancia\s+diferencial",
-    ]
-    if any(re.search(p, t, flags=re.IGNORECASE) for p in patrones_dzdt):
-        return True
-    return "dzdt" in t_compacto or "dzdtmax" in t_compacto
-
-def es_etiqueta_ic_explicita(texto: Any) -> bool:
-    """Acepta IC solo cuando el rótulo corresponde al índice cardíaco.
-
-    Esta función evita que variables de impedancia/contractilidad como dZ/dt MAX,
-    DZDT, ITC, IV, IAC, IH o textos compuestos sean interpretados como IC.
-    """
-    if texto is None:
-        return False
-    raw = str(texto)
-    if es_linea_itc_no_ic(raw) or es_linea_dzdt_no_ic(raw):
-        return False
-    t = normalizar_txt(raw)
-    t_norm = re.sub(r"[^a-z0-9/]+", " ", t).strip()
-
-    # Etiquetas largas inequívocas.
-    if re.search(r"\bindice\s+cardiaco\b|\bcardiac\s+index\b", t_norm, flags=re.IGNORECASE):
-        return True
-
-    # Abreviaturas aceptadas solo como etiqueta aislada, con separador/valor o acompañada de unidades.
-    if re.fullmatch(r"(?:ic|ci)(?:\s*(?:l\s*/\s*min(?:\s*/\s*m2|\s*/\s*m\s*2|\s*/\s*m²)?)?)?", t_norm):
-        return True
-    if re.search(r"^(?:ic|ci)\s*[:= -]", t_norm):
-        return True
-    if re.search(r"(?<![a-z0-9])(ic|ci)(?![a-z0-9])", t_norm) and re.search(r"l\s*/\s*min|l/min|m2|m²", t_norm):
-        return True
-
-    return False
-
-
-def extraer_ic_seguro_desde_lineas(lineas: List[str]) -> Optional[float]:
-    """Extrae IC únicamente desde rótulos explícitos de índice cardíaco.
-
-    Regla de seguridad: si no se encuentra una fuente explícita para IC, devuelve
-    None. Nunca usa dZ/dt MAX, DZDT, ITC ni otras variables como sustituto.
-    """
-    candidatos: List[Tuple[int, int, float]] = []
-    for i, linea in enumerate(lineas):
-        txt = str(linea or "").strip()
-        if not txt or es_linea_itc_no_ic(txt) or es_linea_dzdt_no_ic(txt):
-            continue
-        t = normalizar_txt(txt)
-        t_norm = re.sub(r"[^a-z0-9/.,:=-]+", " ", t).strip()
-
-        score = 0
-        if re.search(r"\bindice\s+cardiaco\b|\bcardiac\s+index\b", t_norm):
-            score = 3
-        elif re.search(r"(?<![a-z0-9])(ic|ci)(?![a-z0-9])", t_norm) and re.search(r"l\s*/\s*min|l/min|m2|m²", t_norm):
-            score = 2
-        elif re.fullmatch(r"(?:ic|ci)\s*[:= -]?.*", t_norm):
-            score = 1
-        else:
-            continue
-
-        # Preferir números después del rótulo dentro de la misma línea.
-        nums = extraer_numeros_post_etiqueta(txt, "ic")
-        if not nums and i + 1 < len(lineas):
-            sig = str(lineas[i + 1] or "")
-            if not es_linea_itc_no_ic(sig) and not es_linea_dzdt_no_ic(sig) and not es_etiqueta(sig):
-                nums = [n for n in numeros_en_texto(sig) if rango_plausible("ic", n)]
-        for v in nums:
-            vv = limpiar_numero(v)
-            if vv is not None and rango_plausible("ic", vv):
-                candidatos.append((score, i, float(vv)))
-
-    if not candidatos:
-        return None
-    # Mayor score y, ante empate, la última aparición útil del resumen.
-    candidatos.sort(key=lambda x: (x[0], x[1]))
-    return candidatos[-1][2]
 
 
 def contiene_sinonimo_seguro(nombre_col: str, sinonimo: str) -> bool:
@@ -969,7 +952,7 @@ PATRONES_CLAVE = {
     "fc": r"(?:frecuencia\s+card[ií]aca|frecuencia\s+cardiaca|heart\s+rate|\bhr\b|\bfc\b)",
     "vm": r"(?:\bvm\b|volumen\s+minuto|cardiac\s+output|\bco\b)",
     # IC estricto: NO incluir ITC/índice de trabajo cardíaco.
-    "ic": r"(?:[ií]ndice\s+card[ií]aco|indice\s+cardiaco|cardiac\s+index|(?<![a-zA-Z0-9])ci(?![a-zA-Z0-9])|(?<![a-zA-Z0-9])ic(?![a-zA-Z0-9]))",
+    "ic": r"(?:[ií]ndice\s+card[ií]aco|indice\s+cardiaco|cardiac\s+index|\bci\b|\bic\b)(?!.*dz\s*/\s*dt)",
     "irv": r"(?:[ií]ndice\s+(?:de\s+)?resistencia\s+vascular|resistencia\s+vascular\s+sist[eé]mica|\brvs\b|\birv\b|\bsvr\b)",
     "ca": r"(?:complacencia\s+arterial|arterial\s+compliance|\bca\b)",
     "ih": r"(?:[ií]ndice\s+de\s+heather|heather|\bih\b)",
@@ -987,20 +970,18 @@ PATRONES_CLAVE = {
 def claves_en_linea_robusto(linea: str) -> List[str]:
     txt = str(linea)
     bloquea_ic_por_itc = es_linea_itc_no_ic(txt)
-    bloquea_ic_por_dzdt = es_linea_dzdt_no_ic(txt)
     halladas = []
     # Orden intencional: CFTnr antes que CFT para no confundir ambos.
     orden = ["cftnr", "cft", "ih", "iac", "cts", "pas_pad", "fc", "vm", "ic", "irv", "ca", "iv", "ea", "ees", "ava", "ds", "ids", "z0"]
     for clave in orden:
-        if clave == "ic":
-            if bloquea_ic_por_itc or bloquea_ic_por_dzdt or not es_etiqueta_ic_explicita(txt):
-                continue
+        if clave == "ic" and (bloquea_ic_por_itc or not es_etiqueta_ic_explicita(txt)):
+            continue
         pat = PATRONES_CLAVE.get(clave)
         if pat and re.search(pat, txt, flags=re.IGNORECASE):
             halladas.append(clave)
     # Complemento con el detector por sinónimos existente.
     k = clave_por_linea(linea)
-    if k == "ic" and (bloquea_ic_por_itc or bloquea_ic_por_dzdt or not es_etiqueta_ic_explicita(txt)):
+    if k == "ic" and bloquea_ic_por_itc:
         k = None
     if k and k not in halladas:
         halladas.append(k)
@@ -1011,7 +992,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
         if not re.search(PATRONES_CLAVE["cft"], txt_sin_cftnr, flags=re.IGNORECASE):
             halladas.remove("cft")
     # Evita confundir ITC/índice de trabajo cardíaco con IC/índice cardíaco.
-    if "ic" in halladas and (re.search(r"\bitc\b|trabajo\s+card[ií]aco", txt, flags=re.IGNORECASE) or es_linea_dzdt_no_ic(txt)):
+    if "ic" in halladas and re.search(r"\bitc\b|trabajo\s+card[ií]aco", txt, flags=re.IGNORECASE):
         halladas.remove("ic")
     return halladas
 
@@ -1019,7 +1000,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
 def extraer_numeros_post_etiqueta(linea: str, clave: str) -> List[float]:
     """Devuelve números preferentemente ubicados después del rótulo, evitando números de unidades."""
     txt = str(linea)
-    if clave == "ic" and (es_linea_itc_no_ic(txt) or es_linea_dzdt_no_ic(txt) or not es_etiqueta_ic_explicita(txt)):
+    if clave == "ic" and (es_linea_itc_no_ic(txt) or not es_etiqueta_ic_explicita(txt)):
         return []
     pat = PATRONES_CLAVE.get(clave)
     candidatos: List[float] = []
@@ -1227,6 +1208,16 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
     # Tercer barrido: rescate global de lo que haya quedado incompleto.
     aplicar_fallback_regex_global(lineas, filas)
 
+    # IC estricto: eliminar cualquier IC cuya línea de origen no sea una fuente explícita de Índice Cardíaco
+    # y agregar, si existe, el IC tomado de una línea segura del texto completo.
+    filas = [
+        f for f in filas
+        if str(f.get("variable", "")).upper() != "IC" or es_etiqueta_ic_explicita(f.get("linea_origen", ""))
+    ]
+    ic_seguro = extraer_ic_estricto_de_texto("\n".join(lineas))
+    if ic_seguro is not None:
+        filas.append({"variable": "IC", "valor": ic_seguro, "valor_2": None, "linea_origen": "IC explícito estricto"})
+
     if not filas:
         return pd.DataFrame(registros)
 
@@ -1250,14 +1241,6 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
     ava = resumen.get("AVA")
     if limpiar_numero(ava) is None and limpiar_numero(resumen.get("EA")) is not None and limpiar_numero(resumen.get("EES")) not in [None, 0]:
         ava = limpiar_numero(resumen.get("EA")) / limpiar_numero(resumen.get("EES"))
-
-    # Corrección crítica IC: el índice cardíaco se toma solo desde rótulo explícito IC/Índice Cardíaco.
-    # Si no se identifica una fuente explícita, no se completa IC con otra variable.
-    ic_seguro = extraer_ic_seguro_desde_lineas(lineas)
-    if ic_seguro is not None:
-        resumen["IC"] = ic_seguro
-    else:
-        resumen.pop("IC", None)
 
     fecha_estudio = formatear_fecha_ddmmyyyy(resumen.get("FECHA_ESTUDIO") or resumen.get("FECHA"))
     fecha_nacimiento = formatear_fecha_ddmmyyyy(resumen.get("FECHA_NACIMIENTO"))
@@ -1443,13 +1426,9 @@ def canon_col(col: Any) -> str:
     n = normalizar_txt(n_original)
     n = re.sub(r"[^a-z0-9/]+", " ", n).strip()
 
-    # Bloqueos críticos:
-    # - ITC/índice de trabajo cardíaco NO debe entrar como IC.
-    # - dZ/dt MAX / DZDT MAX NO debe entrar como IC.
+    # Bloqueo crítico: ITC/índice de trabajo cardíaco NO debe entrar como IC.
     if es_linea_itc_no_ic(n_original):
         return "ITC"
-    if es_linea_dzdt_no_ic(n_original):
-        return "DZDT_MAX"
 
     pares = []
     for canon, sinonimos in SINONIMOS_COLUMNAS.items():
@@ -1459,10 +1438,9 @@ def canon_col(col: Any) -> str:
 
     for canon, s in pares:
         # Si el canon candidato es IC, aceptar solo etiquetas explícitas de índice cardíaco.
-        # Rechazar cualquier columna con trabajo cardíaco/ITC o dZ/dt MAX.
-        if canon == "IC":
-            if es_linea_itc_no_ic(n_original) or es_linea_dzdt_no_ic(n_original) or not es_etiqueta_ic_explicita(n_original):
-                continue
+        # Rechazar cualquier columna con trabajo cardíaco/ITC.
+        if canon == "IC" and es_linea_itc_no_ic(n_original):
+            continue
         if contiene_sinonimo_seguro(n_original, s):
             return canon
     return n_original
@@ -1971,8 +1949,7 @@ def _valor_fila_case_insensitive(fila: Dict[str, Any], *claves: str) -> Any:
     for clave in claves:
         k = normalizar_txt(clave).replace(" ", "_")
         if k in mapa and es_valor_util(mapa[k]):
-            # Para IC no aceptar claves derivadas de dZ/dt/ITC aunque hayan sobrevivido como columnas.
-            if normalizar_txt(clave).replace(" ", "_") in ["ic", "indice_cardiaco", "índice_cardíaco", "cardiac_index", "ci"] and not es_etiqueta_ic_explicita(clave):
+            if k in ["ic", "ci", "indice_cardiaco", "índice_cardíaco", "cardiac_index"] and not es_etiqueta_ic_explicita(clave):
                 continue
             return mapa[k]
 
@@ -2053,10 +2030,24 @@ def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Di
     if basal.empty:
         basal = dfx[dfx["Posición_reconocida"] != "de_pie"]
 
+    # Respaldo clínico obligatorio: si hay dos archivos/filas y la detección textual
+    # marca erróneamente todo como DE PIE, usar la primera fila como ACOSTADO/CINTA basal.
+    if basal.empty and len(dfx) >= 2:
+        basal = dfx.iloc[[0]]
+
     pie = dfx[dfx["Posición_reconocida"] == "de_pie"]
+    # Si no se reconoció DE PIE pero hay dos registros, usar la última fila como respuesta ortostática.
+    if pie.empty and len(dfx) >= 2:
+        pie = dfx.iloc[[-1]]
 
     r_basal = extraer_resumen_ortostatico_desde_fila(basal.iloc[0]) if not basal.empty else {}
     r_pie = extraer_resumen_ortostatico_desde_fila(pie.iloc[-1]) if not pie.empty else {}
+
+    if r_basal:
+        r_basal["posicion"] = r_basal.get("posicion") if r_basal.get("posicion") != "de_pie" else "acostado"
+        r_basal["metodo"] = r_basal.get("metodo") or "cinta"
+    if r_pie and len(dfx) >= 2:
+        r_pie["posicion"] = "de_pie"
 
     return r_basal, r_pie
 
@@ -2694,11 +2685,12 @@ def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = 
     puntos: List[Dict[str, Any]] = []
     if df is not None and isinstance(df, pd.DataFrame) and len(df) >= 2:
         basal, pie = obtener_resumenes_ortostaticos(df)
-        for etiqueta, fuente in [("Acostado/CINTA (referencia)", basal), ("De pie (respuesta ortostática)", pie)]:
-            ic = limpiar_numero(fuente.get("ic"))
-            irv = limpiar_numero(fuente.get("irv"))
-            if ic is not None and irv is not None:
-                puntos.append({"etiqueta": etiqueta, "ic": ic, "irv": irv})
+        ic_b = limpiar_numero(basal.get("ic")); irv_b = limpiar_numero(basal.get("irv"))
+        ic_p = limpiar_numero(pie.get("ic")); irv_p = limpiar_numero(pie.get("irv"))
+        if ic_b is not None and irv_b is not None:
+            puntos.append({"etiqueta": "ACOSTADO/CINTA\nreferencia", "ic": ic_b, "irv": irv_b})
+        if ic_p is not None and irv_p is not None:
+            puntos.append({"etiqueta": "DE PIE\nrespuesta ortostática", "ic": ic_p, "irv": irv_p})
     if not puntos:
         ic = limpiar_numero(r.get("ic"))
         irv = limpiar_numero(r.get("irv"))
@@ -2731,7 +2723,7 @@ def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.D
         y_min = max(1.2, min(2.0, min(ys) - 0.6))
         y_max = max(5.0, max(ys) + 0.8)
 
-        fig, ax = plt.subplots(figsize=(15.0, 5.8))
+        fig, ax = plt.subplots(figsize=(12.5, 7.0))
         ax.set_facecolor("#F8FAFC")
 
         # Zonas clínicas. Los límites se corresponden con la clasificación usada por la app.
@@ -6661,7 +6653,7 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
     y_min = max(1.5, min(2.0, ref["ic_low"] - 1.2, ic - 1.0))
     y_max = max(6.5, ref["ic_high"] + 0.8, ic + 1.0)
 
-    fig, ax = plt.subplots(figsize=(10.8, 7.2), dpi=160)
+    fig, ax = plt.subplots(figsize=(15.0, 7.5), dpi=150)
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
@@ -6706,14 +6698,14 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
         fontsize=10.5, fontweight="bold", color="#0F172A"
     )
 
-    ax.set_title(f"Hemodinamia materna según edad gestacional\n{eg_label} ({tri_label})", fontsize=14, fontweight="bold", color="#0B3D6E", pad=12)
+    ax.set_title(f"Hemodinamia materna según edad gestacional: {eg_label} ({tri_label})", fontsize=14, fontweight="bold", color="#0B3D6E", pad=14)
     ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=12, fontweight="bold", labelpad=10)
     ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=12, fontweight="bold", labelpad=10)
     ax.grid(True, alpha=0.22)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
     ax.text(0.01, -0.11, f"Lectura: el punto ACOSTADO/CINTA se compara contra la referencia de {tri_label} ({eg_label}). DE PIE queda reservado para respuesta ortostática. Diagnóstico: {c['diagnostico']}.", transform=ax.transAxes, fontsize=9.5, color="#334155")
-    fig.subplots_adjust(left=0.10, right=0.98, top=0.88, bottom=0.16)
+    fig.tight_layout(pad=1.8)
     buf = _io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
@@ -8516,6 +8508,8 @@ if normalizar_obra_social(obra_social_manual):
     r = extraer_resumen_integrado(df_final)
 elif str(obra_social_manual).strip():
     st.warning("El campo Obra social contiene un dato técnico o inválido. Ingrese la cobertura médica real o deje el campo vacío.")
+st.subheader(TITULO_MODULO_NO_EMBARAZADA)
+
 # Detección automática desde diagnóstico/texto del PDF.
 # Ejemplo: "HTA EMB S20" = embarazada + probable HTA + semana 20.
 embarazo_detectado = detectar_contexto_embarazo_desde_texto(texto_total_dataframe(df_final))
@@ -8573,7 +8567,6 @@ _es_embarazo_ui = bool(contexto_embarazo.get("embarazada"))
 
 if not _es_embarazo_ui:
     # ── MÓDULO CLÍNICO ────────────────────────────────────────────────────────
-    st.subheader(TITULO_MODULO_NO_EMBARAZADA)
     graf_fenotipo_ui = crear_grafico_fenotipado_dinamico_bytes(r_panel, df_final)
     if graf_fenotipo_ui is not None:
         st.subheader("Fenotipado clínico automatizado")
