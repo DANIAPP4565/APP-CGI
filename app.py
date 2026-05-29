@@ -6548,7 +6548,7 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
     y_min = max(1.5, min(2.0, ref["ic_low"] - 1.2, ic - 1.0))
     y_max = max(6.5, ref["ic_high"] + 0.8, ic + 1.0)
 
-    fig, ax = plt.subplots(figsize=(10.5, 6.2), dpi=170)
+    fig, ax = plt.subplots(figsize=(15.0, 7.5), dpi=150)
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
@@ -6570,30 +6570,37 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
     ax.axhline(ref["ic_low"], color="#64748B", lw=1.4, ls="--")
     ax.axhline(ref["ic_high"], color="#64748B", lw=1.4, ls="--")
 
-    # Etiquetas de zonas.
-    ax.text(x_min + 0.04*(x_max-x_min), y_max - 0.12*(y_max-y_min), "Hiperdinamia\nvasodilatada", fontsize=12, fontweight="bold", color="#14532D")
-    ax.text(ref["rvs_high"] + 0.04*(x_max-x_min), y_max - 0.12*(y_max-y_min), "Hiperdinamia\ncon poscarga elevada", fontsize=12, fontweight="bold", color="#7F1D1D")
-    ax.text(x_min + 0.04*(x_max-x_min), y_min + 0.08*(y_max-y_min), "Hipodinamia\npor bajo flujo", fontsize=12, fontweight="bold", color="#78350F")
-    ax.text(ref["rvs_high"] + 0.04*(x_max-x_min), y_min + 0.08*(y_max-y_min), "Hipodinamia\nvasoconstrictora", fontsize=12, fontweight="bold", color="#7F1D1D")
-    ax.text(ref["rvs_low"] + 0.05*(ref["rvs_high"]-ref["rvs_low"]), ref["ic_low"] + 0.45*(ref["ic_high"]-ref["ic_low"]), "Rango esperado\ngestacional", fontsize=12, fontweight="bold", color="#0B4F8A")
+    # Etiquetas de zonas — centradas en cada cuadrante para evitar superposición.
+    _xc_izq  = (x_min + ref["rvs_low"]) / 2
+    _xc_med  = (ref["rvs_low"] + ref["rvs_high"]) / 2
+    _xc_der  = (ref["rvs_high"] + x_max) / 2
+    _yc_top  = (ref["ic_high"] + y_max) / 2
+    _yc_mid  = (ref["ic_low"] + ref["ic_high"]) / 2
+    _yc_bot  = (y_min + ref["ic_low"]) / 2
+    ax.text(_xc_izq, _yc_top, "Hiperdinamia\nvasodilatada",   fontsize=11, fontweight="bold", color="#14532D", ha="center", va="center")
+    ax.text(_xc_der, _yc_top, "Hiperdinamia\nposcarga alta",  fontsize=11, fontweight="bold", color="#7F1D1D", ha="center", va="center")
+    ax.text(_xc_izq, _yc_bot, "Hipodinamia\nbajo flujo",      fontsize=11, fontweight="bold", color="#78350F", ha="center", va="center")
+    ax.text(_xc_der, _yc_bot, "Hipodinamia\nvasoconstrictora",fontsize=11, fontweight="bold", color="#7F1D1D", ha="center", va="center")
+    ax.text(_xc_med, _yc_mid, "Rango\nesperado\ngestacional", fontsize=11, fontweight="bold", color="#0B4F8A", ha="center", va="center",
+            bbox=dict(boxstyle="round,pad=0.3", fc="#E8F1FA", ec="#0B4F8A", alpha=0.7, lw=1.2))
 
-    ax.scatter([rvs], [ic], s=170, color="#111827", edgecolor="white", linewidth=2.0, zorder=5)
+    ax.scatter([rvs], [ic], s=200, color="#111827", edgecolor="white", linewidth=2.2, zorder=5)
     ax.annotate(
         f"ACOSTADO/CINTA\nIC {fmt(ic,2)} | RVS {fmt(rvs,0)}\n{c['diagnostico']}",
-        xy=(rvs, ic), xytext=(18, 22), textcoords="offset points",
-        bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="#0B4F8A", lw=1.4, alpha=0.95),
-        arrowprops=dict(arrowstyle="->", color="#0B4F8A", lw=1.4),
+        xy=(rvs, ic), xytext=(32, 28), textcoords="offset points",
+        bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="#0B4F8A", lw=1.6, alpha=0.97),
+        arrowprops=dict(arrowstyle="->", color="#0B4F8A", lw=1.5),
         fontsize=10.5, fontweight="bold", color="#0F172A"
     )
 
-    ax.set_title(f"Hemodinamia materna según edad gestacional: {eg_label} ({tri_label})", fontsize=15, fontweight="bold", color="#0B3D6E")
-    ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=12, fontweight="bold")
-    ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=12, fontweight="bold")
-    ax.grid(True, alpha=0.25)
+    ax.set_title(f"Hemodinamia materna según edad gestacional: {eg_label} ({tri_label})", fontsize=14, fontweight="bold", color="#0B3D6E", pad=14)
+    ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=12, fontweight="bold", labelpad=10)
+    ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=12, fontweight="bold", labelpad=10)
+    ax.grid(True, alpha=0.22)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
-    ax.text(0.01, -0.17, f"Lectura: el punto ACOSTADO/CINTA se compara contra la referencia de {tri_label} ({eg_label}). DE PIE queda reservado para respuesta ortostática. Diagnóstico: {c['diagnostico']}.", transform=ax.transAxes, fontsize=10.5, color="#334155")
-    fig.tight_layout()
+    ax.text(0.01, -0.11, f"Lectura: el punto ACOSTADO/CINTA se compara contra la referencia de {tri_label} ({eg_label}). DE PIE queda reservado para respuesta ortostática. Diagnóstico: {c['diagnostico']}.", transform=ax.transAxes, fontsize=9.5, color="#334155")
+    fig.tight_layout(pad=1.8)
     buf = _io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
@@ -6688,7 +6695,7 @@ def crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(
     border_color = {"ROJO":"#DC2626","AMARILLO":"#CA8A04","VERDE":"#16A34A","GRIS":"#94A3B8"}.get(simbolo_riesgo,"#94A3B8")
     semaforo_txt = {"ROJO":"[RIESGO ALTO]","AMARILLO":"[PRECAUCION]","VERDE":"[NORMAL]","GRIS":"[SIN DATOS]"}.get(simbolo_riesgo,"")
 
-    fig, ax1 = plt.subplots(figsize=(12.5, 8.0), dpi=160)
+    fig, ax1 = plt.subplots(figsize=(12.5, 10.0), dpi=160)
     fig.patch.set_facecolor("white")
     ax1.set_facecolor("#F8FAFC")
     ax2 = ax1.twinx()
@@ -6745,8 +6752,8 @@ def crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(
     lines2, labs2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1 + lines2, labs1 + labs2, loc="upper right", fontsize=9, framealpha=0.92)
 
-    fig.subplots_adjust(bottom=0.31)
-    panel_ax = fig.add_axes([0.04, 0.01, 0.92, 0.28])
+    fig.subplots_adjust(bottom=0.34, top=0.93)
+    panel_ax = fig.add_axes([0.04, 0.01, 0.92, 0.30])
     panel_ax.set_facecolor(panel_color)
     for spine in panel_ax.spines.values():
         spine.set_edgecolor(border_color)
@@ -8442,20 +8449,7 @@ else:
     graf_eg_ui = crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(r_panel, contexto_embarazo)
     if graf_eg_ui is not None:
         st.image(graf_eg_ui, caption="Hemodinamia materna vs edad gestacional: IC y RVS sobre curvas de referencia fisiológica gestacional, con conclusiones clínicas remarcadas", use_container_width=True)
-    st.subheader("Módulo paper clínico — Score PE/HDP")
-    score_pub = calcular_score_preeclampsia_publicable(r_panel, contexto_embarazo)
-    fen_pub = score_pub.get("fenotipo", {})
-    st.markdown(
-        f"<div class='card'><b>Score publicable PE/HDP:</b> {score_pub.get('score')}/100 - {score_pub.get('categoria')}<br>"
-        f"<b>Fenotipo:</b> {fen_pub.get('fenotipo')}<br>"
-        f"<b>Clasificación dinámica:</b> {fen_pub.get('dinamia')}<br>"
-        f"<b>Eje probable:</b> {fen_pub.get('eje_etiologico')}</div>",
-        unsafe_allow_html=True,
-    )
-    st.dataframe(tabla_score_paper_clinico_df(r_panel, contexto_embarazo), use_container_width=True)
-    graf_pub = crear_grafico_score_paper_bytes(r_panel, contexto_embarazo)
-    if graf_pub is not None:
-        st.image(graf_pub, caption="Aceleradores circulares de componentes auditables del score PE/HDP", use_container_width=True)
+
 
 st.subheader("Informe médico integrado")
 informe = generar_informe_texto(df_final, contexto_embarazo)
