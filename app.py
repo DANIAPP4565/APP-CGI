@@ -457,6 +457,101 @@ def es_linea_itc_no_ic(texto: Any) -> bool:
     return any(re.search(p, t, flags=re.IGNORECASE) for p in patrones_itc)
 
 
+def es_linea_dzdt_no_ic(texto: Any) -> bool:
+    """Bloquea que dZ/dt MAX, DZDT MAX o derivadas de impedancia se importen como IC.
+
+    dZ/dt MAX es una métrica de la señal de impedancia/contractilidad y NO equivale
+    al índice cardíaco (IC). Por seguridad, cualquier columna o línea que contenga
+    dZ/dt, dzdt, dz dt, dz/dt o dzdt max queda excluida del mapeo hacia IC.
+    """
+    t_raw = str(texto or "")
+    t = normalizar_txt(t_raw)
+    t_compacto = re.sub(r"[^a-z0-9]+", "", t)
+    patrones_dzdt = [
+        r"\bdz\s*/\s*dt\b",
+        r"\bdz\s*[-_ ]?dt\b",
+        r"\bdzdt\b",
+        r"\bdzdt\s*max\b",
+        r"\bdz\s*/\s*dt\s*max\b",
+        r"\bmax\s*dz\s*/\s*dt\b",
+        r"derivada\s+de\s+impedancia",
+        r"impedancia\s+diferencial",
+    ]
+    if any(re.search(p, t, flags=re.IGNORECASE) for p in patrones_dzdt):
+        return True
+    return "dzdt" in t_compacto or "dzdtmax" in t_compacto
+
+def es_etiqueta_ic_explicita(texto: Any) -> bool:
+    """Acepta IC solo cuando el rótulo corresponde al índice cardíaco.
+
+    Esta función evita que variables de impedancia/contractilidad como dZ/dt MAX,
+    DZDT, ITC, IV, IAC, IH o textos compuestos sean interpretados como IC.
+    """
+    if texto is None:
+        return False
+    raw = str(texto)
+    if es_linea_itc_no_ic(raw) or es_linea_dzdt_no_ic(raw):
+        return False
+    t = normalizar_txt(raw)
+    t_norm = re.sub(r"[^a-z0-9/]+", " ", t).strip()
+
+    # Etiquetas largas inequívocas.
+    if re.search(r"\bindice\s+cardiaco\b|\bcardiac\s+index\b", t_norm, flags=re.IGNORECASE):
+        return True
+
+    # Abreviaturas aceptadas solo como etiqueta aislada, con separador/valor o acompañada de unidades.
+    if re.fullmatch(r"(?:ic|ci)(?:\s*(?:l\s*/\s*min(?:\s*/\s*m2|\s*/\s*m\s*2|\s*/\s*m²)?)?)?", t_norm):
+        return True
+    if re.search(r"^(?:ic|ci)\s*[:= -]", t_norm):
+        return True
+    if re.search(r"(?<![a-z0-9])(ic|ci)(?![a-z0-9])", t_norm) and re.search(r"l\s*/\s*min|l/min|m2|m²", t_norm):
+        return True
+
+    return False
+
+
+def extraer_ic_seguro_desde_lineas(lineas: List[str]) -> Optional[float]:
+    """Extrae IC únicamente desde rótulos explícitos de índice cardíaco.
+
+    Regla de seguridad: si no se encuentra una fuente explícita para IC, devuelve
+    None. Nunca usa dZ/dt MAX, DZDT, ITC ni otras variables como sustituto.
+    """
+    candidatos: List[Tuple[int, int, float]] = []
+    for i, linea in enumerate(lineas):
+        txt = str(linea or "").strip()
+        if not txt or es_linea_itc_no_ic(txt) or es_linea_dzdt_no_ic(txt):
+            continue
+        t = normalizar_txt(txt)
+        t_norm = re.sub(r"[^a-z0-9/.,:=-]+", " ", t).strip()
+
+        score = 0
+        if re.search(r"\bindice\s+cardiaco\b|\bcardiac\s+index\b", t_norm):
+            score = 3
+        elif re.search(r"(?<![a-z0-9])(ic|ci)(?![a-z0-9])", t_norm) and re.search(r"l\s*/\s*min|l/min|m2|m²", t_norm):
+            score = 2
+        elif re.fullmatch(r"(?:ic|ci)\s*[:= -]?.*", t_norm):
+            score = 1
+        else:
+            continue
+
+        # Preferir números después del rótulo dentro de la misma línea.
+        nums = extraer_numeros_post_etiqueta(txt, "ic")
+        if not nums and i + 1 < len(lineas):
+            sig = str(lineas[i + 1] or "")
+            if not es_linea_itc_no_ic(sig) and not es_linea_dzdt_no_ic(sig) and not es_etiqueta(sig):
+                nums = [n for n in numeros_en_texto(sig) if rango_plausible("ic", n)]
+        for v in nums:
+            vv = limpiar_numero(v)
+            if vv is not None and rango_plausible("ic", vv):
+                candidatos.append((score, i, float(vv)))
+
+    if not candidatos:
+        return None
+    # Mayor score y, ante empate, la última aparición útil del resumen.
+    candidatos.sort(key=lambda x: (x[0], x[1]))
+    return candidatos[-1][2]
+
+
 def contiene_sinonimo_seguro(nombre_col: str, sinonimo: str) -> bool:
     """Coincidencia segura de sinónimos.
 
@@ -874,7 +969,7 @@ PATRONES_CLAVE = {
     "fc": r"(?:frecuencia\s+card[ií]aca|frecuencia\s+cardiaca|heart\s+rate|\bhr\b|\bfc\b)",
     "vm": r"(?:\bvm\b|volumen\s+minuto|cardiac\s+output|\bco\b)",
     # IC estricto: NO incluir ITC/índice de trabajo cardíaco.
-    "ic": r"(?:[ií]ndice\s+card[ií]aco|indice\s+cardiaco|cardiac\s+index|\bci\b|\bic\b)(?!.*dz\s*/\s*dt)",
+    "ic": r"(?:[ií]ndice\s+card[ií]aco|indice\s+cardiaco|cardiac\s+index|(?<![a-zA-Z0-9])ci(?![a-zA-Z0-9])|(?<![a-zA-Z0-9])ic(?![a-zA-Z0-9]))",
     "irv": r"(?:[ií]ndice\s+(?:de\s+)?resistencia\s+vascular|resistencia\s+vascular\s+sist[eé]mica|\brvs\b|\birv\b|\bsvr\b)",
     "ca": r"(?:complacencia\s+arterial|arterial\s+compliance|\bca\b)",
     "ih": r"(?:[ií]ndice\s+de\s+heather|heather|\bih\b)",
@@ -892,18 +987,20 @@ PATRONES_CLAVE = {
 def claves_en_linea_robusto(linea: str) -> List[str]:
     txt = str(linea)
     bloquea_ic_por_itc = es_linea_itc_no_ic(txt)
+    bloquea_ic_por_dzdt = es_linea_dzdt_no_ic(txt)
     halladas = []
     # Orden intencional: CFTnr antes que CFT para no confundir ambos.
     orden = ["cftnr", "cft", "ih", "iac", "cts", "pas_pad", "fc", "vm", "ic", "irv", "ca", "iv", "ea", "ees", "ava", "ds", "ids", "z0"]
     for clave in orden:
-        if clave == "ic" and bloquea_ic_por_itc:
-            continue
+        if clave == "ic":
+            if bloquea_ic_por_itc or bloquea_ic_por_dzdt or not es_etiqueta_ic_explicita(txt):
+                continue
         pat = PATRONES_CLAVE.get(clave)
         if pat and re.search(pat, txt, flags=re.IGNORECASE):
             halladas.append(clave)
     # Complemento con el detector por sinónimos existente.
     k = clave_por_linea(linea)
-    if k == "ic" and bloquea_ic_por_itc:
+    if k == "ic" and (bloquea_ic_por_itc or bloquea_ic_por_dzdt or not es_etiqueta_ic_explicita(txt)):
         k = None
     if k and k not in halladas:
         halladas.append(k)
@@ -914,7 +1011,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
         if not re.search(PATRONES_CLAVE["cft"], txt_sin_cftnr, flags=re.IGNORECASE):
             halladas.remove("cft")
     # Evita confundir ITC/índice de trabajo cardíaco con IC/índice cardíaco.
-    if "ic" in halladas and re.search(r"\bitc\b|trabajo\s+card[ií]aco", txt, flags=re.IGNORECASE):
+    if "ic" in halladas and (re.search(r"\bitc\b|trabajo\s+card[ií]aco", txt, flags=re.IGNORECASE) or es_linea_dzdt_no_ic(txt)):
         halladas.remove("ic")
     return halladas
 
@@ -922,7 +1019,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
 def extraer_numeros_post_etiqueta(linea: str, clave: str) -> List[float]:
     """Devuelve números preferentemente ubicados después del rótulo, evitando números de unidades."""
     txt = str(linea)
-    if clave == "ic" and es_linea_itc_no_ic(txt):
+    if clave == "ic" and (es_linea_itc_no_ic(txt) or es_linea_dzdt_no_ic(txt) or not es_etiqueta_ic_explicita(txt)):
         return []
     pat = PATRONES_CLAVE.get(clave)
     candidatos: List[float] = []
@@ -1028,7 +1125,7 @@ def aplicar_fallback_regex_global(lineas: List[str], filas: List[Dict[str, Any]]
 def aplicar_extraccion_tablas(lineas: List[str], filas: List[Dict[str, Any]]) -> None:
     """Detecta líneas con varias etiquetas y una fila de valores siguiente."""
     for i, linea in enumerate(lineas[:-1]):
-        claves = [k for k in claves_en_linea_robusto(linea) if k in CLAVES_NUMERICAS and k != "pas_pad"]
+        claves = [k for k in claves_en_linea_robusto(linea) if k in CLAVES_NUMERICAS and k not in ["pas_pad", "ic"]]
         # Quitar duplicados manteniendo orden.
         claves = list(dict.fromkeys(claves))
         if len(claves) < 2:
@@ -1153,6 +1250,14 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
     ava = resumen.get("AVA")
     if limpiar_numero(ava) is None and limpiar_numero(resumen.get("EA")) is not None and limpiar_numero(resumen.get("EES")) not in [None, 0]:
         ava = limpiar_numero(resumen.get("EA")) / limpiar_numero(resumen.get("EES"))
+
+    # Corrección crítica IC: el índice cardíaco se toma solo desde rótulo explícito IC/Índice Cardíaco.
+    # Si no se identifica una fuente explícita, no se completa IC con otra variable.
+    ic_seguro = extraer_ic_seguro_desde_lineas(lineas)
+    if ic_seguro is not None:
+        resumen["IC"] = ic_seguro
+    else:
+        resumen.pop("IC", None)
 
     fecha_estudio = formatear_fecha_ddmmyyyy(resumen.get("FECHA_ESTUDIO") or resumen.get("FECHA"))
     fecha_nacimiento = formatear_fecha_ddmmyyyy(resumen.get("FECHA_NACIMIENTO"))
@@ -1338,9 +1443,13 @@ def canon_col(col: Any) -> str:
     n = normalizar_txt(n_original)
     n = re.sub(r"[^a-z0-9/]+", " ", n).strip()
 
-    # Bloqueo crítico: ITC/índice de trabajo cardíaco NO debe entrar como IC.
+    # Bloqueos críticos:
+    # - ITC/índice de trabajo cardíaco NO debe entrar como IC.
+    # - dZ/dt MAX / DZDT MAX NO debe entrar como IC.
     if es_linea_itc_no_ic(n_original):
         return "ITC"
+    if es_linea_dzdt_no_ic(n_original):
+        return "DZDT_MAX"
 
     pares = []
     for canon, sinonimos in SINONIMOS_COLUMNAS.items():
@@ -1350,9 +1459,10 @@ def canon_col(col: Any) -> str:
 
     for canon, s in pares:
         # Si el canon candidato es IC, aceptar solo etiquetas explícitas de índice cardíaco.
-        # Rechazar cualquier columna con trabajo cardíaco/ITC.
-        if canon == "IC" and es_linea_itc_no_ic(n_original):
-            continue
+        # Rechazar cualquier columna con trabajo cardíaco/ITC o dZ/dt MAX.
+        if canon == "IC":
+            if es_linea_itc_no_ic(n_original) or es_linea_dzdt_no_ic(n_original) or not es_etiqueta_ic_explicita(n_original):
+                continue
         if contiene_sinonimo_seguro(n_original, s):
             return canon
     return n_original
@@ -1861,6 +1971,9 @@ def _valor_fila_case_insensitive(fila: Dict[str, Any], *claves: str) -> Any:
     for clave in claves:
         k = normalizar_txt(clave).replace(" ", "_")
         if k in mapa and es_valor_util(mapa[k]):
+            # Para IC no aceptar claves derivadas de dZ/dt/ITC aunque hayan sobrevivido como columnas.
+            if normalizar_txt(clave).replace(" ", "_") in ["ic", "indice_cardiaco", "índice_cardíaco", "cardiac_index", "ci"] and not es_etiqueta_ic_explicita(clave):
+                continue
             return mapa[k]
 
     equivalencias = {
@@ -5594,11 +5707,11 @@ def _texto_completo_df_v19(df: pd.DataFrame) -> str:
     textos = []
     try:
         dfx = estandarizar_columnas_clinicas(df)
-        # Solo columnas de texto crudo del PDF — NO incluir filas estructuradas
-        # con valores numéricos ya extraídos (evita leer IC: 2.72 del dict de fila).
         for col in ["Texto_PDF", "Diagnóstico", "Medicación", "Posición", "origen", "Paciente"]:
             if col in dfx.columns:
                 textos.extend(str(v) for v in dfx[col].tolist() if es_valor_util(v))
+        for _, fila in dfx.iterrows():
+            textos.append(" | ".join(f"{k}: {v}" for k, v in fila.to_dict().items() if es_valor_util(v)))
     except Exception:
         pass
     return "\n".join(textos)
@@ -5641,12 +5754,7 @@ def _extraer_valor_cercano_v19(texto: Any, patron: str, variable: str, bloquear:
                 return plausibles[0]
 
         # Caso etiqueta en una línea y valor en la línea siguiente.
-        # Filtrar líneas bloqueadas (ej. dz/dt) de la ventana para no contaminar IC.
-        lineas_ventana = [
-            l for l in lineas[i+1:i+3]
-            if not (bloquear and bloquear(l))
-        ]
-        ventana = " ".join(lineas_ventana)
+        ventana = " ".join(lineas[i+1:i+3])
         if ventana:
             corte = re.search(etiquetas_corte, ventana, flags=re.IGNORECASE)
             segmento = ventana[:corte.start()] if corte else ventana
@@ -5759,10 +5867,7 @@ _extraer_resumen_integrado_v19_base_eaees = extraer_resumen_integrado
 def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
     """Override final V20: EA/EES siempre derivado de EA Capan/EES Capan."""
     r = _extraer_resumen_integrado_v19_base_eaees(df)
-    r = forzar_ea_ees_derivado_en_resumen(r)
-    # V21: todas las métricas hemodinámicas diagnósticas provienen de ACOSTADO/CINTA.
-    r = resumen_acostado_cinta_para_patron(df, r)
-    return r
+    return forzar_ea_ees_derivado_en_resumen(r)
 
 
 _diagnostico_acoplamiento_pre_v20 = diagnostico_acoplamiento
@@ -6556,7 +6661,7 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
     y_min = max(1.5, min(2.0, ref["ic_low"] - 1.2, ic - 1.0))
     y_max = max(6.5, ref["ic_high"] + 0.8, ic + 1.0)
 
-    fig, ax = plt.subplots(figsize=(15.0, 7.5), dpi=150)
+    fig, ax = plt.subplots(figsize=(10.8, 7.2), dpi=160)
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
@@ -6601,14 +6706,14 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
         fontsize=10.5, fontweight="bold", color="#0F172A"
     )
 
-    ax.set_title(f"Hemodinamia materna según edad gestacional: {eg_label} ({tri_label})", fontsize=14, fontweight="bold", color="#0B3D6E", pad=14)
+    ax.set_title(f"Hemodinamia materna según edad gestacional\n{eg_label} ({tri_label})", fontsize=14, fontweight="bold", color="#0B3D6E", pad=12)
     ax.set_xlabel("Resistencia vascular sistémica - IRV/RVS (dyn·s·cm⁻⁵)", fontsize=12, fontweight="bold", labelpad=10)
     ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=12, fontweight="bold", labelpad=10)
     ax.grid(True, alpha=0.22)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
     ax.text(0.01, -0.11, f"Lectura: el punto ACOSTADO/CINTA se compara contra la referencia de {tri_label} ({eg_label}). DE PIE queda reservado para respuesta ortostática. Diagnóstico: {c['diagnostico']}.", transform=ax.transAxes, fontsize=9.5, color="#334155")
-    fig.tight_layout(pad=1.8)
+    fig.subplots_adjust(left=0.10, right=0.98, top=0.88, bottom=0.16)
     buf = _io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
@@ -8208,307 +8313,6 @@ def agregar_capturas_originales_reportlab_story(story, ancho: float, max_captura
     except Exception:
         pass
 
-
-# =========================================================
-# BASE DE CONOCIMIENTO - HEMODINÁMICA PULSÁTIL / EDAD VASCULAR
-# Referencia: Azizzadeh et al. Scientific Reports 2024;14:23151.
-# Agrega cálculo LMS, z-score y percentiles para cfPWV, AIx, Pf y Pb.
-# =========================================================
-
-# Referencia bibliográfica añadida a la base de conocimiento de la app.
-_ref_lead_2024 = (
-    "Azizzadeh M, Karimi A, Breyer-Kohansal R, et al. Reference equations for pulse wave velocity, "
-    "augmentation index, amplitude of forward and backward wave in a European general adult population. "
-    "Scientific Reports. 2024;14:23151. doi:10.1038/s41598-024-74162-5."
-)
-try:
-    if _ref_lead_2024 not in REFERENCIAS_BIBLIOGRAFICAS:
-        REFERENCIAS_BIBLIOGRAFICAS.append(_ref_lead_2024)
-except Exception:
-    pass
-
-# Sinónimos/campos nuevos para extracción desde PDF/Excel.
-try:
-    VARIABLES_CGI.setdefault("sexo", []).extend(["sexo", "sex", "gender", "genero", "género", "masculino", "femenino", "male", "female"])
-    VARIABLES_CGI.setdefault("cf_pwv", []).extend([
-        "cfpwv", "cf pwv", "carotid femoral pulse wave velocity", "carotid-femoral pulse wave velocity",
-        "velocidad de onda de pulso carotido femoral", "velocidad de onda de pulso carótido femoral",
-        "vop carotido femoral", "vop carótido femoral", "vop cf", "cf-vop", "pwv cf"
-    ])
-    VARIABLES_CGI.setdefault("aix", []).extend(["aix", "augmentation index", "indice de aumento", "índice de aumento", "indice de aumentacion", "índice de aumentación"])
-    VARIABLES_CGI.setdefault("pf", []).extend(["pf", "forward wave", "onda anterograda", "onda anterógrada", "onda incidente", "amplitud onda anterograda", "amplitud pf"])
-    VARIABLES_CGI.setdefault("pb", []).extend(["pb", "backward wave", "onda retrograda", "onda retrógrada", "onda reflejada", "amplitud onda retrograda", "amplitud pb"])
-except Exception:
-    pass
-
-try:
-    SINONIMOS_COLUMNAS.setdefault("Sexo", ["sexo", "sex", "gender", "genero", "género"])
-    SINONIMOS_COLUMNAS.setdefault("cfPWV", ["cfpwv", "cf pwv", "cf-pwv", "vop cf", "cf-vop", "pwv cf", "velocidad de onda de pulso carotido femoral", "velocidad de onda de pulso carótido femoral", "carotid femoral pulse wave velocity", "carotid-femoral pulse wave velocity"])
-    SINONIMOS_COLUMNAS.setdefault("AIx", ["aix", "augmentation index", "indice de aumento", "índice de aumento", "indice de aumentacion", "índice de aumentación"])
-    SINONIMOS_COLUMNAS.setdefault("Pf", ["pf", "forward wave", "onda anterograda", "onda anterógrada", "onda incidente", "amplitud pf"])
-    SINONIMOS_COLUMNAS.setdefault("Pb", ["pb", "backward wave", "onda retrograda", "onda retrógrada", "onda reflejada", "amplitud pb"])
-    for _col in ["Sexo", "cfPWV", "AIx", "Pf", "Pb"]:
-        if _col not in ORDEN_VARIABLES_INFORME:
-            ORDEN_VARIABLES_INFORME.append(_col)
-    DOMINIOS_METRICAS.setdefault("Mecánica pulsátil / edad vascular", ["cfPWV", "AIx", "Pf", "Pb"])
-except Exception:
-    pass
-
-try:
-    PATRONES_CLAVE.update({
-        "cf_pwv": r"(?:\bcf\s*[-_ ]?\s*pwv\b|\bcfpwv\b|\bpwv\s*cf\b|\bvop\s*cf\b|\bcf\s*[-_ ]?\s*vop\b|velocidad\s+(?:de\s+)?onda\s+(?:de\s+)?pulso\s+car[oó]tido\s*[- ]?\s*femoral|carotid\s*[- ]?\s*femoral\s+pulse\s+wave\s+velocity)",
-        "aix": r"(?:\ba\s*i\s*x\b|\baix\b|augmentation\s+index|[ií]ndice\s+de\s+aumento|[ií]ndice\s+de\s+aumentaci[oó]n)",
-        "pf": r"(?:\bpf\b|forward\s+wave|onda\s+anter[oó]grada|onda\s+incidente|amplitud\s+(?:de\s+)?onda\s+anter[oó]grada)",
-        "pb": r"(?:\bpb\b|backward\s+wave|onda\s+retr[oó]grada|onda\s+reflejada|amplitud\s+(?:de\s+)?onda\s+retr[oó]grada)",
-    })
-    for _v in ["cf_pwv", "aix", "pf", "pb"]:
-        if _v not in CLAVES_NUMERICAS:
-            CLAVES_NUMERICAS.append(_v)
-except Exception:
-    pass
-
-# Tabla 3 del paper LEAD 2024. M y S son funciones de edad; L es constante por sexo.
-# En AIx se aplica el desplazamiento +100 para mantener valores positivos antes de LMS.
-LEAD_LMS_PULSATIL = {
-    "cf_pwv": {
-        "female": {"M": lambda age: math.exp(1.705 + 0.0073 * age), "S": lambda age: math.exp(-2.140 + 0.0074 * age), "L": -0.7200, "offset": 0.0, "unidad": "m/s", "nombre": "cfPWV"},
-        "male":   {"M": lambda age: math.exp(1.769 + 0.0070 * age), "S": lambda age: math.exp(-2.046 + 0.0058 * age), "L": -0.6307, "offset": 0.0, "unidad": "m/s", "nombre": "cfPWV"},
-    },
-    "aix": {
-        "female": {"M": lambda age: math.exp(3.976 + 0.2266 * math.log(age)), "S": lambda age: math.exp(-1.273 - 0.3239 * math.log(age)), "L": 1.6943, "offset": 100.0, "unidad": "%", "nombre": "AIx"},
-        "male":   {"M": lambda age: math.exp(3.815 + 0.2485 * math.log(age)), "S": lambda age: math.exp(-1.025 - 0.3617 * math.log(age)), "L": 1.0469, "offset": 100.0, "unidad": "%", "nombre": "AIx"},
-    },
-    "pf": {
-        "female": {"M": lambda age: math.exp(2.980 + 0.00548 * age), "S": lambda age: math.exp(-1.576 + 0.0035 * age), "L": 0.3488, "offset": 0.0, "unidad": "mmHg", "nombre": "Pf"},
-        "male":   {"M": lambda age: math.exp(3.133 + 0.0030 * age), "S": lambda age: math.exp(-1.382 - 0.0003 * age), "L": 0.1310, "offset": 0.0, "unidad": "mmHg", "nombre": "Pf"},
-    },
-    "pb": {
-        "female": {"M": lambda age: math.exp(1.998 + 0.0157 * age), "S": lambda age: math.exp(-1.371 + 0.0016 * age), "L": 0.3678, "offset": 0.0, "unidad": "mmHg", "nombre": "Pb"},
-        "male":   {"M": lambda age: math.exp(2.078 + 0.01258 * age), "S": lambda age: math.exp(-1.200 - 0.0011 * age), "L": 0.1720, "offset": 0.0, "unidad": "mmHg", "nombre": "Pb"},
-    },
-}
-
-
-def normalizar_sexo_lms(valor: Any) -> Optional[str]:
-    t = normalizar_txt(valor)
-    if not t:
-        return None
-    if re.search(r"\b(f|fem|femenino|mujer|female|woman)\b", t):
-        return "female"
-    if re.search(r"\b(m|masc|masculino|varon|varón|male|man)\b", t):
-        return "male"
-    return None
-
-
-def percentil_desde_z(z: float) -> float:
-    return 100.0 * (0.5 * (1.0 + math.erf(float(z) / math.sqrt(2.0))))
-
-
-def calcular_z_lms_pulsatil(metrica: str, valor: Any, edad: Any, sexo: Any) -> Optional[Dict[str, Any]]:
-    """Calcula z-score y percentil LMS para cfPWV, AIx, Pf y Pb.
-
-    Fórmula: z = (((Y/M)^L)-1)/(L*S), o z = ln(Y/M)/S si L=0.
-    Para AIx se usa Y = AIx + 100, como indica el paper LEAD.
-    """
-    metrica = str(metrica).lower().replace("cfpwv", "cf_pwv").replace("cf-pwv", "cf_pwv")
-    v = limpiar_numero(valor)
-    age = limpiar_numero(edad)
-    sex = normalizar_sexo_lms(sexo)
-    if metrica not in LEAD_LMS_PULSATIL or v is None or age is None or sex is None:
-        return None
-    if not (18 <= age <= 90):
-        return None
-    pars = LEAD_LMS_PULSATIL[metrica][sex]
-    y = v + float(pars.get("offset", 0.0))
-    if y <= 0:
-        return None
-    L = float(pars["L"])
-    M = float(pars["M"](age))
-    S = float(pars["S"](age))
-    if M <= 0 or S <= 0:
-        return None
-    if abs(L) < 1e-12:
-        z = math.log(y / M) / S
-    else:
-        z = ((y / M) ** L - 1.0) / (L * S)
-    p = percentil_desde_z(z)
-    if z >= 1.2816:
-        categoria = "Elevado para edad y sexo (≥ percentil 90)"
-        semaforo = "ROJO"
-    elif z <= -1.2816:
-        categoria = "Inferior al promedio poblacional / envejecimiento vascular favorable (≤ percentil 10)"
-        semaforo = "VERDE"
-    else:
-        categoria = "Esperado para edad y sexo (percentil 10-90)"
-        semaforo = "VERDE"
-    return {
-        "metrica": pars.get("nombre", metrica), "valor": v, "edad": age, "sexo": sex,
-        "L": L, "M": M, "S": S, "z": z, "percentil": p,
-        "categoria": categoria, "semaforo": semaforo, "unidad": pars.get("unidad", ""),
-    }
-
-
-def estimar_edad_vascular_lms(metrica: str, valor: Any, sexo: Any, edad_min: int = 18, edad_max: int = 90) -> Optional[float]:
-    metrica = str(metrica).lower().replace("cfpwv", "cf_pwv").replace("cf-pwv", "cf_pwv")
-    v = limpiar_numero(valor)
-    sex = normalizar_sexo_lms(sexo)
-    if metrica not in LEAD_LMS_PULSATIL or v is None or sex is None:
-        return None
-    pars = LEAD_LMS_PULSATIL[metrica][sex]
-    objetivo = v + float(pars.get("offset", 0.0))
-    if objetivo <= 0:
-        return None
-    mejor_edad, mejor_error = None, float("inf")
-    # Búsqueda fina cada 0,1 años contra la mediana M(edad).
-    for i in range(int((edad_max - edad_min) * 10) + 1):
-        age = edad_min + i / 10.0
-        try:
-            pred = float(pars["M"](age))
-            err = abs(pred - objetivo)
-            if err < mejor_error:
-                mejor_error, mejor_edad = err, age
-        except Exception:
-            pass
-    return mejor_edad
-
-
-def extraer_metricas_pulsatiles_desde_resumen(r: Dict[str, Any]) -> Dict[str, Any]:
-    edad = r.get("edad")
-    sexo = r.get("sexo") or r.get("Sexo")
-    out: Dict[str, Any] = {}
-    for key in ["cf_pwv", "aix", "pf", "pb"]:
-        zinfo = calcular_z_lms_pulsatil(key, r.get(key), edad, sexo)
-        if zinfo:
-            out[f"{key}_z"] = round(zinfo["z"], 3)
-            out[f"{key}_percentil"] = round(zinfo["percentil"], 1)
-            out[f"{key}_categoria_lms"] = zinfo["categoria"]
-            ev = estimar_edad_vascular_lms(key, r.get(key), sexo)
-            if ev is not None:
-                out[f"{key}_edad_vascular"] = round(ev, 1)
-    return out
-
-
-def texto_metricas_pulsatiles_lms(r: Dict[str, Any]) -> str:
-    edad = r.get("edad")
-    sexo = r.get("sexo") or r.get("Sexo")
-    if limpiar_numero(edad) is None or normalizar_sexo_lms(sexo) is None:
-        return "Mecánica pulsátil LMS: para calcular z-score, percentil y edad vascular se requiere edad y sexo del paciente."
-    lineas = []
-    for key, label in [("cf_pwv", "cfPWV"), ("aix", "AIx"), ("pf", "Pf"), ("pb", "Pb")]:
-        val = r.get(key)
-        if limpiar_numero(val) is None:
-            continue
-        zinfo = calcular_z_lms_pulsatil(key, val, edad, sexo)
-        ev = estimar_edad_vascular_lms(key, val, sexo)
-        if not zinfo:
-            continue
-        ev_txt = f"; edad vascular estimada {ev:.1f} años" if ev is not None else ""
-        lineas.append(
-            f"- {label}: {fmt(val, 2, ' ' + zinfo.get('unidad',''))}; z={zinfo['z']:.2f}; "
-            f"percentil={zinfo['percentil']:.1f}; {zinfo['categoria']}{ev_txt}."
-        )
-    if not lineas:
-        return "Mecánica pulsátil LMS: no se detectaron cfPWV, AIx, Pf o Pb en los datos importados."
-    return "Mecánica pulsátil LMS según referencia LEAD 2024 (ajustada por edad y sexo):\n" + "\n".join(lineas)
-
-
-def _buscar_valor_df_canonico(df: pd.DataFrame, canon: str) -> Any:
-    try:
-        if df is None or df.empty:
-            return None
-        dfx = estandarizar_columnas_clinicas(df)
-        dsel = seleccionar_df_diagnostico(dfx)
-        if dsel is None or dsel.empty:
-            dsel = dfx
-        if canon in dsel.columns:
-            for v in dsel[canon].tolist()[::-1]:
-                if es_valor_util(v):
-                    return v
-        if canon in dfx.columns:
-            for v in dfx[canon].tolist()[::-1]:
-                if es_valor_util(v):
-                    return v
-    except Exception:
-        pass
-    return None
-
-try:
-    _referencia_metrica_pre_lms = referencia_metrica
-    def referencia_metrica(nombre: str) -> Optional[Tuple[float, float, str]]:
-        n = normalizar_txt(nombre).replace(" ", "").replace("_", "")
-        refs_lms = {
-            "cfpwv": (0.0, 10.0, "m/s"), "cf-pwv": (0.0, 10.0, "m/s"),
-            "aix": (-30.0, 40.0, "%"), "pf": (0.0, 80.0, "mmHg"), "pb": (0.0, 50.0, "mmHg"),
-        }
-        if n in refs_lms:
-            return refs_lms[n]
-        return _referencia_metrica_pre_lms(nombre)
-except Exception:
-    pass
-
-try:
-    _extraer_resumen_integrado_pre_lms = extraer_resumen_integrado
-    def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
-        r = _extraer_resumen_integrado_pre_lms(df)
-        if not isinstance(r, dict):
-            r = {}
-        # Datos demográficos y métricas pulsátiles.
-        sexo = _buscar_valor_df_canonico(df, "Sexo")
-        if es_valor_util(sexo):
-            r["sexo"] = sexo
-        for canon, key in [("cfPWV", "cf_pwv"), ("AIx", "aix"), ("Pf", "pf"), ("Pb", "pb")]:
-            val = _buscar_valor_df_canonico(df, canon)
-            if limpiar_numero(val) is not None:
-                r[key] = limpiar_numero(val)
-        r.update(extraer_metricas_pulsatiles_desde_resumen(r))
-        return r
-except Exception:
-    pass
-
-try:
-    _metricas_por_dominio_pre_lms = metricas_por_dominio
-    def metricas_por_dominio(r: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
-        out = _metricas_por_dominio_pre_lms(r)
-        puls = []
-        for key, var in [("cf_pwv", "cfPWV"), ("aix", "AIx"), ("pf", "Pf"), ("pb", "Pb")]:
-            val = r.get(key)
-            if limpiar_numero(val) is None:
-                continue
-            z = r.get(f"{key}_z")
-            pct = r.get(f"{key}_percentil")
-            cat = r.get(f"{key}_categoria_lms") or "Métrica pulsátil disponible"
-            estado = str(cat).upper()
-            color = "#EF4444" if "ELEVADO" in estado else "#10B981"
-            unidad = LEAD_LMS_PULSATIL[key]["female"].get("unidad", "")
-            puls.append({
-                "variable": var,
-                "valor": val,
-                "referencia_baja": None,
-                "referencia_alta": None,
-                "unidad": unidad,
-                "estado": f"{cat}" + (f"; z={z}; p={pct}" if z is not None and pct is not None else ""),
-                "color": color,
-                "zona": "alto" if "ELEVADO" in estado else "normal",
-                "score": None,
-            })
-        if puls:
-            out["Mecánica pulsátil / edad vascular"] = puls
-        return out
-except Exception:
-    pass
-
-try:
-    _generar_informe_texto_pre_lms = generar_informe_texto
-    def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> str:
-        base = _generar_informe_texto_pre_lms(df, contexto_embarazo)
-        r = extraer_resumen_integrado(df)
-        bloque_lms = texto_metricas_pulsatiles_lms(r)
-        if "Mecánica pulsátil LMS" in str(base):
-            return base
-        return str(base).rstrip() + "\n\n11. Base de conocimiento agregada: mecánica pulsátil, z-score y edad vascular\n" + bloque_lms
-except Exception:
-    pass
-
 # =========================================================
 # INTERFAZ
 # =========================================================
@@ -8712,8 +8516,6 @@ if normalizar_obra_social(obra_social_manual):
     r = extraer_resumen_integrado(df_final)
 elif str(obra_social_manual).strip():
     st.warning("El campo Obra social contiene un dato técnico o inválido. Ingrese la cobertura médica real o deje el campo vacío.")
-st.subheader(TITULO_MODULO_NO_EMBARAZADA)
-
 # Detección automática desde diagnóstico/texto del PDF.
 # Ejemplo: "HTA EMB S20" = embarazada + probable HTA + semana 20.
 embarazo_detectado = detectar_contexto_embarazo_desde_texto(texto_total_dataframe(df_final))
@@ -8771,6 +8573,7 @@ _es_embarazo_ui = bool(contexto_embarazo.get("embarazada"))
 
 if not _es_embarazo_ui:
     # ── MÓDULO CLÍNICO ────────────────────────────────────────────────────────
+    st.subheader(TITULO_MODULO_NO_EMBARAZADA)
     graf_fenotipo_ui = crear_grafico_fenotipado_dinamico_bytes(r_panel, df_final)
     if graf_fenotipo_ui is not None:
         st.subheader("Fenotipado clínico automatizado")
