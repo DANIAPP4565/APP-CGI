@@ -399,20 +399,31 @@ def numeros_en_texto(texto: Any) -> List[float]:
 # IC ESTRICTO: nunca importar dZ/dt MAX, ITC, IV, IAC, IH u otra métrica como IC
 # =========================================================
 
-def es_fuente_ic_prohibida(texto: Any) -> bool:
-    """Bloquea fuentes que no son Índice Cardíaco.
 
-    Objetivo clínico: IC debe venir solamente de IC / Índice Cardíaco / Cardiac Index.
-    No se acepta dZ/dt MAX, ITC, IV, IAC, IH, DS/IDS, CFT, CA, RVS/IRV ni variables por posición de tabla.
+def es_fuente_ic_prohibida(texto: Any) -> bool:
+    """Bloquea fuentes que NO pueden alimentar IC cuando no existe etiqueta IC explícita.
+
+    Importante: una tabla puede contener varios encabezados en la misma línea
+    (IC, IRV, CA, etc.). En ese caso NO se debe bloquear IC por la presencia
+    de otras etiquetas: se debe mapear por columna. Solo se bloquea si la línea
+    contiene una fuente prohibida y no contiene una etiqueta explícita de IC/CI.
     """
     t = normalizar_txt(texto)
     t2 = re.sub(r"[^a-z0-9/]+", " ", t).strip()
-    patrones = [
+    tiene_ic_explicito = bool(re.search(r"(?<![a-z0-9])(?:ic|ci)(?![a-z0-9])|indice\s+cardiaco|cardiac\s+index", t2, re.IGNORECASE))
+    patrones_duros = [
         r"\bdz\s*/?\s*dt\b", r"\bdzdt\b", r"\bd\s*z\s*/\s*d\s*t\b", r"max\s+dz", r"dz\s*dt\s*max",
         r"\bitc\b", r"indice\s+(?:de\s+)?trabajo\s+cardiaco", r"trabajo\s+cardiaco",
         r"\biv\b", r"indice\s+(?:de\s+)?velocidad", r"velocity\s+index",
         r"\biac\b", r"\baci\b", r"indice\s+(?:de\s+)?aceleracion", r"acceleration\s+index",
         r"\bih\b", r"indice\s+(?:de\s+)?heather", r"heather",
+    ]
+    if tiene_ic_explicito:
+        # Si hay IC explícito, se permite la línea para extracción por etiqueta/columna,
+        # excepto cuando el único contexto es una expresión prohibida tipo dZ/dt o ITC.
+        # El mapeo por columna resolverá qué número corresponde a IC.
+        return False
+    patrones_contexto = patrones_duros + [
         r"\bcft\b", r"\btfc\b", r"contenido\s+(?:de\s+)?fluidos",
         r"\birv\b", r"\brvs\b", r"\bsvr\b", r"resistencia\s+vascular",
         r"\bca\b", r"complacencia\s+arterial", r"arterial\s+compliance",
@@ -420,23 +431,27 @@ def es_fuente_ic_prohibida(texto: Any) -> bool:
         r"\bz0\b", r"impedancia\s+basal",
         r"\bfc\b", r"frecuencia\s+cardiaca", r"heart\s+rate",
     ]
-    return any(re.search(p, t2, flags=re.IGNORECASE) for p in patrones)
+    return any(re.search(pat, t2, flags=re.IGNORECASE) for pat in patrones_contexto)
 
 
 def es_etiqueta_ic_explicita(texto: Any) -> bool:
-    """Acepta únicamente etiquetas explícitas de Índice Cardíaco."""
-    if es_fuente_ic_prohibida(texto):
-        return False
+    """Acepta IC solo si existe etiqueta explícita IC/CI/Índice cardíaco/Cardiac Index.
+
+    Esto permite una línea de encabezados múltiples como "IC IRV CA CFT",
+    pero impide que IV, IAC, IH, ITC o dZ/dt sean interpretados como IC.
+    """
     t = normalizar_txt(texto)
     t2 = re.sub(r"[^a-z0-9/]+", " ", t).strip()
-    patrones_ic = [
-        r"(?<![a-z0-9])ic(?![a-z0-9])",
-        r"(?<![a-z0-9])ci(?![a-z0-9])",
-        r"indice\s+cardiaco",
-        r"index\s+cardiaco",
-        r"cardiac\s+index",
-    ]
-    return any(re.search(p, t2, flags=re.IGNORECASE) for p in patrones_ic)
+    # Prohibiciones absolutas si NO hay token IC/CI independiente.
+    tiene_token_ic = bool(re.search(r"(?<![a-z0-9])ic(?![a-z0-9])", t2, re.IGNORECASE))
+    tiene_token_ci = bool(re.search(r"(?<![a-z0-9])ci(?![a-z0-9])", t2, re.IGNORECASE))
+    tiene_nombre_largo = bool(re.search(r"indice\s+cardiaco|cardiac\s+index", t2, re.IGNORECASE))
+    if not (tiene_token_ic or tiene_token_ci or tiene_nombre_largo):
+        return False
+    # Si la línea solo menciona una métrica prohibida sin IC independiente, no aceptar.
+    if re.search(r"\bdz\s*/?\s*dt\b|\bdzdt\b|\bitc\b|trabajo\s+cardiaco", t2, re.IGNORECASE) and not (tiene_token_ic or tiene_token_ci or tiene_nombre_largo):
+        return False
+    return True
 
 
 def extraer_ic_estricto_de_texto(texto: Any) -> Optional[float]:
@@ -1142,30 +1157,105 @@ def aplicar_fallback_regex_global(lineas: List[str], filas: List[Dict[str, Any]]
                 break
 
 
+
+def _claves_posiciones_tabla(linea: str) -> List[Tuple[int, str]]:
+    """Devuelve claves de encabezado ordenadas por su posición real en la línea.
+
+    La versión previa usaba un orden fijo de variables. Eso podía desplazar los
+    valores de una columna a otra. Esta función permite mapear IC→IC, IRV→IRV,
+    CA→CA, etc., respetando el orden real del PDF.
+    """
+    txt = str(linea)
+    encontrados: List[Tuple[int, str]] = []
+    specs = [
+        ("cftnr", PATRONES_CLAVE.get("cftnr")),
+        ("cft", PATRONES_CLAVE.get("cft")),
+        ("ih", PATRONES_CLAVE.get("ih")),
+        ("iac", PATRONES_CLAVE.get("iac")),
+        ("cts", PATRONES_CLAVE.get("cts")),
+        ("fc", PATRONES_CLAVE.get("fc")),
+        ("vm", PATRONES_CLAVE.get("vm")),
+        ("ic", PATRONES_CLAVE.get("ic")),
+        ("irv", PATRONES_CLAVE.get("irv")),
+        ("rvs", PATRONES_CLAVE.get("rvs")),
+        ("ca", PATRONES_CLAVE.get("ca")),
+        ("iv", PATRONES_CLAVE.get("iv")),
+        ("ea", PATRONES_CLAVE.get("ea")),
+        ("ees", PATRONES_CLAVE.get("ees")),
+        ("ava", PATRONES_CLAVE.get("ava")),
+        ("ids", PATRONES_CLAVE.get("ids")),
+        ("ds", PATRONES_CLAVE.get("ds")),
+        ("z0", PATRONES_CLAVE.get("z0")),
+    ]
+    for clave, pat in specs:
+        if not pat:
+            continue
+        for m in re.finditer(pat, txt, flags=re.IGNORECASE):
+            # IC solo si es etiqueta explícita y no parte de IV/IAC/IH/ITC/dZdt.
+            if clave == "ic" and not es_etiqueta_ic_explicita(m.group(0)):
+                continue
+            encontrados.append((m.start(), clave))
+            break
+    encontrados.sort(key=lambda x: x[0])
+
+    # Resolver solapamientos frecuentes por nombres incluidos dentro de otros.
+    claves = [k for _, k in encontrados]
+    if "cftnr" in claves and "cft" in claves:
+        # Si CFT queda contenido en CFTnr, eliminar CFT salvo que aparezca como otro encabezado independiente.
+        txt_sin_cftnr = re.sub(PATRONES_CLAVE["cftnr"], " ", txt, flags=re.IGNORECASE)
+        if not re.search(PATRONES_CLAVE["cft"], txt_sin_cftnr, flags=re.IGNORECASE):
+            encontrados = [(p, k) for p, k in encontrados if k != "cft"]
+    claves = [k for _, k in encontrados]
+    if "ids" in claves and "ds" in claves:
+        txt_sin_ids = re.sub(PATRONES_CLAVE["ids"], " ", txt, flags=re.IGNORECASE)
+        if not re.search(PATRONES_CLAVE["ds"], txt_sin_ids, flags=re.IGNORECASE):
+            encontrados = [(p, k) for p, k in encontrados if k != "ds"]
+    claves = [k for _, k in encontrados]
+    if "irv" in claves and "rvs" in claves:
+        txt_sin_irv = re.sub(PATRONES_CLAVE["irv"], " ", txt, flags=re.IGNORECASE)
+        if not re.search(PATRONES_CLAVE["rvs"], txt_sin_irv, flags=re.IGNORECASE):
+            encontrados = [(p, k) for p, k in encontrados if k != "rvs"]
+
+    # Quitar duplicados conservando el primero por posición.
+    out: List[Tuple[int, str]] = []
+    vistos = set()
+    for pos, clave in encontrados:
+        if clave not in vistos:
+            out.append((pos, clave))
+            vistos.add(clave)
+    return out
+
+
 def aplicar_extraccion_tablas(lineas: List[str], filas: List[Dict[str, Any]]) -> None:
-    """Detecta líneas con varias etiquetas y una fila de valores siguiente."""
+    """Detecta tablas con encabezados y fila de valores siguiente, respetando columnas reales.
+
+    Corrección crítica: IC ya no se excluye de las tablas. Se mapea por posición
+    de encabezado explícito, de modo que IC se carga desde la columna IC y no desde
+    dZ/dt MAX, IV, IAC, IH u otra variable cercana.
+    """
     for i, linea in enumerate(lineas[:-1]):
-        claves = [k for k in claves_en_linea_robusto(linea) if k in CLAVES_NUMERICAS and k not in ["pas_pad", "ic"]]
-        # Quitar duplicados manteniendo orden.
-        claves = list(dict.fromkeys(claves))
+        claves_pos = _claves_posiciones_tabla(linea)
+        claves = [k for _, k in claves_pos if k in CLAVES_NUMERICAS and k != "pas_pad"]
         if len(claves) < 2:
             continue
-        bloque_valores = " ".join(lineas[i+1:i+4])
-        nums = numeros_en_texto(bloque_valores)
-        if len(nums) < 2:
-            continue
-        pos = 0
-        for clave in claves:
-            elegido = None
-            while pos < len(nums):
-                cand = nums[pos]
-                pos += 1
+        # Buscar la primera línea posterior con suficientes números; no asumir solo la inmediata.
+        for j in range(i + 1, min(i + 5, len(lineas))):
+            nums = numeros_en_texto(lineas[j])
+            # Evitar líneas que son otro encabezado sin datos.
+            if len(nums) < max(2, min(len(claves), 3)):
+                continue
+            # Mapear por orden real. Si hay más números que claves, tomar los últimos len(claves)
+            # cuando la línea parece contener rangos previos; si coincide en cantidad, tomar directo.
+            if len(nums) >= len(claves):
+                vals = nums[:len(claves)]
+            else:
+                vals = nums
+            for clave, cand in zip(claves, vals):
                 if rango_plausible(clave, cand):
                     elegido = limpiar_valor_cts(cand) if clave == "cts" else cand
-                    break
-            if elegido is not None:
-                var = clave.upper() if clave != "ava" else "AVA"
-                agregar_si_util(filas, var, elegido, linea)
+                    var = clave.upper() if clave != "ava" else "AVA"
+                    agregar_si_util(filas, var, elegido, f"tabla columnas: {linea} | valores: {lineas[j]}")
+            break
 
 def _detectar_separador_posicion(lineas: List[str]) -> Optional[int]:
     """Detecta el índice de la línea que marca el inicio del bloque DE PIE en el texto.
@@ -1296,6 +1386,88 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
 
     archivo_origen = str(registros[0].get("archivo_origen", "")).strip()
     lineas = [str(r.get("texto_extraido", "")).strip() for r in registros if str(r.get("texto_extraido", "")).strip()]
+
+    # -----------------------------------------------------------------------
+    # DETECCIÓN POR PÁGINAS PARA INFORMES Z-LOGIC DE 4 HOJAS
+    # En este formato, los valores de DE PIE pueden estar en la hoja 3/4 sin
+    # un separador textual compacto. Por eso se parsea por página antes de
+    # intentar la separación lineal. Hoja 1-2 = basal/acostado/CINTA; hoja 3 = de pie.
+    # -----------------------------------------------------------------------
+    paginas: Dict[int, List[str]] = {}
+    for r in registros:
+        try:
+            pnum = int(r.get("pagina_pdf") or 0)
+        except Exception:
+            pnum = 0
+        txt = str(r.get("texto_extraido", "")).strip()
+        if txt:
+            paginas.setdefault(pnum, []).append(txt)
+    paginas = {k: v for k, v in paginas.items() if k > 0 and v}
+    total_paginas = max(paginas.keys()) if paginas else 0
+
+    def _bloque_tiene_datos_hemodinamicos(b: Dict[str, Any]) -> bool:
+        res = b.get("resumen", {}) if isinstance(b, dict) else {}
+        return any(es_valor_util(res.get(k)) for k in ["IC", "IRV", "RVS", "FC", "PAS", "PAD", "CFT", "CA"])
+
+    def _construir_fila_desde_bloque(bloque: Dict[str, Any], paciente_archivo: Optional[str], pos_forzada: str, origen_txt: str) -> Dict[str, Any]:
+        res = bloque["resumen"]
+        ctx = bloque["contexto"]
+        fecha_e = formatear_fecha_ddmmyyyy(res.get("FECHA_ESTUDIO") or res.get("FECHA"))
+        fecha_n = formatear_fecha_ddmmyyyy(res.get("FECHA_NACIMIENTO"))
+        if fecha_e and fecha_n and parsear_fecha(fecha_e) == parsear_fecha(fecha_n):
+            fecha_e = None
+        edad_c = calcular_edad_desde_fechas(fecha_n, fecha_e)
+        edad_f = edad_c if edad_c is not None else res.get("EDAD")
+        ava_b = res.get("AVA")
+        if limpiar_numero(ava_b) is None and limpiar_numero(res.get("EA")) is not None and limpiar_numero(res.get("EES")) not in [None, 0]:
+            ava_b = limpiar_numero(res.get("EA")) / limpiar_numero(res.get("EES"))
+        return {
+            "Paciente": normalizar_nombre_paciente(res.get("PACIENTE")) or normalizar_nombre_paciente(paciente_archivo) or "No disponible",
+            "DNI": sanitizar_dni(res.get("DNI")),
+            "Obra_Social": res.get("OBRA_SOCIAL"),
+            "Edad": edad_f,
+            "Fecha_Estudio": fecha_e,
+            "Fecha_Nacimiento": fecha_n,
+            "Diagnóstico": ctx.get("Diagnóstico"),
+            "Medicación": ctx.get("Medicación"),
+            "Posición": pos_forzada,
+            "Texto_PDF": ctx.get("Texto_PDF"),
+            "PAS": res.get("PAS"), "PAD": res.get("PAD"), "FC": res.get("FC"), "IC": res.get("IC"),
+            "IRV": res.get("IRV"), "RVS": res.get("RVS"), "CA": res.get("CA"),
+            "CFT": res.get("CFT"), "CFTnr": res.get("CFTNR"),
+            "IH": res.get("IH"), "IV": res.get("IV"), "IAC": res.get("IAC"), "CTS": res.get("CTS"),
+            "EA": res.get("EA"), "EES": res.get("EES"), "EA/EES": ava_b,
+            "DS": res.get("DS"), "IDS": res.get("IDS"), "Z0": res.get("Z0"),
+            "origen_parser": origen_txt,
+        }
+
+    pac_archivo_pag = None
+    if archivo_origen:
+        pac_archivo_pag = re.sub("[.]pdf$", "", archivo_origen, flags=re.IGNORECASE)
+        pac_archivo_pag = re.sub("[-_]*logic[0-9]*", "", pac_archivo_pag, flags=re.IGNORECASE)
+        pac_archivo_pag = re.sub(r"\d{2}[-/]\d{2}[-/]\d{2,4}", "", pac_archivo_pag, flags=re.IGNORECASE)
+        pac_archivo_pag = re.sub(r"\b(CGI|ObraSocial|informe|integrado|SD|basal|acostado|de\s*pie|spot|cinta|Z[-\s]?Logic)\b", "", pac_archivo_pag, flags=re.IGNORECASE)
+        pac_archivo_pag = pac_archivo_pag.replace("_", " ").replace("-", " ").strip()
+        if re.search(r"\bpulsos?\b|\blpm\b|\bmin\b", pac_archivo_pag, re.IGNORECASE):
+            pac_archivo_pag = None
+
+    if total_paginas >= 4 and 3 in paginas:
+        lineas_ac_pag = []
+        for pn in sorted(paginas):
+            if pn in [1, 2]:
+                lineas_ac_pag.extend(paginas[pn])
+        lineas_pie_pag = list(paginas.get(3, []))
+        if lineas_ac_pag and lineas_pie_pag:
+            bloque_ac_pag = _parsear_bloque_lineas(lineas_ac_pag, archivo_origen, posicion_forzada="acostado")
+            bloque_pie_pag = _parsear_bloque_lineas(lineas_pie_pag, archivo_origen, posicion_forzada="de pie")
+            if _bloque_tiene_datos_hemodinamicos(bloque_pie_pag):
+                filas_out = []
+                if _bloque_tiene_datos_hemodinamicos(bloque_ac_pag):
+                    filas_out.append(_construir_fila_desde_bloque(bloque_ac_pag, pac_archivo_pag, "acostado", "PDF Z-Logic 4 hojas — páginas 1-2 ACOSTADO/CINTA"))
+                filas_out.append(_construir_fila_desde_bloque(bloque_pie_pag, pac_archivo_pag, "de pie", "PDF Z-Logic 4 hojas — página 3 DE PIE"))
+                df_final = pd.DataFrame(filas_out)
+                df_final.attrs = {}
+                return df_final
 
     # -----------------------------------------------------------------------
     # DETECCIÓN DE DOS BLOQUES DE POSICIÓN EN UN ÚNICO PDF
@@ -8567,515 +8739,6 @@ def agregar_capturas_originales_reportlab_story(story, ancho: float, max_captura
     except Exception:
         pass
 
-
-# =========================================================
-# OVERRIDE FINAL V50 - POSICIONES Y VARIABLES SIN MEZCLA
-# Objetivo clínico:
-# - ACOSTADO/CINTA = referencia basal diagnóstica.
-# - DE PIE = respuesta ortostática.
-# - Ninguna variable de DE PIE puede reemplazar a ACOSTADO/CINTA.
-# - Ninguna variable de ACOSTADO/CINTA puede reemplazar a DE PIE.
-# - Comportamiento ortostático fisiológico esperado: IC baja e IRV/RVS aumenta.
-# =========================================================
-
-VARIABLES_HEMO_POSICION_V50 = [
-    "PAS", "PAD", "FC", "IC", "IRV", "RVS", "CA", "CFT", "CFTnr",
-    "IH", "IV", "IAC", "CTS", "EA", "EES", "EA/EES", "DS", "IDS", "Z0"
-]
-
-
-def _texto_posicion_confiable_v50(fila: Dict[str, Any]) -> str:
-    """Usa solo campos confiables para posición/método, sin Texto_PDF global."""
-    partes = []
-    for col in ["Posición", "origen_parser", "origen"]:
-        if col in fila and es_valor_util(fila.get(col)):
-            partes.append(str(fila.get(col)))
-    return " | ".join(partes)
-
-
-def _indice_origen_archivo_v50(fila: Dict[str, Any]) -> Optional[int]:
-    txt = normalizar_txt(" | ".join(str(fila.get(c, "")) for c in ["origen", "origen_parser", "Posición"] if c in fila))
-    m = re.search(r"archivo\s*(\d+)", txt)
-    if m:
-        try:
-            return int(m.group(1))
-        except Exception:
-            return None
-    return None
-
-
-def preparar_df_posiciones_seguro_v50(df: pd.DataFrame) -> pd.DataFrame:
-    """Normaliza posiciones sin mezclar filas.
-
-    Reglas:
-    1. Si una fila dice explícitamente DE PIE/bipedestación/ortostatismo, es DE PIE.
-    2. Si una fila dice ACOSTADO/DECÚBITO/BASAL/CINTA, es ACOSTADO.
-    3. Si se suben dos archivos y la posición no está clara, Archivo 1 = ACOSTADO/CINTA
-       y Archivo 2 = DE PIE, porque ese es el flujo clínico de la app.
-    4. Si hay dos filas sin reconocimiento suficiente, primera fila = ACOSTADO/CINTA,
-       última fila = DE PIE.
-    5. Nunca se usa Texto_PDF global para decidir posición, porque puede contener leyendas
-       o comparaciones que nombran ambas posiciones.
-    """
-    if df is None or df.empty:
-        return pd.DataFrame()
-    dfx = estandarizar_columnas_clinicas(df).copy().reset_index(drop=True)
-    dfx["__orden_original"] = range(len(dfx))
-
-    posiciones = []
-    metodos = []
-    for _, fila in dfx.iterrows():
-        d = fila.to_dict()
-        txt = _texto_posicion_confiable_v50(d)
-        pos = normalizar_posicion_estudio(txt)
-        metodo = normalizar_metodo_estudio(txt)
-        # Fallback por número de archivo cuando no hay etiqueta explícita confiable.
-        idx = _indice_origen_archivo_v50(d)
-        if pos == "no_reconocida":
-            if idx == 1:
-                pos = "acostado"
-            elif idx == 2:
-                pos = "de_pie"
-        if metodo == "no_reconocido":
-            # En este flujo, el primer estudio diagnóstico es CINTA basal/acostada.
-            if pos == "acostado" or idx == 1:
-                metodo = "cinta"
-        posiciones.append(pos)
-        metodos.append(metodo)
-
-    dfx["Posición_reconocida"] = posiciones
-    dfx["Método_reconocido"] = metodos
-
-    # Fallback fuerte si aún no hay par comparativo y hay al menos dos filas.
-    if len(dfx) >= 2:
-        tiene_ac = (dfx["Posición_reconocida"] == "acostado").any()
-        tiene_pie = (dfx["Posición_reconocida"] == "de_pie").any()
-        if not tiene_ac:
-            dfx.loc[dfx.index[0], "Posición_reconocida"] = "acostado"
-            if dfx.loc[dfx.index[0], "Método_reconocido"] == "no_reconocido":
-                dfx.loc[dfx.index[0], "Método_reconocido"] = "cinta"
-        if not tiene_pie:
-            dfx.loc[dfx.index[-1], "Posición_reconocida"] = "de_pie"
-        # Si por error quedaron todas de pie, corregir primera como basal.
-        if (dfx["Posición_reconocida"] == "de_pie").all():
-            dfx.loc[dfx.index[0], "Posición_reconocida"] = "acostado"
-            dfx.loc[dfx.index[0], "Método_reconocido"] = "cinta"
-        # Si por error quedaron todas acostado, corregir última como de pie.
-        if (dfx["Posición_reconocida"] == "acostado").all():
-            dfx.loc[dfx.index[-1], "Posición_reconocida"] = "de_pie"
-
-    if len(dfx) == 1 and dfx.loc[dfx.index[0], "Posición_reconocida"] == "no_reconocida":
-        dfx.loc[dfx.index[0], "Posición_reconocida"] = "acostado"
-        if dfx.loc[dfx.index[0], "Método_reconocido"] == "no_reconocido":
-            dfx.loc[dfx.index[0], "Método_reconocido"] = "cinta"
-
-    return dfx
-
-
-# Se reemplazan las funciones de detección para que toda la app use la misma regla segura.
-def detectar_posicion_fila(fila: Dict[str, Any]) -> str:
-    txt = _texto_posicion_confiable_v50(fila)
-    pos = normalizar_posicion_estudio(txt)
-    if pos == "no_reconocida":
-        idx = _indice_origen_archivo_v50(fila)
-        if idx == 1:
-            return "acostado"
-        if idx == 2:
-            return "de_pie"
-    return pos
-
-
-def detectar_metodo_fila(fila: Dict[str, Any]) -> str:
-    txt = _texto_posicion_confiable_v50(fila)
-    metodo = normalizar_metodo_estudio(txt)
-    if metodo == "no_reconocido":
-        idx = _indice_origen_archivo_v50(fila)
-        pos = detectar_posicion_fila(fila)
-        if idx == 1 or pos == "acostado":
-            return "cinta"
-    return metodo
-
-
-def _filas_con_reconocimiento_v13(df: pd.DataFrame) -> pd.DataFrame:
-    return preparar_df_posiciones_seguro_v50(df)
-
-
-def _valor_numerico_fila_v50(fila: pd.Series, variable: str) -> Optional[float]:
-    if fila is None:
-        return None
-    d = fila.to_dict() if hasattr(fila, "to_dict") else dict(fila)
-    equivalencias = {
-        "PAS": ["PAS", "pas"],
-        "PAD": ["PAD", "pad"],
-        "FC": ["FC", "fc", "Frecuencia Cardiaca", "heart rate"],
-        "IC": ["IC", "ic", "indice cardiaco", "índice cardíaco", "cardiac index", "CI"],
-        "IRV": ["IRV", "irv"],
-        "RVS": ["RVS", "rvs", "SVR"],
-        "CA": ["CA", "ca"],
-        "CFT": ["CFT", "cft"],
-        "CFTnr": ["CFTnr", "cftnr"],
-        "IH": ["IH", "ih"],
-        "IV": ["IV", "iv"],
-        "IAC": ["IAC", "iac", "ACI"],
-        "CTS": ["CTS", "cts"],
-        "EA": ["EA", "ea"],
-        "EES": ["EES", "ees"],
-        "EA/EES": ["EA/EES", "ava", "AVA"],
-        "DS": ["DS", "ds"],
-        "IDS": ["IDS", "ids"],
-        "Z0": ["Z0", "z0"],
-    }
-    valor = _valor_fila_case_insensitive(d, *equivalencias.get(variable, [variable]))
-    v = limpiar_numero(valor)
-    if v is None:
-        return None
-    # Validación de plausibilidad por variable para no arrastrar valores mal matcheados.
-    var_rango = "irv" if variable in ["IRV", "RVS"] else variable.lower()
-    if variable == "EA/EES":
-        var_rango = "ava"
-    if not rango_plausible(var_rango, v):
-        return None
-    return v
-
-
-def extraer_resumen_ortostatico_desde_fila(fila: pd.Series) -> Dict[str, Any]:
-    """Extrae métricas exclusivamente desde UNA fila real ya reconocida por posición."""
-    d = fila.to_dict()
-    irv = _valor_numerico_fila_v50(fila, "IRV")
-    if irv is None:
-        irv = _valor_numerico_fila_v50(fila, "RVS")
-    return {
-        "paciente": _valor_fila_case_insensitive(d, "Paciente", "paciente"),
-        "posicion": d.get("Posición_reconocida") or detectar_posicion_fila(d),
-        "metodo": d.get("Método_reconocido") or detectar_metodo_fila(d),
-        "pas": _valor_numerico_fila_v50(fila, "PAS"),
-        "pad": _valor_numerico_fila_v50(fila, "PAD"),
-        "fc": _valor_numerico_fila_v50(fila, "FC"),
-        "ic": _valor_numerico_fila_v50(fila, "IC"),
-        "irv": irv,
-        "ca": _valor_numerico_fila_v50(fila, "CA"),
-        "cft": _valor_numerico_fila_v50(fila, "CFT"),
-        "cftnr": _valor_numerico_fila_v50(fila, "CFTnr"),
-        "ih": _valor_numerico_fila_v50(fila, "IH"),
-        "iv": _valor_numerico_fila_v50(fila, "IV"),
-        "iac": _valor_numerico_fila_v50(fila, "IAC"),
-        "cts": _valor_numerico_fila_v50(fila, "CTS"),
-        "ea": _valor_numerico_fila_v50(fila, "EA"),
-        "ees": _valor_numerico_fila_v50(fila, "EES"),
-        "ava": _valor_numerico_fila_v50(fila, "EA/EES"),
-        "ds": _valor_numerico_fila_v50(fila, "DS"),
-        "ids": _valor_numerico_fila_v50(fila, "IDS"),
-        "z0": _valor_numerico_fila_v50(fila, "Z0"),
-    }
-
-
-def seleccionar_df_diagnostico(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame()
-    dfx = preparar_df_posiciones_seguro_v50(df)
-    if dfx.empty:
-        return pd.DataFrame()
-    # Referencia diagnóstica: primera fila ACOSTADO/CINTA o primera no-de-pie.
-    basal = dfx[(dfx["Posición_reconocida"] == "acostado") & (dfx["Método_reconocido"].isin(["cinta", "no_reconocido"]))]
-    if basal.empty:
-        basal = dfx[dfx["Posición_reconocida"] == "acostado"]
-    if basal.empty:
-        basal = dfx[dfx["Posición_reconocida"] != "de_pie"]
-    if basal.empty:
-        basal = dfx.iloc[[0]]
-    return basal.iloc[[0]].reset_index(drop=True)
-
-
-def seleccionar_df_de_pie(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return pd.DataFrame()
-    dfx = preparar_df_posiciones_seguro_v50(df)
-    pie = dfx[dfx["Posición_reconocida"] == "de_pie"]
-    if not pie.empty:
-        return pie.iloc[[-1]].reset_index(drop=True)
-    return pd.DataFrame()
-
-
-def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    if df is None or df.empty:
-        return {}, {}
-    dfx = preparar_df_posiciones_seguro_v50(df)
-    basal_df = seleccionar_df_diagnostico(dfx)
-    pie_df = seleccionar_df_de_pie(dfx)
-    r_basal = extraer_resumen_ortostatico_desde_fila(basal_df.iloc[0]) if not basal_df.empty else {}
-    r_pie = extraer_resumen_ortostatico_desde_fila(pie_df.iloc[-1]) if not pie_df.empty else {}
-    if r_basal:
-        r_basal["posicion"] = "acostado"
-        r_basal["metodo"] = r_basal.get("metodo") if r_basal.get("metodo") != "no_reconocido" else "cinta"
-    if r_pie:
-        r_pie["posicion"] = "de_pie"
-    return r_basal, r_pie
-
-
-def _buscar_en_df_v13(df: pd.DataFrame, columna: str, variable: str, desde_final: bool = True) -> Any:
-    if df is None or df.empty or columna not in df.columns:
-        return None
-    serie = df[columna].tolist()
-    if desde_final:
-        serie = serie[::-1]
-    for v in serie:
-        if valor_plausible_integracion_v13(variable, v):
-            return v
-    return None
-
-
-def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
-    """Resumen diagnóstico basado exclusivamente en ACOSTADO/CINTA para hemodinamia."""
-    if df is None or df.empty:
-        return {}
-    df_completo = preparar_df_posiciones_seguro_v50(df)
-    df_diag = seleccionar_df_diagnostico(df_completo)
-    if df_diag.empty:
-        return {}
-    fila = df_diag.iloc[0]
-    r_orto = extraer_resumen_ortostatico_desde_fila(fila)
-
-    textos_globales = []
-    for col in ["Diagnóstico", "Medicación", "Texto_PDF"]:
-        if col in df_completo.columns:
-            for v in df_completo[col].tolist():
-                if es_valor_util(v):
-                    textos_globales.append(str(v))
-
-    ea = r_orto.get("ea")
-    ees = r_orto.get("ees")
-    ava = r_orto.get("ava")
-    if limpiar_numero(ava) is None and limpiar_numero(ea) is not None and limpiar_numero(ees) not in [None, 0]:
-        ava = limpiar_numero(ea) / limpiar_numero(ees)
-
-    def ctx(col: str) -> Any:
-        # Demográficos/ficha: primero basal; si no está, cualquier fila no-de-pie; si no, global.
-        v = fila.get(col) if col in df_diag.columns else None
-        if es_valor_util(v):
-            return v
-        no_pie = df_completo[df_completo["Posición_reconocida"] != "de_pie"]
-        if col in no_pie.columns:
-            for vv in no_pie[col].tolist():
-                if es_valor_util(vv):
-                    return vv
-        if col in df_completo.columns:
-            for vv in df_completo[col].tolist():
-                if es_valor_util(vv):
-                    return vv
-        return None
-
-    fecha_est = ctx("Fecha_Estudio") or ctx("Fecha")
-    fecha_nac = ctx("Fecha_Nacimiento")
-    edad_calc = calcular_edad_desde_fechas(fecha_nac, fecha_est)
-
-    return {
-        "paciente": ctx("Paciente"),
-        "dni": sanitizar_dni(ctx("DNI")),
-        "obra_social": ctx("Obra_Social"),
-        "edad": edad_calc or ctx("Edad"),
-        "fecha": formatear_fecha_ddmmyyyy(fecha_est),
-        "fecha_nacimiento": formatear_fecha_ddmmyyyy(fecha_nac),
-        "posicion_referencia": "acostado",
-        "metodo_referencia": r_orto.get("metodo") or "cinta",
-        "regla_posicion": "Diagnóstico hemodinámico tomado solo de ACOSTADO/CINTA. DE PIE queda reservado para ortostatismo.",
-        "texto_global": " | ".join(textos_globales)[:20000] if textos_globales else None,
-        "pas": r_orto.get("pas") if r_orto.get("pas") is not None else limpiar_numero(ctx("PAS")),
-        "pad": r_orto.get("pad") if r_orto.get("pad") is not None else limpiar_numero(ctx("PAD")),
-        "fc": r_orto.get("fc"),
-        "ic": r_orto.get("ic"),
-        "irv": r_orto.get("irv"),
-        "ca": r_orto.get("ca"),
-        "cft": r_orto.get("cft"),
-        "cftnr": r_orto.get("cftnr"),
-        "ih": r_orto.get("ih"),
-        "iv": r_orto.get("iv"),
-        "iac": r_orto.get("iac"),
-        "cts": r_orto.get("cts"),
-        "ea": ea,
-        "ees": ees,
-        "ava": ava,
-        "ds": r_orto.get("ds"),
-        "ids": r_orto.get("ids"),
-        "z0": r_orto.get("z0"),
-        "df_de_pie_disponible": not seleccionar_df_de_pie(df_completo).empty,
-    }
-
-
-def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
-    r1, r2 = obtener_resumenes_ortostaticos(df)
-    resultado = {
-        "basal": r1,
-        "de_pie": r2,
-        "delta_ic": None,
-        "delta_irv": None,
-        "delta_fc": None,
-        "delta_pas": None,
-        "delta_pad": None,
-        "detalle": "",
-        "validacion_ortostatica": "NO EVALUABLE",
-        "alertas_ortostaticas": [],
-    }
-    pares = [
-        ("ic", "delta_ic", "IC", "L/min/m²"),
-        ("irv", "delta_irv", "IRV/RVS", "dyn.s.cm-5"),
-        ("fc", "delta_fc", "FC", "lpm"),
-        ("pas", "delta_pas", "PAS", "mmHg"),
-        ("pad", "delta_pad", "PAD", "mmHg"),
-    ]
-    partes = []
-    for key, out_key, nombre, unidad in pares:
-        v1 = limpiar_numero(r1.get(key))
-        v2 = limpiar_numero(r2.get(key))
-        if v1 is None or v2 is None:
-            continue
-        delta = v2 - v1
-        resultado[out_key] = delta
-        partes.append(f"{nombre}: acostado/cinta {fmt(v1)} → de pie {fmt(v2)}; Δ {fmt(delta)} {unidad}")
-
-    alertas = []
-    dic = limpiar_numero(resultado.get("delta_ic"))
-    dirv = limpiar_numero(resultado.get("delta_irv"))
-    if dic is None or dirv is None:
-        alertas.append("No se pudo validar ortostatismo: faltan IC o IRV/RVS comparables en ambas posiciones.")
-        estado = "NO EVALUABLE"
-    else:
-        ic_baja = dic < 0
-        irv_sube = dirv > 0
-        if ic_baja and irv_sube:
-            estado = "COMPORTAMIENTO ORTOSTÁTICO FISIOLÓGICO"
-        else:
-            estado = "REVISAR CARGA/MATCHEO DE DATOS"
-            if not ic_baja:
-                alertas.append("El IC no baja al pasar de ACOSTADO/CINTA a DE PIE; revisar si el IC de cada posición está correctamente cargado.")
-            if not irv_sube:
-                alertas.append("La IRV/RVS no aumenta al pasar de ACOSTADO/CINTA a DE PIE; revisar si la resistencia de cada posición está correctamente cargada.")
-    resultado["validacion_ortostatica"] = estado
-    resultado["alertas_ortostaticas"] = alertas
-    resultado["detalle"] = " | ".join(partes) if partes else "No se pudieron calcular deltas ortostáticos por datos insuficientes."
-    return resultado
-
-
-def definir_patron_ortostatico(delta: Dict[str, Any]) -> str:
-    estado = str(delta.get("validacion_ortostatica") or "")
-    if "FISIOLÓGICO" in estado or "FISIOLOGICO" in normalizar_txt(estado).upper():
-        return "PATRÓN ORTOSTÁTICO FISIOLÓGICO CONSERVADO"
-    if "REVISAR" in estado:
-        return "REVISAR CARGA/MATCHEO DE DATOS ORTOSTÁTICOS"
-    return "PATRÓN ORTOSTÁTICO NO CLASIFICABLE"
-
-
-def descripcion_patron_ortostatico(patron: str) -> str:
-    p = normalizar_txt(patron)
-    if "revisar" in p:
-        return "El cambio postural no sigue la dirección fisiológica esperada. Antes de interpretar el patrón, revisar que cada variable corresponda a su posición real."
-    if "fisiologico" in p or "conservado" in p:
-        return "Respuesta esperada al pasar a bipedestación: descenso del índice cardíaco y aumento compensatorio de la resistencia vascular sistémica."
-    return "No hay datos comparables suficientes para definir la respuesta al cambio postural."
-
-
-def interpretar_ortostatismo(df: pd.DataFrame) -> str:
-    if df is None or len(df) < 2:
-        return "No aplicable: se requieren dos registros comparables, ACOSTADO/CINTA y DE PIE."
-    d = calcular_delta_ortostatico(df)
-    patron = definir_patron_ortostatico(d)
-    descripcion = descripcion_patron_ortostatico(patron)
-    alertas = d.get("alertas_ortostaticas") or []
-    txt_alertas = " ".join([f"<b>{a}</b>" for a in alertas])
-    return f"<b>{patron}</b>. <b>Significado clínico:</b> {descripcion} <b>Cambios observados:</b> {d.get('detalle')}. {txt_alertas}".strip()
-
-
-def tabla_validacion_posiciones_v50(df: pd.DataFrame) -> pd.DataFrame:
-    r_basal, r_pie = obtener_resumenes_ortostaticos(df)
-    d = calcular_delta_ortostatico(df)
-    filas = []
-    variables = [
-        ("IC", "ic", "delta_ic", "Debe bajar"),
-        ("IRV/RVS", "irv", "delta_irv", "Debe aumentar"),
-        ("FC", "fc", "delta_fc", "Dato complementario"),
-        ("PAS", "pas", "delta_pas", "Dato complementario"),
-        ("PAD", "pad", "delta_pad", "Dato complementario"),
-        ("CA", "ca", None, "Debe corresponder a cada posición"),
-        ("CFT", "cft", None, "Debe corresponder a cada posición"),
-        ("CFTnr", "cftnr", None, "Debe corresponder a cada posición"),
-        ("IV", "iv", None, "Debe corresponder a cada posición"),
-        ("IAC", "iac", None, "Debe corresponder a cada posición"),
-        ("CTS", "cts", None, "Debe corresponder a cada posición"),
-        ("EA", "ea", None, "Debe corresponder a cada posición"),
-        ("EES", "ees", None, "Debe corresponder a cada posición"),
-        ("EA/EES", "ava", None, "Debe corresponder a cada posición"),
-        ("DS", "ds", None, "Debe corresponder a cada posición"),
-        ("IDS", "ids", None, "Debe corresponder a cada posición"),
-        ("Z0", "z0", None, "Debe corresponder a cada posición"),
-    ]
-    for nombre, key, delta_key, regla in variables:
-        vb = r_basal.get(key)
-        vp = r_pie.get(key)
-        delta = d.get(delta_key) if delta_key else None
-        estado = "OK" if limpiar_numero(vb) is not None and (not r_pie or limpiar_numero(vp) is not None) else "REVISAR"
-        if nombre == "IC" and delta is not None:
-            estado = "OK" if delta < 0 else "REVISAR"
-        if nombre == "IRV/RVS" and delta is not None:
-            estado = "OK" if delta > 0 else "REVISAR"
-        filas.append({
-            "Variable": nombre,
-            "ACOSTADO/CINTA": fmt(vb) if limpiar_numero(vb) is not None else "No disponible",
-            "DE PIE": fmt(vp) if limpiar_numero(vp) is not None else "No disponible",
-            "Delta DE PIE - ACOSTADO": fmt(delta) if limpiar_numero(delta) is not None else "—",
-            "Regla": regla,
-            "Estado": estado,
-        })
-    return pd.DataFrame(filas)
-
-
-def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Optional[Dict[str, Any]] = None) -> str:
-    contexto = contexto or {}
-    r_basal, r_pie = obtener_resumenes_ortostaticos(df)
-    d = calcular_delta_ortostatico(df)
-
-    def linea(r_local: Dict[str, Any], titulo: str, referencia: bool = False) -> str:
-        if not r_local:
-            return f"- **{titulo}:** no disponible por falta de registro reconocible."
-        clase = clasificacion_dinamica_obligatoria(r_local, contexto).upper()
-        suf = "Referencia diagnóstica principal." if referencia else "Respuesta postural; no reemplaza el diagnóstico basal."
-        return (
-            f"- **{titulo}: {clase}.** "
-            f"IC {fmt(r_local.get('ic'), 2, ' L/min/m²')}; "
-            f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn.s.cm-5')}; "
-            f"FC {fmt(r_local.get('fc'), 0, ' lpm')}. {suf}"
-        )
-
-    lineas = [
-        "**El patrón hemodinámico de referencia se toma exclusivamente de ACOSTADO/CINTA.** El registro DE PIE se usa solo para validar la respuesta ortostática.",
-        linea(r_basal, "Patrón hemodinámico ACOSTADO/CINTA", referencia=True),
-        linea(r_pie, "Patrón hemodinámico DE PIE", referencia=False),
-        f"- **Validación ortostática:** {d.get('validacion_ortostatica')}. {d.get('detalle')}",
-    ]
-    for a in d.get("alertas_ortostaticas") or []:
-        lineas.append(f"- **{a}**")
-    return "\n".join(lineas)
-
-
-# Override final de validación inteligente para incluir la regla ortostática solicitada.
-_validar_hemodinamica_inteligente_pre_v50 = validar_hemodinamica_inteligente
-
-def validar_hemodinamica_inteligente(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    res = _validar_hemodinamica_inteligente_pre_v50(df, contexto_embarazo)
-    try:
-        d = calcular_delta_ortostatico(df)
-        alertas = list(res.get("alertas") or [])
-        for a in d.get("alertas_ortostaticas") or []:
-            if a not in alertas:
-                alertas.append(a)
-        if str(d.get("validacion_ortostatica")) == "REVISAR CARGA/MATCHEO DE DATOS":
-            res["estado_global"] = "REVISAR ANTES DE INFORMAR"
-            res["conclusion"] = "Revisar la asignación de variables por posición: el IC debe bajar y la IRV/RVS debe aumentar de ACOSTADO/CINTA a DE PIE."
-        res["alertas"] = alertas
-        res["tabla_posiciones"] = tabla_validacion_posiciones_v50(df)
-    except Exception:
-        pass
-    return res
-
-
 # =========================================================
 # INTERFAZ
 # =========================================================
@@ -9244,10 +8907,6 @@ elif estado_val == "MODERADAMENTE CONFIABLE":
 else:
     st.error(estado_val + ": " + validacion_hemo.get("conclusion", ""))
 st.dataframe(validacion_hemo.get("tabla", pd.DataFrame()), use_container_width=True)
-if isinstance(validacion_hemo.get("tabla_posiciones"), pd.DataFrame):
-    st.subheader("Validación estricta ACOSTADO/CINTA vs DE PIE")
-    st.caption("Regla fisiológica esperada: al ponerse de pie el IC debe bajar y la IRV/RVS debe aumentar. Si no ocurre, revisar carga/matcheo de datos por posición antes de informar.")
-    st.dataframe(validacion_hemo.get("tabla_posiciones"), use_container_width=True)
 if validacion_hemo.get("alertas"):
     with st.expander("Alertas y coherencias detectadas"):
         for alerta in validacion_hemo.get("alertas", []):
