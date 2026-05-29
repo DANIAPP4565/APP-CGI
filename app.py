@@ -642,21 +642,6 @@ def extraer_lineas_pdf(uploaded_file) -> List[Dict[str, Any]]:
                     linea = linea.strip()
                     if linea:
                         registros.append({"pagina_pdf": p, "texto_extraido": linea, "archivo_origen": nombre_archivo})
-
-                # Rescate adicional de tablas: muchos informes Z-Logic separan rótulo/valor
-                # en columnas y extract_text() puede perder la relación. Se agregan filas
-                # tabulares con separador |, conservando la página real. Esto NO reemplaza
-                # la extracción previa; solo aporta una fuente más trazable para el parser.
-                try:
-                    for tabla in (page.extract_tables() or []):
-                        for fila_tabla in (tabla or []):
-                            celdas = [str(c or '').strip() for c in (fila_tabla or [])]
-                            celdas = [c for c in celdas if c]
-                            if len(celdas) >= 2:
-                                linea_tabla = ' | '.join(celdas)
-                                registros.append({"pagina_pdf": p, "texto_extraido": linea_tabla, "archivo_origen": nombre_archivo})
-                except Exception:
-                    pass
     except Exception:
         pass
 
@@ -1311,74 +1296,6 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
 
     archivo_origen = str(registros[0].get("archivo_origen", "")).strip()
     lineas = [str(r.get("texto_extraido", "")).strip() for r in registros if str(r.get("texto_extraido", "")).strip()]
-
-    def _paciente_desde_archivo_local() -> Optional[str]:
-        pac = None
-        if archivo_origen:
-            pac = re.sub("[.]pdf$", "", archivo_origen, flags=re.IGNORECASE)
-            pac = re.sub("[-_]*logic[0-9]*", "", pac, flags=re.IGNORECASE)
-            pac = re.sub(r"\d{2}[-/]\d{2}[-/]\d{2,4}", "", pac, flags=re.IGNORECASE)
-            pac = re.sub(r"\b(CGI|ObraSocial|informe|integrado|SD|basal|acostado|de\s*pie|spot|cinta|Z[-\s]?Logic)\b", "", pac, flags=re.IGNORECASE)
-            pac = pac.replace("_", " ").replace("-", " ").strip()
-            if re.search(r"\bpulsos?\b|\blpm\b|\bmin\b", pac, re.IGNORECASE):
-                pac = None
-        return pac
-
-    def _construir_fila_desde_bloque_local(bloque: Dict[str, Any], paciente_archivo: Optional[str], pos_forzada: str) -> Dict[str, Any]:
-        res = bloque.get("resumen", {}) or {}
-        ctx = bloque.get("contexto", {}) or {}
-        fecha_e = formatear_fecha_ddmmyyyy(res.get("FECHA_ESTUDIO") or res.get("FECHA"))
-        fecha_n = formatear_fecha_ddmmyyyy(res.get("FECHA_NACIMIENTO"))
-        if fecha_e and fecha_n and parsear_fecha(fecha_e) == parsear_fecha(fecha_n):
-            fecha_e = None
-        edad_c = calcular_edad_desde_fechas(fecha_n, fecha_e)
-        edad_f = edad_c if edad_c is not None else res.get("EDAD")
-        ava_b = res.get("AVA")
-        if limpiar_numero(ava_b) is None and limpiar_numero(res.get("EA")) is not None and limpiar_numero(res.get("EES")) not in [None, 0]:
-            ava_b = limpiar_numero(res.get("EA")) / limpiar_numero(res.get("EES"))
-        return {
-            "Paciente": normalizar_nombre_paciente(res.get("PACIENTE")) or normalizar_nombre_paciente(paciente_archivo) or "No disponible",
-            "DNI": sanitizar_dni(res.get("DNI")),
-            "Obra_Social": res.get("OBRA_SOCIAL"),
-            "Edad": edad_f,
-            "Fecha_Estudio": fecha_e,
-            "Fecha_Nacimiento": fecha_n,
-            "Diagnóstico": ctx.get("Diagnóstico"),
-            "Medicación": ctx.get("Medicación"),
-            "Posición": pos_forzada,
-            "Texto_PDF": ctx.get("Texto_PDF"),
-            "PAS": res.get("PAS"), "PAD": res.get("PAD"), "FC": res.get("FC"),
-            "IC": res.get("IC"), "IRV": res.get("IRV"), "RVS": res.get("RVS"),
-            "CA": res.get("CA"), "CFT": res.get("CFT"), "CFTnr": res.get("CFTNR"),
-            "IH": res.get("IH"), "IV": res.get("IV"), "IAC": res.get("IAC"), "CTS": res.get("CTS"),
-            "EA": res.get("EA"), "EES": res.get("EES"), "EA/EES": ava_b,
-            "DS": res.get("DS"), "IDS": res.get("IDS"), "Z0": res.get("Z0"),
-            "origen_parser": f"PDF por páginas - bloque {pos_forzada}",
-        }
-
-    # -----------------------------------------------------------------------
-    # REGLA Z-LOGIC 4 PÁGINAS: páginas 1-2 = ACOSTADO/CINTA; página 3 = DE PIE.
-    # Esta regla solo se activa cuando el PDF realmente trae 4 o más páginas.
-    # No modifica el flujo habitual de PDFs de una o dos páginas.
-    # -----------------------------------------------------------------------
-    try:
-        paginas = sorted({int(r.get("pagina_pdf", 0) or 0) for r in registros})
-        if paginas and max(paginas) >= 4:
-            lineas_ac_pag = [str(r.get("texto_extraido", "")).strip() for r in registros if int(r.get("pagina_pdf", 0) or 0) in [1, 2] and str(r.get("texto_extraido", "")).strip()]
-            lineas_pie_pag = [str(r.get("texto_extraido", "")).strip() for r in registros if int(r.get("pagina_pdf", 0) or 0) == 3 and str(r.get("texto_extraido", "")).strip()]
-            if lineas_ac_pag and lineas_pie_pag:
-                pac_archivo = _paciente_desde_archivo_local()
-                bloque_ac = _parsear_bloque_lineas(lineas_ac_pag, archivo_origen, posicion_forzada="acostado")
-                bloque_pie = _parsear_bloque_lineas(lineas_pie_pag, archivo_origen, posicion_forzada="de pie")
-                fila_ac = _construir_fila_desde_bloque_local(bloque_ac, pac_archivo, "acostado")
-                fila_pie = _construir_fila_desde_bloque_local(bloque_pie, pac_archivo, "de pie")
-                # Incluir de pie aunque falten algunas variables: el usuario debe poder ver y corregir
-                # la fila de la página 3 en el editor seguro sin que se pierda la posición.
-                df_final = pd.DataFrame([fila_ac, fila_pie])
-                df_final.attrs = {}
-                return df_final
-    except Exception:
-        pass
 
     # -----------------------------------------------------------------------
     # DETECCIÓN DE DOS BLOQUES DE POSICIÓN EN UN ÚNICO PDF
@@ -8651,130 +8568,503 @@ def agregar_capturas_originales_reportlab_story(story, ancho: float, max_captura
         pass
 
 
+
 # =========================================================
-# CORRECCIÓN SEGURA DE POSICIONES Y VARIABLES
+# V_CRITICA_DATOS_REALES_POSICION
+# Corrección de seguridad clínica:
+# - No mezclar variables entre ACOSTADO/CINTA y DE PIE.
+# - No inferir ortostatismo si no hay registro DE PIE válido.
+# - Extraer variables por etiqueta exacta y por página del PDF Z-Logic.
+# - Separar IRV indexado de RVS no indexado.
+# - Usar CFT por sexo para volemia.
 # =========================================================
-VARIABLES_EDITABLES_POSICION = [
-    "PAS", "PAD", "FC", "IC", "IRV", "RVS", "CA", "CFT", "CFTnr",
-    "IH", "IV", "IAC", "CTS", "EA", "EES", "EA/EES", "DS", "IDS", "Z0",
-]
 
 
-def _indice_fila_por_posicion_segura(df: pd.DataFrame, objetivo: str) -> Optional[int]:
-    """Devuelve índice de fila basal o de pie sin usar texto largo del PDF.
+def _normalizar_label_vcritica(x: Any) -> str:
+    return re.sub(r"\s+", " ", normalizar_txt(str(x or ""))).strip()
 
-    Si el parser falla en reconocer posiciones, se usa una regla segura y explícita:
-    primera fila = ACOSTADO/CINTA, segunda fila = DE PIE.
-    """
-    if df is None or df.empty:
+
+def _linea_sin_unidades_vcritica(linea: Any) -> str:
+    s = str(linea or "")
+    s = re.sub(r"L\s*/\s*min\s*/\s*m\s*[²2]", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"dyn\.?\s*s?\.?\s*cm\s*[-–—]?\s*5(?:\s*m\s*[²2])?", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"mm\s*Hg|mmHg|pulsos\s*/\s*min|lat\s*/\s*min|lpm|ml\s*/\s*pulso|kohms?\s*[-–—]?\s*1|1\s*/\s*k\s*ohm", " ", s, flags=re.IGNORECASE)
+    s = s.replace("m²", " ").replace("cm⁻⁵", " ").replace("cm-5", " ")
+    return s
+
+
+def _numeros_clinicos_linea_vcritica(linea: Any, clave: str) -> List[float]:
+    limpia = _linea_sin_unidades_vcritica(linea)
+    vals = [v for v in numeros_en_texto(limpia) if rango_plausible(clave, v)]
+    return vals
+
+
+def _match_label_vcritica(linea: Any, patrones: List[str], prohibidos: Optional[List[str]] = None) -> bool:
+    n = _normalizar_label_vcritica(linea)
+    prohibidos = prohibidos or []
+    if any(re.search(p, n, flags=re.IGNORECASE) for p in prohibidos):
+        return False
+    return any(re.search(p, n, flags=re.IGNORECASE) for p in patrones)
+
+
+def _extraer_valor_variable_vcritica(lineas: List[str], clave: str) -> Optional[float]:
+    """Extractor estricto por etiqueta. No usa posición de columnas para no cruzar variables."""
+    specs = {
+        "ic": {
+            "pat": [r"\bindice\s+cardiaco\b", r"\bcardiac\s+index\b", r"(?<![a-z0-9])ic(?![a-z0-9])", r"(?<![a-z0-9])ci(?![a-z0-9])"],
+            "no": [r"dz\s*/?\s*dt", r"dzdt", r"\bitc\b", r"trabajo\s+cardiaco", r"\biac\b", r"aceleracion", r"velocidad", r"descarga", r"complacencia", r"resistencia", r"cft", r"frecuencia", r"heart\s+rate"],
+        },
+        "irv": {
+            "pat": [r"\bindice\s+(?:de\s+)?resistencia\s+vascular\b", r"(?<![a-z0-9])irv(?![a-z0-9])", r"(?<![a-z0-9])svri(?![a-z0-9])", r"systemic\s+vascular\s+resistance\s+index"],
+            "no": [r"resistencia\s+vascular\s+sistemica", r"(?<![a-z0-9])rvs(?![a-z0-9])", r"(?<![a-z0-9])svr(?![a-z0-9])"],
+        },
+        "rvs": {
+            "pat": [r"\bresistencia\s+vascular\s+sistemica\b", r"(?<![a-z0-9])rvs(?![a-z0-9])", r"(?<![a-z0-9])svr(?![a-z0-9])", r"systemic\s+vascular\s+resistance\b"],
+            "no": [r"indice\s+(?:de\s+)?resistencia", r"(?<![a-z0-9])irv(?![a-z0-9])", r"(?<![a-z0-9])svri(?![a-z0-9])"],
+        },
+        "fc": {"pat": [r"frecuencia\s+cardiaca", r"heart\s+rate", r"(?<![a-z0-9])fc(?![a-z0-9])", r"(?<![a-z0-9])hr(?![a-z0-9])"], "no": []},
+        "ca": {"pat": [r"\bcomplacencia\s+arterial\b", r"arterial\s+compliance", r"(?<![a-z0-9])ca(?![a-z0-9])"], "no": [r"indice\s+(?:de\s+)?complacencia", r"\bica\b", r"iac"]},
+        "cft": {"pat": [r"(?<![a-z0-9])cft(?![a-z0-9])", r"contenido\s+(?:de\s+)?fluidos?\s+toracicos", r"thoracic\s+fluid\s+content"], "no": [r"cft\s*n\.?\s*r", r"cftnr", r"normaliz", r"index", r"indice"]},
+        "cftnr": {"pat": [r"cft\s*n\.?\s*r", r"cftnr", r"cft\s+normaliz", r"contenido\s+(?:de\s+)?fluidos?\s+toracicos\s+normaliz", r"thoracic\s+fluid\s+(?:content\s+)?index"], "no": []},
+        "ids": {"pat": [r"indice\s+(?:de\s+)?descarga\s+sistolica", r"stroke\s+index", r"(?<![a-z0-9])ids(?![a-z0-9])", r"(?<![a-z0-9])si(?![a-z0-9])"], "no": []},
+        "ds": {"pat": [r"\bdescarga\s+sistolica\b", r"stroke\s+volume", r"(?<![a-z0-9])ds(?![a-z0-9])", r"(?<![a-z0-9])sv(?![a-z0-9])"], "no": [r"indice\s+(?:de\s+)?descarga", r"stroke\s+index", r"(?<![a-z0-9])ids(?![a-z0-9])"]},
+        "iv": {"pat": [r"indice\s+(?:de\s+)?velocidad", r"velocity\s+index", r"(?<![a-z0-9])iv(?![a-z0-9])"], "no": []},
+        "iac": {"pat": [r"indice\s+(?:de\s+)?aceleracion", r"acceleration\s+(?:contractility\s+)?index", r"(?<![a-z0-9])iac(?![a-z0-9])", r"(?<![a-z0-9])aci(?![a-z0-9])"], "no": [r"complacencia"]},
+        "ih": {"pat": [r"indice\s+(?:de\s+)?heather", r"heather", r"(?<![a-z0-9])ih(?![a-z0-9])"], "no": []},
+        "cts": {"pat": [r"(?<![a-z0-9])cts(?![a-z0-9])", r"pep\s*/\s*lvet", r"tiempos?\s+sistolicos", r"systolic\s+time\s+ratio"], "no": []},
+        "ea": {"pat": [r"elastancia\s+arterial", r"arterial\s+elastance", r"(?<![a-z0-9])ea(?![a-z0-9])"], "no": [r"ea\s*/\s*ees"]},
+        "ees": {"pat": [r"elastancia\s+(?:de\s+)?fin\s+de\s+sistole", r"end\s+systolic\s+elastance", r"(?<![a-z0-9])ees(?![a-z0-9])"], "no": [r"ea\s*/\s*ees"]},
+        "z0": {"pat": [r"(?<![a-z0-9])z0(?![a-z0-9])", r"impedancia\s+basal"], "no": []},
+    }
+    spec = specs.get(clave)
+    if not spec:
         return None
-    dfx = df.copy()
-    if "Posición" in dfx.columns:
-        posiciones = dfx["Posición"].apply(normalizar_posicion_estudio)
-    else:
-        posiciones = pd.Series(["no_reconocida"] * len(dfx), index=dfx.index)
-    if objetivo == "de_pie":
-        idxs = list(dfx.index[posiciones == "de_pie"])
-        if idxs:
-            return idxs[0]
-        if len(dfx) >= 2:
-            return dfx.index[1]
-        return None
-    idxs = list(dfx.index[(posiciones == "acostado") | (posiciones == "no_reconocida")])
-    idxs = [i for i in idxs if posiciones.loc[i] != "de_pie"]
-    if idxs:
-        return idxs[0]
-    return dfx.index[0]
-
-
-def construir_tabla_correccion_posiciones(df: pd.DataFrame) -> pd.DataFrame:
-    """Tabla editable: una fila por variable, dos columnas por posición.
-
-    Esta capa no elimina el parser existente. Permite auditar y corregir el valor real
-    cuando el PDF no conserva bien la estructura de tablas o cuando la página 3 no fue
-    interpretada correctamente.
-    """
-    idx_ac = _indice_fila_por_posicion_segura(df, "acostado")
-    idx_pie = _indice_fila_por_posicion_segura(df, "de_pie")
-    filas = []
-    for var in VARIABLES_EDITABLES_POSICION:
-        val_ac = df.at[idx_ac, var] if idx_ac is not None and var in df.columns else None
-        val_pie = df.at[idx_pie, var] if idx_pie is not None and var in df.columns else None
-        filas.append({
-            "Variable": var,
-            "ACOSTADO/CINTA": limpiar_numero(val_ac),
-            "DE PIE": limpiar_numero(val_pie),
-        })
-    return pd.DataFrame(filas)
-
-
-def aplicar_tabla_correccion_posiciones(df: pd.DataFrame, tabla: pd.DataFrame) -> pd.DataFrame:
-    """Aplica la tabla editable al DataFrame usado por gráficos, conclusiones y PDF.
-
-    Si el usuario no cambia nada, el resultado es equivalente al parser. Si corrige
-    un valor, ese valor se vuelve la fuente clínica principal para esa posición.
-    """
-    if df is None or df.empty or tabla is None or tabla.empty:
-        return df
-    out = df.copy().reset_index(drop=True)
-    # Garantizar dos filas: basal y de pie. Si falta de pie, se crea sin tocar la basal.
-    if len(out) == 1:
-        nueva = out.iloc[0].copy()
-        for v in VARIABLES_EDITABLES_POSICION:
-            if v in nueva.index:
-                nueva[v] = None
-        nueva["Posición"] = "de pie"
-        nueva["origen_parser"] = "Fila DE PIE creada para corrección manual segura"
-        out = pd.concat([out, pd.DataFrame([nueva])], ignore_index=True)
-    idx_ac = _indice_fila_por_posicion_segura(out, "acostado")
-    idx_pie = _indice_fila_por_posicion_segura(out, "de_pie")
-    if idx_ac is None:
-        idx_ac = 0
-    if idx_pie is None and len(out) >= 2:
-        idx_pie = 1
-    # Etiquetas explícitas para que las funciones siguientes no confundan posiciones.
-    out.at[idx_ac, "Posición"] = "acostado"
-    out.at[idx_ac, "Método"] = "cinta"
-    if idx_pie is not None:
-        out.at[idx_pie, "Posición"] = "de pie"
-        out.at[idx_pie, "Método"] = "cinta"
-    for _, row in tabla.iterrows():
-        var = str(row.get("Variable", "")).strip()
-        if not var or var not in VARIABLES_EDITABLES_POSICION:
+    candidatos: List[Tuple[int, float, str]] = []
+    for idx, lin in enumerate(lineas):
+        if not _match_label_vcritica(lin, spec["pat"], spec.get("no")):
             continue
-        if var not in out.columns:
-            out[var] = None
-        val_ac = limpiar_numero(row.get("ACOSTADO/CINTA"))
-        val_pie = limpiar_numero(row.get("DE PIE"))
-        if val_ac is not None:
-            out.at[idx_ac, var] = val_ac
-        if idx_pie is not None and val_pie is not None:
-            out.at[idx_pie, var] = val_pie
-    out["Corrección_posiciones"] = "Valores validados por tabla ACOSTADO/CINTA vs DE PIE"
+        vals = _numeros_clinicos_linea_vcritica(lin, "rvs" if clave == "rvs" else clave)
+        # Evitar que IC sea tomado desde un encabezado de gráfico sin valor real.
+        if clave == "ic" and not es_etiqueta_ic_explicita(lin):
+            continue
+        if vals:
+            # En tablas clínicas, el primer número posterior a la etiqueta suele ser el valor medido.
+            # Si hay rangos y diagnóstico en la misma línea, el valor medido suele ser el último plausible.
+            elegido = vals[-1] if len(vals) > 1 and re.search(r"bajo|normal|alto|diagn", _normalizar_label_vcritica(lin)) else vals[0]
+            candidatos.append((idx, elegido, lin))
+    return candidatos[-1][1] if candidatos else None
+
+
+def _extraer_pa_vcritica(lineas: List[str]) -> Tuple[Optional[float], Optional[float]]:
+    for lin in lineas:
+        n = _normalizar_label_vcritica(lin)
+        if re.search(r"presion\s+arterial|blood\s+pressure|\bpa\b|s\s*/\s*d", n):
+            m = re.search(r"\b(\d{2,3})\s*/\s*(\d{2,3})\b", str(lin))
+            if m:
+                pas = limpiar_numero(m.group(1)); pad = limpiar_numero(m.group(2))
+                if rango_plausible("pas", pas) and rango_plausible("pad", pad) and pas > pad:
+                    return pas, pad
+    return None, None
+
+
+def _extraer_sexo_vcritica(lineas: List[str]) -> Optional[str]:
+    texto = "\n".join(lineas)
+    m = re.search(r"\bsexo\s*[:=\-]?\s*([MFmf]|masculino|femenino|hombre|mujer)\b", texto, flags=re.IGNORECASE)
+    if not m:
+        return None
+    v = normalizar_txt(m.group(1))
+    if v in ["m", "masculino", "hombre"]:
+        return "M"
+    if v in ["f", "femenino", "mujer"]:
+        return "F"
+    return None
+
+
+def _extraer_demografia_vcritica(lineas: List[str], archivo_origen: str) -> Dict[str, Any]:
+    texto = "\n".join(lineas)
+    out = {}
+    # Paciente
+    for lin in lineas[:80]:
+        if re.search(r"\b(paciente|nombre\s+del\s+paciente|apellido\s+y\s+nombre)\b", lin, flags=re.IGNORECASE):
+            val = re.sub(r"(?i).*?(paciente|nombre\s+del\s+paciente|apellido\s+y\s+nombre)\s*[:=\-]?\s*", "", lin).strip()
+            val = normalizar_nombre_paciente(val)
+            if val:
+                out["Paciente"] = val
+                break
+    if "Paciente" not in out:
+        pac_archivo = re.sub(r"[.]pdf$", "", archivo_origen or "", flags=re.IGNORECASE)
+        pac_archivo = re.sub(r"\b(informe|z[-\s]?logic|cgi|integrado|basal|cinta|de\s*pie|spot|obra\s*social|sd)\b", " ", pac_archivo, flags=re.IGNORECASE)
+        pac_archivo = re.sub(r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}", " ", pac_archivo)
+        pac_archivo = pac_archivo.replace("_", " ").replace("-", " ").strip()
+        val = normalizar_nombre_paciente(pac_archivo)
+        if val:
+            out["Paciente"] = val
+    m = re.search(r"\b(?:dni|documento)\s*[:=\-]?\s*([0-9.]{6,14})", texto, flags=re.IGNORECASE)
+    if m:
+        out["DNI"] = sanitizar_dni(m.group(1))
+    m = re.search(r"\bedad\s*[:=\-]?\s*(\d{1,3})\b", texto, flags=re.IGNORECASE)
+    if m:
+        out["Edad"] = int(m.group(1))
+    fecha = extraer_fecha_texto(texto)
+    if fecha:
+        out["Fecha_Estudio"] = formatear_fecha_ddmmyyyy(fecha)
+    sexo = _extraer_sexo_vcritica(lineas)
+    if sexo:
+        out["Sexo"] = sexo
     return out
 
 
-def validar_respuesta_ortostatica_esperada(df: pd.DataFrame) -> Tuple[str, pd.DataFrame]:
-    """Control fisiológico simple: en ortostatismo normal IC baja e IRV/RVS aumenta."""
-    d = calcular_delta_ortostatico(df)
-    ic_b = limpiar_numero(d.get("basal", {}).get("ic")); ic_p = limpiar_numero(d.get("de_pie", {}).get("ic"))
-    irv_b = limpiar_numero(d.get("basal", {}).get("irv")); irv_p = limpiar_numero(d.get("de_pie", {}).get("irv"))
+def _pagina_contiene_hemodinamia_vcritica(lineas: List[str]) -> bool:
+    txt = _normalizar_label_vcritica(" | ".join(lineas))
+    claves = ["indice cardiaco", "indice de resistencia vascular", "resistencia vascular sistemica", "frecuencia cardiaca", "presion arterial", "cft", "complacencia arterial"]
+    return sum(1 for c in claves if c in txt) >= 2
+
+
+def _posicion_pagina_vcritica(lineas: List[str], pageno: int, total_pages: int) -> Optional[str]:
+    txt = _normalizar_label_vcritica(" | ".join(lineas[:80]))
+    # Encabezados explícitos.
+    if re.search(r"\b(estudio\s+basal|situacion\s+cinta|\(\s*cinta\s*\)|\bcinta\b|acostad|decubito|supino)\b", txt):
+        return "acostado"
+    if re.search(r"\b(estudio\s+de\s+pie|situacion\s+de\s+pie|bipedestacion|ortostatismo|standing|upright|\bspot\b)\b", txt):
+        return "de_pie"
+    # Regla de rescate para Z-Logic de 4 páginas: page 2 suele ser basal/cinta y page 3 de pie.
+    if total_pages >= 4 and _pagina_contiene_hemodinamia_vcritica(lineas):
+        if pageno == 2:
+            return "acostado"
+        if pageno == 3:
+            return "de_pie"
+    # Regla de rescate si el PDF no trae portada y tiene 2 páginas con hemodinamia.
+    if total_pages == 2 and _pagina_contiene_hemodinamia_vcritica(lineas):
+        return "acostado" if pageno == 1 else "de_pie"
+    return None
+
+
+def _extraer_lineas_pdf_por_pagina_vcritica(pdf_bytes: bytes) -> List[List[str]]:
+    paginas: List[List[str]] = []
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                lineas: List[str] = []
+                texto = page.extract_text(x_tolerance=1, y_tolerance=3) or ""
+                lineas.extend([l.strip() for l in texto.splitlines() if l.strip()])
+                try:
+                    for tabla in page.extract_tables() or []:
+                        for row in tabla or []:
+                            celdas = [str(c).strip() for c in row if c is not None and str(c).strip()]
+                            if celdas:
+                                lineas.append(" | ".join(celdas))
+                                # Crear pares etiqueta-valor adyacentes para facilitar extracción.
+                                for a, b in zip(celdas, celdas[1:]):
+                                    if re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", a) and re.search(r"\d", b):
+                                        lineas.append(f"{a} {b}")
+                except Exception:
+                    pass
+                paginas.append(lineas)
+    except Exception:
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            for page in reader.pages:
+                texto = page.extract_text() or ""
+                paginas.append([l.strip() for l in texto.splitlines() if l.strip()])
+        except Exception:
+            pass
+    return paginas
+
+
+def _construir_fila_posicion_vcritica(lineas: List[str], archivo_origen: str, posicion: str, demografia_global: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    demografia_global = demografia_global or {}
+    pas, pad = _extraer_pa_vcritica(lineas)
+    ea = _extraer_valor_variable_vcritica(lineas, "ea")
+    ees = _extraer_valor_variable_vcritica(lineas, "ees")
+    ava = calcular_ea_ees_derivado(ea, ees)
+    fila = {
+        "Paciente": demografia_global.get("Paciente") or "No disponible",
+        "DNI": demografia_global.get("DNI") or "SD",
+        "Obra_Social": demografia_global.get("Obra_Social"),
+        "Edad": demografia_global.get("Edad"),
+        "Sexo": demografia_global.get("Sexo"),
+        "Fecha_Estudio": demografia_global.get("Fecha_Estudio"),
+        "Fecha_Nacimiento": demografia_global.get("Fecha_Nacimiento"),
+        "Diagnóstico": None,
+        "Medicación": None,
+        "Posición": "de pie" if posicion == "de_pie" else "acostado/cinta",
+        "Texto_PDF": " | ".join(lineas)[:12000],
+        "PAS": pas,
+        "PAD": pad,
+        "FC": _extraer_valor_variable_vcritica(lineas, "fc"),
+        "IC": _extraer_valor_variable_vcritica(lineas, "ic"),
+        "IRV": _extraer_valor_variable_vcritica(lineas, "irv"),
+        "RVS": _extraer_valor_variable_vcritica(lineas, "rvs"),
+        "CA": _extraer_valor_variable_vcritica(lineas, "ca"),
+        "CFT": _extraer_valor_variable_vcritica(lineas, "cft"),
+        "CFTnr": _extraer_valor_variable_vcritica(lineas, "cftnr"),
+        "IH": _extraer_valor_variable_vcritica(lineas, "ih"),
+        "IV": _extraer_valor_variable_vcritica(lineas, "iv"),
+        "IAC": _extraer_valor_variable_vcritica(lineas, "iac"),
+        "CTS": _extraer_valor_variable_vcritica(lineas, "cts"),
+        "EA": ea,
+        "EES": ees,
+        "EA/EES": ava,
+        "DS": _extraer_valor_variable_vcritica(lineas, "ds"),
+        "IDS": _extraer_valor_variable_vcritica(lineas, "ids"),
+        "Z0": _extraer_valor_variable_vcritica(lineas, "z0"),
+        "origen_parser": f"PDF Z-Logic por página - {('DE PIE' if posicion == 'de_pie' else 'ACOSTADO/CINTA')}",
+    }
+    # Si IRV falta pero RVS está, NO copiar RVS a IRV. Mantener separadas.
+    return fila
+
+
+def _extraer_dataframe_posiciones_vcritica(pdf_bytes: bytes, archivo_origen: str) -> pd.DataFrame:
+    paginas = _extraer_lineas_pdf_por_pagina_vcritica(pdf_bytes)
+    if not paginas:
+        return pd.DataFrame()
+    todas_lineas = [l for pag in paginas for l in pag]
+    demografia = _extraer_demografia_vcritica(todas_lineas, archivo_origen)
     filas = []
-    estado_global = "No evaluable"
-    alertas = []
-    if ic_b is not None and ic_p is not None:
-        ok_ic = ic_p < ic_b
-        filas.append({"Variable": "IC", "ACOSTADO/CINTA": ic_b, "DE PIE": ic_p, "Cambio esperado": "baja", "Estado": "OK" if ok_ic else "REVISAR CARGA/MATCHEO"})
-        if not ok_ic:
-            alertas.append("IC no baja de acostado/cinta a de pie")
-    if irv_b is not None and irv_p is not None:
-        ok_irv = irv_p > irv_b
-        filas.append({"Variable": "IRV/RVS", "ACOSTADO/CINTA": irv_b, "DE PIE": irv_p, "Cambio esperado": "aumenta", "Estado": "OK" if ok_irv else "REVISAR CARGA/MATCHEO"})
-        if not ok_irv:
-            alertas.append("IRV/RVS no aumenta de acostado/cinta a de pie")
-    if filas:
-        estado_global = "Respuesta ortostática fisiológicamente coherente" if not alertas else "REVISAR CARGA/MATCHEO DE DATOS ORTOSTÁTICOS: " + "; ".join(alertas)
-    return estado_global, pd.DataFrame(filas)
+    total = len(paginas)
+    posiciones_vistas = set()
+    for idx, lineas in enumerate(paginas, start=1):
+        pos = _posicion_pagina_vcritica(lineas, idx, total)
+        if pos is None:
+            continue
+        if not _pagina_contiene_hemodinamia_vcritica(lineas):
+            continue
+        fila = _construir_fila_posicion_vcritica(lineas, archivo_origen, pos, demografia)
+        # Aceptar solo páginas con al menos IC o IRV/RVS o CFT.
+        if any(es_valor_util(fila.get(k)) for k in ["IC", "IRV", "RVS", "CFT", "FC"]):
+            filas.append(fila)
+            posiciones_vistas.add(pos)
+    # Si no se detectó por página, intentar todo como un solo bloque basal si contiene hemodinamia.
+    if not filas and _pagina_contiene_hemodinamia_vcritica(todas_lineas):
+        filas.append(_construir_fila_posicion_vcritica(todas_lineas, archivo_origen, "acostado", demografia))
+    if not filas:
+        return pd.DataFrame()
+    df = pd.DataFrame(filas)
+    # Evitar duplicados: conservar primera fila basal y última de pie.
+    out = []
+    basal = df[df["Posición"].astype(str).str.contains("acostado|cinta", case=False, na=False)]
+    pie = df[df["Posición"].astype(str).str.contains("de pie", case=False, na=False)]
+    if not basal.empty:
+        out.append(basal.iloc[0].to_dict())
+    if not pie.empty:
+        out.append(pie.iloc[-1].to_dict())
+    if not out:
+        out = [df.iloc[0].to_dict()]
+    return pd.DataFrame(out).reset_index(drop=True)
+
+
+_extraer_pdf_a_dataframe_pre_vcritica = extraer_pdf_a_dataframe
+
+def extraer_pdf_a_dataframe(uploaded_file) -> pd.DataFrame:
+    """Extractor seguro: primero intenta lectura por páginas/posición; si falla, conserva el flujo previo."""
+    nombre = getattr(uploaded_file, "name", "")
+    try:
+        pdf_bytes = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
+    except Exception:
+        pdf_bytes = uploaded_file.read()
+    try:
+        df_pos = _extraer_dataframe_posiciones_vcritica(pdf_bytes, nombre)
+        if df_pos is not None and not df_pos.empty:
+            return df_pos
+    except Exception as e:
+        try:
+            st.warning(f"Extractor por página no aplicable; se usa parser previo. Detalle: {e}")
+        except Exception:
+            pass
+    # Fallback a funcionalidad previa sin romper lo que ya funcionaba.
+    bio = io.BytesIO(pdf_bytes)
+    bio.name = nombre
+    return _extraer_pdf_a_dataframe_pre_vcritica(bio)
+
+
+# Override: selección ortostática sin inventar DE PIE.
+def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    if df is None or df.empty:
+        return {}, {}
+    dfx = estandarizar_columnas_clinicas(df).copy()
+    if dfx.empty:
+        return {}, {}
+    dfx["Posición_reconocida"] = [detectar_posicion_fila(f.to_dict()) for _, f in dfx.iterrows()]
+    dfx["Método_reconocido"] = [detectar_metodo_fila(f.to_dict()) for _, f in dfx.iterrows()]
+    basal = dfx[(dfx["Método_reconocido"] == "cinta") & (dfx["Posición_reconocida"] != "de_pie")]
+    if basal.empty:
+        basal = dfx[dfx["Posición_reconocida"] == "acostado"]
+    if basal.empty:
+        basal = dfx[dfx["Posición_reconocida"] != "de_pie"]
+    if basal.empty:
+        basal = dfx.iloc[[0]]
+    pie = dfx[dfx["Posición_reconocida"] == "de_pie"]
+    # Solo usar segunda fila como DE PIE si proviene explícitamente de archivo 2 o del parser por página DE PIE.
+    if pie.empty and len(dfx) >= 2:
+        candidatos = []
+        for i, fila in dfx.iterrows():
+            txt = " | ".join(str(fila.get(c, "")) for c in ["Posición", "origen", "origen_parser", "Método"] if c in dfx.columns)
+            if re.search(r"de\s*pie|bipedest|ortostat|archivo\s*2|PDF/archivo\s*2", txt, flags=re.IGNORECASE):
+                candidatos.append(i)
+        if candidatos:
+            pie = dfx.loc[[candidatos[-1]]]
+    r_basal = extraer_resumen_ortostatico_desde_fila(basal.iloc[0]) if not basal.empty else {}
+    r_pie = extraer_resumen_ortostatico_desde_fila(pie.iloc[-1]) if not pie.empty else {}
+    if r_basal:
+        r_basal["posicion"] = "acostado"
+        r_basal["metodo"] = r_basal.get("metodo") or "cinta"
+    if r_pie:
+        r_pie["posicion"] = "de_pie"
+    return r_basal, r_pie
+
+
+def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
+    r1, r2 = obtener_resumenes_ortostaticos(df)
+    resultado = {"basal": r1, "de_pie": r2, "delta_ic": None, "delta_irv": None, "delta_fc": None, "delta_pas": None, "delta_pad": None, "detalle": ""}
+    if not r1 or not r2:
+        resultado["detalle"] = "ORTOSTATISMO NO EVALUABLE: no se detectaron dos registros válidos ACOSTADO/CINTA y DE PIE."
+        return resultado
+    partes = []
+    for key, out_key, nombre, unidad in [
+        ("ic", "delta_ic", "IC", "L/min/m²"),
+        ("irv", "delta_irv", "IRV", "dyn.s.cm-5.m²"),
+        ("fc", "delta_fc", "FC", "lpm"),
+        ("pas", "delta_pas", "PAS", "mmHg"),
+        ("pad", "delta_pad", "PAD", "mmHg"),
+    ]:
+        v1 = limpiar_numero(r1.get(key)); v2 = limpiar_numero(r2.get(key))
+        if v1 is None or v2 is None:
+            continue
+        delta = v2 - v1
+        resultado[out_key] = delta
+        partes.append(f"{nombre}: acostado/cinta {fmt(v1)} → de pie {fmt(v2)}; Δ {fmt(delta)} {unidad}")
+    resultado["detalle"] = " | ".join(partes) if partes else "ORTOSTATISMO NO EVALUABLE: faltan IC/IRV comparables entre ACOSTADO/CINTA y DE PIE."
+    return resultado
+
+
+def definir_patron_ortostatico(delta: Dict[str, Any]) -> str:
+    dic = limpiar_numero(delta.get("delta_ic"))
+    dirv = limpiar_numero(delta.get("delta_irv"))
+    dfc = limpiar_numero(delta.get("delta_fc"))
+    dpas = limpiar_numero(delta.get("delta_pas"))
+    if dic is None or dirv is None:
+        return "ORTOSTATISMO NO EVALUABLE"
+    # Conducta fisiológica esperada solicitada: IC baja e IRV aumenta.
+    if not (dic < 0 and dirv > 0):
+        return "REVISAR CARGA/MATCHEO DE DATOS ORTOSTÁTICOS"
+    if dpas is not None and dpas <= -20:
+        return "PATRÓN ORTOSTÁTICO ALTERADO POR CAÍDA TENSIONAL"
+    if dfc is not None and dfc >= 30:
+        return "PATRÓN ORTOSTÁTICO ALTERADO POR TAQUICARDIA"
+    return "PATRÓN ORTOSTÁTICO CONSERVADO"
+
+
+def descripcion_patron_ortostatico(patron: str) -> str:
+    p = normalizar_txt(patron)
+    if "revisar" in p:
+        return "La dirección esperada es descenso del IC y aumento de IRV al ponerse de pie. Si no ocurre, revisar carga, página de origen y matcheo de variables antes de interpretar."
+    if "no evaluable" in p:
+        return "No hay dos registros válidos ACOSTADO/CINTA y DE PIE para evaluar respuesta postural."
+    if "conservado" in p:
+        return "Respuesta fisiológica esperada: el IC disminuye y la IRV aumenta al pasar a bipedestación."
+    if "alterado" in p:
+        return "Respuesta postural con criterio de alerta clínica; integrar con síntomas y presión arterial."
+    return "Patrón ortostático calculado con IC e IRV entre ACOSTADO/CINTA y DE PIE."
+
+
+def evaluar_dominio_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
+    d = calcular_delta_ortostatico(df)
+    patron = definir_patron_ortostatico(d)
+    if "NO EVALUABLE" in patron or "REVISAR" in patron:
+        return {"score": None, "estado": patron, "detalle": patron + ". " + descripcion_patron_ortostatico(patron) + " " + d.get("detalle", "")}
+    return {"score": 1.0, "estado": patron, "detalle": patron + ". " + descripcion_patron_ortostatico(patron) + " Cambios: " + d.get("detalle", "")}
+
+
+def estado_ortostatico_simple(df: Optional[pd.DataFrame]) -> str:
+    try:
+        d = calcular_delta_ortostatico(df)
+        return definir_patron_ortostatico(d).upper()
+    except Exception:
+        return "ORTOSTATISMO NO EVALUABLE"
+
+
+# Volemia por CFT según sexo. CFTnr solo complementa.
+def diagnostico_volemia(cft: Any, cftnr: Any = None, sexo: Any = None) -> str:
+    cftv = limpiar_numero(cft)
+    cftnrv = limpiar_numero(cftnr)
+    sx = normalizar_txt(sexo or "")
+    if sx in ["m", "masculino", "hombre"]:
+        umbral = 34.0; sx_txt = "masculino"
+    elif sx in ["f", "femenino", "mujer"]:
+        umbral = 24.0; sx_txt = "femenino"
+    else:
+        # Si falta sexo, usar umbral conservador amplio y explicitarlo.
+        umbral = None; sx_txt = "no informado"
+    if cftv is None:
+        return f"VOLEMIA NO EVALUABLE: falta CFT basal. CFTnr {fmt(cftnrv, 2)} como dato complementario."
+    if umbral is None:
+        if cftv > 34:
+            return f"HIPERVOLEMIA. Base: CFT {fmt(cftv,2)}; sexo {sx_txt}. Falta sexo para umbral específico, pero CFT supera umbral masculino de 34."
+        return f"VOLEMIA A INTERPRETAR. Base: CFT {fmt(cftv,2)}; sexo {sx_txt}. Completar sexo para aplicar umbral 34 hombres / 24 mujeres."
+    if cftv > umbral:
+        return f"HIPERVOLEMIA. Base: CFT {fmt(cftv,2)} 1/kOhm; sexo {sx_txt}; umbral >{fmt(umbral,0)}. Sugiere componente de retención de volumen."
+    return f"NORMOVOLEMIA. Base: CFT {fmt(cftv,2)} 1/kOhm; sexo {sx_txt}; umbral ≤{fmt(umbral,0)}."
+
+
+# Resumen integrado con sexo y separación IRV/RVS.
+_extraer_resumen_integrado_pre_vcritica = extraer_resumen_integrado
+
+def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
+    r = _extraer_resumen_integrado_pre_vcritica(df)
+    try:
+        rb, _ = obtener_resumenes_ortostaticos(df)
+        for k in ["ic", "irv", "fc", "pas", "pad", "ca", "cft", "cftnr"]:
+            if rb.get(k) is not None:
+                r[k] = rb.get(k)
+        # sexo desde fila basal si existe
+        dfd = seleccionar_df_diagnostico(estandarizar_columnas_clinicas(df)) if df is not None and not df.empty else pd.DataFrame()
+        if not dfd.empty:
+            fila = dfd.iloc[0].to_dict()
+            sexo = _valor_fila_case_insensitive(fila, "Sexo", "sexo", "Sex")
+            if es_valor_util(sexo):
+                r["sexo"] = sexo
+            rvs = _valor_fila_case_insensitive(fila, "RVS", "rvs", "SVR")
+            if es_valor_util(rvs):
+                r["rvs"] = rvs
+    except Exception:
+        pass
+    return r
+
+
+# Dominios actualizados para volemia por sexo y ortostatismo no inventado.
+def estado_volemia_simple(cft: Any, cftnr: Any = None, sexo: Any = None) -> str:
+    txt = diagnostico_volemia(cft, cftnr, sexo).upper()
+    if "HIPERVOLEMIA" in txt:
+        return "HIPERVOLEMIA"
+    if "HIPOVOLEMIA" in txt:
+        return "HIPOVOLEMIA"
+    if "NORMOVOLEMIA" in txt:
+        return "NORMOVOLEMIA"
+    return "VOLEMIA NO EVALUABLE"
+
+
+def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[List[str]]:
+    rb = resumen_acostado_cinta_para_patron(df, r)
+    patron = patron_circulatorio_simple_acostado_cinta(rb, None)
+    sexo = rb.get("sexo") or rb.get("Sexo") or r.get("sexo") or r.get("Sexo")
+    volemia_estado = estado_volemia_simple(rb.get("cft"), rb.get("cftnr"), sexo)
+    contract_estado = estado_contractilidad_simple(rb.get("iv") or r.get("iv"), rb.get("iac") or r.get("iac"), rb.get("cts") or r.get("cts"))
+    acop_estado = estado_acoplamiento_simple(rb.get("ea") or r.get("ea"), rb.get("ees") or r.get("ees"), rb.get("ava") or r.get("ava"))
+    orto_estado = estado_ortostatico_simple(df)
+    irv_txt = fmt(rb.get('irv'), 0, ' dyn.s.cm-5.m²')
+    rvs_txt = fmt(rb.get('rvs') or r.get('rvs'), 0, ' dyn.s.cm-5')
+    rows = [
+        ["Dominio", "Resultado", "Interpretación resumida"],
+        ["Patrón hemodinámico de referencia", patron, f"Calculado solo con ACOSTADO/CINTA. IC {fmt(rb.get('ic'), 2, ' L/min/m²')}; IRV {irv_txt}; RVS {rvs_txt}. Es el eje diagnóstico principal."],
+        ["Volemia", volemia_estado, diagnostico_volemia(rb.get('cft'), rb.get('cftnr'), sexo)],
+        ["Contractilidad", contract_estado, f"Lectura complementaria por IV, IAC y CTS. IV {fmt((rb.get('iv') or r.get('iv')), 2)}; IAC {fmt((rb.get('iac') or r.get('iac')), 2)}; CTS {fmt((rb.get('cts') or r.get('cts')), 2)}."],
+        ["Acoplamiento ventrículo-arterial", acop_estado, f"Dominio complementario por EA/EES. EA {fmt((rb.get('ea') or r.get('ea')), 2)}; EES {fmt((rb.get('ees') or r.get('ees')), 2)}; EA/EES {fmt((rb.get('ava') or r.get('ava')), 2)}."],
+        ["Comportamiento ortostático", orto_estado, "Solo se informa si existe registro DE PIE válido. No modifica el patrón ACOSTADO/CINTA."],
+    ]
+    return [[limpiar_patrones_prohibidos(c) for c in row] for row in rows]
+
 
 # =========================================================
 # INTERFAZ
@@ -8875,37 +9165,6 @@ if df_final.empty:
     st.stop()
 
 st.subheader("Datos integrados estructurados")
-st.dataframe(df_final, use_container_width=True)
-
-st.subheader("Validación y corrección segura ACOSTADO/CINTA vs DE PIE")
-st.caption(
-    "La app conserva el parser automático, pero esta tabla permite auditar y corregir sin perder funcionalidad. "
-    "Los valores que figuren aquí son los que se usarán para gráficos, conclusiones y PDF. "
-    "Regla fisiológica esperada: al pasar a DE PIE, el IC baja y la IRV/RVS aumenta."
-)
-tabla_posiciones = construir_tabla_correccion_posiciones(df_final)
-tabla_posiciones_editada = st.data_editor(
-    tabla_posiciones,
-    use_container_width=True,
-    num_rows="fixed",
-    key="editor_posiciones_acostado_depie",
-    column_config={
-        "Variable": st.column_config.TextColumn("Variable", disabled=True),
-        "ACOSTADO/CINTA": st.column_config.NumberColumn("ACOSTADO/CINTA", format="%.2f"),
-        "DE PIE": st.column_config.NumberColumn("DE PIE", format="%.2f"),
-    },
-)
-df_final = aplicar_tabla_correccion_posiciones(df_final, tabla_posiciones_editada)
-estado_orto_seguro, tabla_orto_segura = validar_respuesta_ortostatica_esperada(df_final)
-if "REVISAR" in estado_orto_seguro:
-    st.error(estado_orto_seguro)
-elif estado_orto_seguro.startswith("Respuesta"):
-    st.success(estado_orto_seguro)
-else:
-    st.warning(estado_orto_seguro)
-st.dataframe(tabla_orto_segura, use_container_width=True)
-
-st.subheader("Datos integrados validados para informe")
 st.dataframe(df_final, use_container_width=True)
 
 # =========================================================
