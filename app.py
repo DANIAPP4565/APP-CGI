@@ -399,31 +399,20 @@ def numeros_en_texto(texto: Any) -> List[float]:
 # IC ESTRICTO: nunca importar dZ/dt MAX, ITC, IV, IAC, IH u otra métrica como IC
 # =========================================================
 
-
 def es_fuente_ic_prohibida(texto: Any) -> bool:
-    """Bloquea fuentes que NO pueden alimentar IC cuando no existe etiqueta IC explícita.
+    """Bloquea fuentes que no son Índice Cardíaco.
 
-    Importante: una tabla puede contener varios encabezados en la misma línea
-    (IC, IRV, CA, etc.). En ese caso NO se debe bloquear IC por la presencia
-    de otras etiquetas: se debe mapear por columna. Solo se bloquea si la línea
-    contiene una fuente prohibida y no contiene una etiqueta explícita de IC/CI.
+    Objetivo clínico: IC debe venir solamente de IC / Índice Cardíaco / Cardiac Index.
+    No se acepta dZ/dt MAX, ITC, IV, IAC, IH, DS/IDS, CFT, CA, RVS/IRV ni variables por posición de tabla.
     """
     t = normalizar_txt(texto)
     t2 = re.sub(r"[^a-z0-9/]+", " ", t).strip()
-    tiene_ic_explicito = bool(re.search(r"(?<![a-z0-9])(?:ic|ci)(?![a-z0-9])|indice\s+cardiaco|cardiac\s+index", t2, re.IGNORECASE))
-    patrones_duros = [
+    patrones = [
         r"\bdz\s*/?\s*dt\b", r"\bdzdt\b", r"\bd\s*z\s*/\s*d\s*t\b", r"max\s+dz", r"dz\s*dt\s*max",
         r"\bitc\b", r"indice\s+(?:de\s+)?trabajo\s+cardiaco", r"trabajo\s+cardiaco",
         r"\biv\b", r"indice\s+(?:de\s+)?velocidad", r"velocity\s+index",
         r"\biac\b", r"\baci\b", r"indice\s+(?:de\s+)?aceleracion", r"acceleration\s+index",
         r"\bih\b", r"indice\s+(?:de\s+)?heather", r"heather",
-    ]
-    if tiene_ic_explicito:
-        # Si hay IC explícito, se permite la línea para extracción por etiqueta/columna,
-        # excepto cuando el único contexto es una expresión prohibida tipo dZ/dt o ITC.
-        # El mapeo por columna resolverá qué número corresponde a IC.
-        return False
-    patrones_contexto = patrones_duros + [
         r"\bcft\b", r"\btfc\b", r"contenido\s+(?:de\s+)?fluidos",
         r"\birv\b", r"\brvs\b", r"\bsvr\b", r"resistencia\s+vascular",
         r"\bca\b", r"complacencia\s+arterial", r"arterial\s+compliance",
@@ -431,27 +420,23 @@ def es_fuente_ic_prohibida(texto: Any) -> bool:
         r"\bz0\b", r"impedancia\s+basal",
         r"\bfc\b", r"frecuencia\s+cardiaca", r"heart\s+rate",
     ]
-    return any(re.search(pat, t2, flags=re.IGNORECASE) for pat in patrones_contexto)
+    return any(re.search(p, t2, flags=re.IGNORECASE) for p in patrones)
 
 
 def es_etiqueta_ic_explicita(texto: Any) -> bool:
-    """Acepta IC solo si existe etiqueta explícita IC/CI/Índice cardíaco/Cardiac Index.
-
-    Esto permite una línea de encabezados múltiples como "IC IRV CA CFT",
-    pero impide que IV, IAC, IH, ITC o dZ/dt sean interpretados como IC.
-    """
+    """Acepta únicamente etiquetas explícitas de Índice Cardíaco."""
+    if es_fuente_ic_prohibida(texto):
+        return False
     t = normalizar_txt(texto)
     t2 = re.sub(r"[^a-z0-9/]+", " ", t).strip()
-    # Prohibiciones absolutas si NO hay token IC/CI independiente.
-    tiene_token_ic = bool(re.search(r"(?<![a-z0-9])ic(?![a-z0-9])", t2, re.IGNORECASE))
-    tiene_token_ci = bool(re.search(r"(?<![a-z0-9])ci(?![a-z0-9])", t2, re.IGNORECASE))
-    tiene_nombre_largo = bool(re.search(r"indice\s+cardiaco|cardiac\s+index", t2, re.IGNORECASE))
-    if not (tiene_token_ic or tiene_token_ci or tiene_nombre_largo):
-        return False
-    # Si la línea solo menciona una métrica prohibida sin IC independiente, no aceptar.
-    if re.search(r"\bdz\s*/?\s*dt\b|\bdzdt\b|\bitc\b|trabajo\s+cardiaco", t2, re.IGNORECASE) and not (tiene_token_ic or tiene_token_ci or tiene_nombre_largo):
-        return False
-    return True
+    patrones_ic = [
+        r"(?<![a-z0-9])ic(?![a-z0-9])",
+        r"(?<![a-z0-9])ci(?![a-z0-9])",
+        r"indice\s+cardiaco",
+        r"index\s+cardiaco",
+        r"cardiac\s+index",
+    ]
+    return any(re.search(p, t2, flags=re.IGNORECASE) for p in patrones_ic)
 
 
 def extraer_ic_estricto_de_texto(texto: Any) -> Optional[float]:
@@ -657,6 +642,21 @@ def extraer_lineas_pdf(uploaded_file) -> List[Dict[str, Any]]:
                     linea = linea.strip()
                     if linea:
                         registros.append({"pagina_pdf": p, "texto_extraido": linea, "archivo_origen": nombre_archivo})
+
+                # Rescate adicional de tablas: muchos informes Z-Logic separan rótulo/valor
+                # en columnas y extract_text() puede perder la relación. Se agregan filas
+                # tabulares con separador |, conservando la página real. Esto NO reemplaza
+                # la extracción previa; solo aporta una fuente más trazable para el parser.
+                try:
+                    for tabla in (page.extract_tables() or []):
+                        for fila_tabla in (tabla or []):
+                            celdas = [str(c or '').strip() for c in (fila_tabla or [])]
+                            celdas = [c for c in celdas if c]
+                            if len(celdas) >= 2:
+                                linea_tabla = ' | '.join(celdas)
+                                registros.append({"pagina_pdf": p, "texto_extraido": linea_tabla, "archivo_origen": nombre_archivo})
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -1157,105 +1157,30 @@ def aplicar_fallback_regex_global(lineas: List[str], filas: List[Dict[str, Any]]
                 break
 
 
-
-def _claves_posiciones_tabla(linea: str) -> List[Tuple[int, str]]:
-    """Devuelve claves de encabezado ordenadas por su posición real en la línea.
-
-    La versión previa usaba un orden fijo de variables. Eso podía desplazar los
-    valores de una columna a otra. Esta función permite mapear IC→IC, IRV→IRV,
-    CA→CA, etc., respetando el orden real del PDF.
-    """
-    txt = str(linea)
-    encontrados: List[Tuple[int, str]] = []
-    specs = [
-        ("cftnr", PATRONES_CLAVE.get("cftnr")),
-        ("cft", PATRONES_CLAVE.get("cft")),
-        ("ih", PATRONES_CLAVE.get("ih")),
-        ("iac", PATRONES_CLAVE.get("iac")),
-        ("cts", PATRONES_CLAVE.get("cts")),
-        ("fc", PATRONES_CLAVE.get("fc")),
-        ("vm", PATRONES_CLAVE.get("vm")),
-        ("ic", PATRONES_CLAVE.get("ic")),
-        ("irv", PATRONES_CLAVE.get("irv")),
-        ("rvs", PATRONES_CLAVE.get("rvs")),
-        ("ca", PATRONES_CLAVE.get("ca")),
-        ("iv", PATRONES_CLAVE.get("iv")),
-        ("ea", PATRONES_CLAVE.get("ea")),
-        ("ees", PATRONES_CLAVE.get("ees")),
-        ("ava", PATRONES_CLAVE.get("ava")),
-        ("ids", PATRONES_CLAVE.get("ids")),
-        ("ds", PATRONES_CLAVE.get("ds")),
-        ("z0", PATRONES_CLAVE.get("z0")),
-    ]
-    for clave, pat in specs:
-        if not pat:
-            continue
-        for m in re.finditer(pat, txt, flags=re.IGNORECASE):
-            # IC solo si es etiqueta explícita y no parte de IV/IAC/IH/ITC/dZdt.
-            if clave == "ic" and not es_etiqueta_ic_explicita(m.group(0)):
-                continue
-            encontrados.append((m.start(), clave))
-            break
-    encontrados.sort(key=lambda x: x[0])
-
-    # Resolver solapamientos frecuentes por nombres incluidos dentro de otros.
-    claves = [k for _, k in encontrados]
-    if "cftnr" in claves and "cft" in claves:
-        # Si CFT queda contenido en CFTnr, eliminar CFT salvo que aparezca como otro encabezado independiente.
-        txt_sin_cftnr = re.sub(PATRONES_CLAVE["cftnr"], " ", txt, flags=re.IGNORECASE)
-        if not re.search(PATRONES_CLAVE["cft"], txt_sin_cftnr, flags=re.IGNORECASE):
-            encontrados = [(p, k) for p, k in encontrados if k != "cft"]
-    claves = [k for _, k in encontrados]
-    if "ids" in claves and "ds" in claves:
-        txt_sin_ids = re.sub(PATRONES_CLAVE["ids"], " ", txt, flags=re.IGNORECASE)
-        if not re.search(PATRONES_CLAVE["ds"], txt_sin_ids, flags=re.IGNORECASE):
-            encontrados = [(p, k) for p, k in encontrados if k != "ds"]
-    claves = [k for _, k in encontrados]
-    if "irv" in claves and "rvs" in claves:
-        txt_sin_irv = re.sub(PATRONES_CLAVE["irv"], " ", txt, flags=re.IGNORECASE)
-        if not re.search(PATRONES_CLAVE["rvs"], txt_sin_irv, flags=re.IGNORECASE):
-            encontrados = [(p, k) for p, k in encontrados if k != "rvs"]
-
-    # Quitar duplicados conservando el primero por posición.
-    out: List[Tuple[int, str]] = []
-    vistos = set()
-    for pos, clave in encontrados:
-        if clave not in vistos:
-            out.append((pos, clave))
-            vistos.add(clave)
-    return out
-
-
 def aplicar_extraccion_tablas(lineas: List[str], filas: List[Dict[str, Any]]) -> None:
-    """Detecta tablas con encabezados y fila de valores siguiente, respetando columnas reales.
-
-    Corrección crítica: IC ya no se excluye de las tablas. Se mapea por posición
-    de encabezado explícito, de modo que IC se carga desde la columna IC y no desde
-    dZ/dt MAX, IV, IAC, IH u otra variable cercana.
-    """
+    """Detecta líneas con varias etiquetas y una fila de valores siguiente."""
     for i, linea in enumerate(lineas[:-1]):
-        claves_pos = _claves_posiciones_tabla(linea)
-        claves = [k for _, k in claves_pos if k in CLAVES_NUMERICAS and k != "pas_pad"]
+        claves = [k for k in claves_en_linea_robusto(linea) if k in CLAVES_NUMERICAS and k not in ["pas_pad", "ic"]]
+        # Quitar duplicados manteniendo orden.
+        claves = list(dict.fromkeys(claves))
         if len(claves) < 2:
             continue
-        # Buscar la primera línea posterior con suficientes números; no asumir solo la inmediata.
-        for j in range(i + 1, min(i + 5, len(lineas))):
-            nums = numeros_en_texto(lineas[j])
-            # Evitar líneas que son otro encabezado sin datos.
-            if len(nums) < max(2, min(len(claves), 3)):
-                continue
-            # Mapear por orden real. Si hay más números que claves, tomar los últimos len(claves)
-            # cuando la línea parece contener rangos previos; si coincide en cantidad, tomar directo.
-            if len(nums) >= len(claves):
-                vals = nums[:len(claves)]
-            else:
-                vals = nums
-            for clave, cand in zip(claves, vals):
+        bloque_valores = " ".join(lineas[i+1:i+4])
+        nums = numeros_en_texto(bloque_valores)
+        if len(nums) < 2:
+            continue
+        pos = 0
+        for clave in claves:
+            elegido = None
+            while pos < len(nums):
+                cand = nums[pos]
+                pos += 1
                 if rango_plausible(clave, cand):
                     elegido = limpiar_valor_cts(cand) if clave == "cts" else cand
-                    var = clave.upper() if clave != "ava" else "AVA"
-                    agregar_si_util(filas, var, elegido, f"tabla columnas: {linea} | valores: {lineas[j]}")
-            break
+                    break
+            if elegido is not None:
+                var = clave.upper() if clave != "ava" else "AVA"
+                agregar_si_util(filas, var, elegido, linea)
 
 def _detectar_separador_posicion(lineas: List[str]) -> Optional[int]:
     """Detecta el índice de la línea que marca el inicio del bloque DE PIE en el texto.
@@ -1387,31 +1312,21 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
     archivo_origen = str(registros[0].get("archivo_origen", "")).strip()
     lineas = [str(r.get("texto_extraido", "")).strip() for r in registros if str(r.get("texto_extraido", "")).strip()]
 
-    # -----------------------------------------------------------------------
-    # DETECCIÓN POR PÁGINAS PARA INFORMES Z-LOGIC DE 4 HOJAS
-    # En este formato, los valores de DE PIE pueden estar en la hoja 3/4 sin
-    # un separador textual compacto. Por eso se parsea por página antes de
-    # intentar la separación lineal. Hoja 1-2 = basal/acostado/CINTA; hoja 3 = de pie.
-    # -----------------------------------------------------------------------
-    paginas: Dict[int, List[str]] = {}
-    for r in registros:
-        try:
-            pnum = int(r.get("pagina_pdf") or 0)
-        except Exception:
-            pnum = 0
-        txt = str(r.get("texto_extraido", "")).strip()
-        if txt:
-            paginas.setdefault(pnum, []).append(txt)
-    paginas = {k: v for k, v in paginas.items() if k > 0 and v}
-    total_paginas = max(paginas.keys()) if paginas else 0
+    def _paciente_desde_archivo_local() -> Optional[str]:
+        pac = None
+        if archivo_origen:
+            pac = re.sub("[.]pdf$", "", archivo_origen, flags=re.IGNORECASE)
+            pac = re.sub("[-_]*logic[0-9]*", "", pac, flags=re.IGNORECASE)
+            pac = re.sub(r"\d{2}[-/]\d{2}[-/]\d{2,4}", "", pac, flags=re.IGNORECASE)
+            pac = re.sub(r"\b(CGI|ObraSocial|informe|integrado|SD|basal|acostado|de\s*pie|spot|cinta|Z[-\s]?Logic)\b", "", pac, flags=re.IGNORECASE)
+            pac = pac.replace("_", " ").replace("-", " ").strip()
+            if re.search(r"\bpulsos?\b|\blpm\b|\bmin\b", pac, re.IGNORECASE):
+                pac = None
+        return pac
 
-    def _bloque_tiene_datos_hemodinamicos(b: Dict[str, Any]) -> bool:
-        res = b.get("resumen", {}) if isinstance(b, dict) else {}
-        return any(es_valor_util(res.get(k)) for k in ["IC", "IRV", "RVS", "FC", "PAS", "PAD", "CFT", "CA"])
-
-    def _construir_fila_desde_bloque(bloque: Dict[str, Any], paciente_archivo: Optional[str], pos_forzada: str, origen_txt: str) -> Dict[str, Any]:
-        res = bloque["resumen"]
-        ctx = bloque["contexto"]
+    def _construir_fila_desde_bloque_local(bloque: Dict[str, Any], paciente_archivo: Optional[str], pos_forzada: str) -> Dict[str, Any]:
+        res = bloque.get("resumen", {}) or {}
+        ctx = bloque.get("contexto", {}) or {}
         fecha_e = formatear_fecha_ddmmyyyy(res.get("FECHA_ESTUDIO") or res.get("FECHA"))
         fecha_n = formatear_fecha_ddmmyyyy(res.get("FECHA_NACIMIENTO"))
         if fecha_e and fecha_n and parsear_fecha(fecha_e) == parsear_fecha(fecha_n):
@@ -1432,42 +1347,38 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
             "Medicación": ctx.get("Medicación"),
             "Posición": pos_forzada,
             "Texto_PDF": ctx.get("Texto_PDF"),
-            "PAS": res.get("PAS"), "PAD": res.get("PAD"), "FC": res.get("FC"), "IC": res.get("IC"),
-            "IRV": res.get("IRV"), "RVS": res.get("RVS"), "CA": res.get("CA"),
-            "CFT": res.get("CFT"), "CFTnr": res.get("CFTNR"),
+            "PAS": res.get("PAS"), "PAD": res.get("PAD"), "FC": res.get("FC"),
+            "IC": res.get("IC"), "IRV": res.get("IRV"), "RVS": res.get("RVS"),
+            "CA": res.get("CA"), "CFT": res.get("CFT"), "CFTnr": res.get("CFTNR"),
             "IH": res.get("IH"), "IV": res.get("IV"), "IAC": res.get("IAC"), "CTS": res.get("CTS"),
             "EA": res.get("EA"), "EES": res.get("EES"), "EA/EES": ava_b,
             "DS": res.get("DS"), "IDS": res.get("IDS"), "Z0": res.get("Z0"),
-            "origen_parser": origen_txt,
+            "origen_parser": f"PDF por páginas - bloque {pos_forzada}",
         }
 
-    pac_archivo_pag = None
-    if archivo_origen:
-        pac_archivo_pag = re.sub("[.]pdf$", "", archivo_origen, flags=re.IGNORECASE)
-        pac_archivo_pag = re.sub("[-_]*logic[0-9]*", "", pac_archivo_pag, flags=re.IGNORECASE)
-        pac_archivo_pag = re.sub(r"\d{2}[-/]\d{2}[-/]\d{2,4}", "", pac_archivo_pag, flags=re.IGNORECASE)
-        pac_archivo_pag = re.sub(r"\b(CGI|ObraSocial|informe|integrado|SD|basal|acostado|de\s*pie|spot|cinta|Z[-\s]?Logic)\b", "", pac_archivo_pag, flags=re.IGNORECASE)
-        pac_archivo_pag = pac_archivo_pag.replace("_", " ").replace("-", " ").strip()
-        if re.search(r"\bpulsos?\b|\blpm\b|\bmin\b", pac_archivo_pag, re.IGNORECASE):
-            pac_archivo_pag = None
-
-    if total_paginas >= 4 and 3 in paginas:
-        lineas_ac_pag = []
-        for pn in sorted(paginas):
-            if pn in [1, 2]:
-                lineas_ac_pag.extend(paginas[pn])
-        lineas_pie_pag = list(paginas.get(3, []))
-        if lineas_ac_pag and lineas_pie_pag:
-            bloque_ac_pag = _parsear_bloque_lineas(lineas_ac_pag, archivo_origen, posicion_forzada="acostado")
-            bloque_pie_pag = _parsear_bloque_lineas(lineas_pie_pag, archivo_origen, posicion_forzada="de pie")
-            if _bloque_tiene_datos_hemodinamicos(bloque_pie_pag):
-                filas_out = []
-                if _bloque_tiene_datos_hemodinamicos(bloque_ac_pag):
-                    filas_out.append(_construir_fila_desde_bloque(bloque_ac_pag, pac_archivo_pag, "acostado", "PDF Z-Logic 4 hojas — páginas 1-2 ACOSTADO/CINTA"))
-                filas_out.append(_construir_fila_desde_bloque(bloque_pie_pag, pac_archivo_pag, "de pie", "PDF Z-Logic 4 hojas — página 3 DE PIE"))
-                df_final = pd.DataFrame(filas_out)
+    # -----------------------------------------------------------------------
+    # REGLA Z-LOGIC 4 PÁGINAS: páginas 1-2 = ACOSTADO/CINTA; página 3 = DE PIE.
+    # Esta regla solo se activa cuando el PDF realmente trae 4 o más páginas.
+    # No modifica el flujo habitual de PDFs de una o dos páginas.
+    # -----------------------------------------------------------------------
+    try:
+        paginas = sorted({int(r.get("pagina_pdf", 0) or 0) for r in registros})
+        if paginas and max(paginas) >= 4:
+            lineas_ac_pag = [str(r.get("texto_extraido", "")).strip() for r in registros if int(r.get("pagina_pdf", 0) or 0) in [1, 2] and str(r.get("texto_extraido", "")).strip()]
+            lineas_pie_pag = [str(r.get("texto_extraido", "")).strip() for r in registros if int(r.get("pagina_pdf", 0) or 0) == 3 and str(r.get("texto_extraido", "")).strip()]
+            if lineas_ac_pag and lineas_pie_pag:
+                pac_archivo = _paciente_desde_archivo_local()
+                bloque_ac = _parsear_bloque_lineas(lineas_ac_pag, archivo_origen, posicion_forzada="acostado")
+                bloque_pie = _parsear_bloque_lineas(lineas_pie_pag, archivo_origen, posicion_forzada="de pie")
+                fila_ac = _construir_fila_desde_bloque_local(bloque_ac, pac_archivo, "acostado")
+                fila_pie = _construir_fila_desde_bloque_local(bloque_pie, pac_archivo, "de pie")
+                # Incluir de pie aunque falten algunas variables: el usuario debe poder ver y corregir
+                # la fila de la página 3 en el editor seguro sin que se pierda la posición.
+                df_final = pd.DataFrame([fila_ac, fila_pie])
                 df_final.attrs = {}
                 return df_final
+    except Exception:
+        pass
 
     # -----------------------------------------------------------------------
     # DETECCIÓN DE DOS BLOQUES DE POSICIÓN EN UN ÚNICO PDF
@@ -8739,6 +8650,132 @@ def agregar_capturas_originales_reportlab_story(story, ancho: float, max_captura
     except Exception:
         pass
 
+
+# =========================================================
+# CORRECCIÓN SEGURA DE POSICIONES Y VARIABLES
+# =========================================================
+VARIABLES_EDITABLES_POSICION = [
+    "PAS", "PAD", "FC", "IC", "IRV", "RVS", "CA", "CFT", "CFTnr",
+    "IH", "IV", "IAC", "CTS", "EA", "EES", "EA/EES", "DS", "IDS", "Z0",
+]
+
+
+def _indice_fila_por_posicion_segura(df: pd.DataFrame, objetivo: str) -> Optional[int]:
+    """Devuelve índice de fila basal o de pie sin usar texto largo del PDF.
+
+    Si el parser falla en reconocer posiciones, se usa una regla segura y explícita:
+    primera fila = ACOSTADO/CINTA, segunda fila = DE PIE.
+    """
+    if df is None or df.empty:
+        return None
+    dfx = df.copy()
+    if "Posición" in dfx.columns:
+        posiciones = dfx["Posición"].apply(normalizar_posicion_estudio)
+    else:
+        posiciones = pd.Series(["no_reconocida"] * len(dfx), index=dfx.index)
+    if objetivo == "de_pie":
+        idxs = list(dfx.index[posiciones == "de_pie"])
+        if idxs:
+            return idxs[0]
+        if len(dfx) >= 2:
+            return dfx.index[1]
+        return None
+    idxs = list(dfx.index[(posiciones == "acostado") | (posiciones == "no_reconocida")])
+    idxs = [i for i in idxs if posiciones.loc[i] != "de_pie"]
+    if idxs:
+        return idxs[0]
+    return dfx.index[0]
+
+
+def construir_tabla_correccion_posiciones(df: pd.DataFrame) -> pd.DataFrame:
+    """Tabla editable: una fila por variable, dos columnas por posición.
+
+    Esta capa no elimina el parser existente. Permite auditar y corregir el valor real
+    cuando el PDF no conserva bien la estructura de tablas o cuando la página 3 no fue
+    interpretada correctamente.
+    """
+    idx_ac = _indice_fila_por_posicion_segura(df, "acostado")
+    idx_pie = _indice_fila_por_posicion_segura(df, "de_pie")
+    filas = []
+    for var in VARIABLES_EDITABLES_POSICION:
+        val_ac = df.at[idx_ac, var] if idx_ac is not None and var in df.columns else None
+        val_pie = df.at[idx_pie, var] if idx_pie is not None and var in df.columns else None
+        filas.append({
+            "Variable": var,
+            "ACOSTADO/CINTA": limpiar_numero(val_ac),
+            "DE PIE": limpiar_numero(val_pie),
+        })
+    return pd.DataFrame(filas)
+
+
+def aplicar_tabla_correccion_posiciones(df: pd.DataFrame, tabla: pd.DataFrame) -> pd.DataFrame:
+    """Aplica la tabla editable al DataFrame usado por gráficos, conclusiones y PDF.
+
+    Si el usuario no cambia nada, el resultado es equivalente al parser. Si corrige
+    un valor, ese valor se vuelve la fuente clínica principal para esa posición.
+    """
+    if df is None or df.empty or tabla is None or tabla.empty:
+        return df
+    out = df.copy().reset_index(drop=True)
+    # Garantizar dos filas: basal y de pie. Si falta de pie, se crea sin tocar la basal.
+    if len(out) == 1:
+        nueva = out.iloc[0].copy()
+        for v in VARIABLES_EDITABLES_POSICION:
+            if v in nueva.index:
+                nueva[v] = None
+        nueva["Posición"] = "de pie"
+        nueva["origen_parser"] = "Fila DE PIE creada para corrección manual segura"
+        out = pd.concat([out, pd.DataFrame([nueva])], ignore_index=True)
+    idx_ac = _indice_fila_por_posicion_segura(out, "acostado")
+    idx_pie = _indice_fila_por_posicion_segura(out, "de_pie")
+    if idx_ac is None:
+        idx_ac = 0
+    if idx_pie is None and len(out) >= 2:
+        idx_pie = 1
+    # Etiquetas explícitas para que las funciones siguientes no confundan posiciones.
+    out.at[idx_ac, "Posición"] = "acostado"
+    out.at[idx_ac, "Método"] = "cinta"
+    if idx_pie is not None:
+        out.at[idx_pie, "Posición"] = "de pie"
+        out.at[idx_pie, "Método"] = "cinta"
+    for _, row in tabla.iterrows():
+        var = str(row.get("Variable", "")).strip()
+        if not var or var not in VARIABLES_EDITABLES_POSICION:
+            continue
+        if var not in out.columns:
+            out[var] = None
+        val_ac = limpiar_numero(row.get("ACOSTADO/CINTA"))
+        val_pie = limpiar_numero(row.get("DE PIE"))
+        if val_ac is not None:
+            out.at[idx_ac, var] = val_ac
+        if idx_pie is not None and val_pie is not None:
+            out.at[idx_pie, var] = val_pie
+    out["Corrección_posiciones"] = "Valores validados por tabla ACOSTADO/CINTA vs DE PIE"
+    return out
+
+
+def validar_respuesta_ortostatica_esperada(df: pd.DataFrame) -> Tuple[str, pd.DataFrame]:
+    """Control fisiológico simple: en ortostatismo normal IC baja e IRV/RVS aumenta."""
+    d = calcular_delta_ortostatico(df)
+    ic_b = limpiar_numero(d.get("basal", {}).get("ic")); ic_p = limpiar_numero(d.get("de_pie", {}).get("ic"))
+    irv_b = limpiar_numero(d.get("basal", {}).get("irv")); irv_p = limpiar_numero(d.get("de_pie", {}).get("irv"))
+    filas = []
+    estado_global = "No evaluable"
+    alertas = []
+    if ic_b is not None and ic_p is not None:
+        ok_ic = ic_p < ic_b
+        filas.append({"Variable": "IC", "ACOSTADO/CINTA": ic_b, "DE PIE": ic_p, "Cambio esperado": "baja", "Estado": "OK" if ok_ic else "REVISAR CARGA/MATCHEO"})
+        if not ok_ic:
+            alertas.append("IC no baja de acostado/cinta a de pie")
+    if irv_b is not None and irv_p is not None:
+        ok_irv = irv_p > irv_b
+        filas.append({"Variable": "IRV/RVS", "ACOSTADO/CINTA": irv_b, "DE PIE": irv_p, "Cambio esperado": "aumenta", "Estado": "OK" if ok_irv else "REVISAR CARGA/MATCHEO"})
+        if not ok_irv:
+            alertas.append("IRV/RVS no aumenta de acostado/cinta a de pie")
+    if filas:
+        estado_global = "Respuesta ortostática fisiológicamente coherente" if not alertas else "REVISAR CARGA/MATCHEO DE DATOS ORTOSTÁTICOS: " + "; ".join(alertas)
+    return estado_global, pd.DataFrame(filas)
+
 # =========================================================
 # INTERFAZ
 # =========================================================
@@ -8838,6 +8875,37 @@ if df_final.empty:
     st.stop()
 
 st.subheader("Datos integrados estructurados")
+st.dataframe(df_final, use_container_width=True)
+
+st.subheader("Validación y corrección segura ACOSTADO/CINTA vs DE PIE")
+st.caption(
+    "La app conserva el parser automático, pero esta tabla permite auditar y corregir sin perder funcionalidad. "
+    "Los valores que figuren aquí son los que se usarán para gráficos, conclusiones y PDF. "
+    "Regla fisiológica esperada: al pasar a DE PIE, el IC baja y la IRV/RVS aumenta."
+)
+tabla_posiciones = construir_tabla_correccion_posiciones(df_final)
+tabla_posiciones_editada = st.data_editor(
+    tabla_posiciones,
+    use_container_width=True,
+    num_rows="fixed",
+    key="editor_posiciones_acostado_depie",
+    column_config={
+        "Variable": st.column_config.TextColumn("Variable", disabled=True),
+        "ACOSTADO/CINTA": st.column_config.NumberColumn("ACOSTADO/CINTA", format="%.2f"),
+        "DE PIE": st.column_config.NumberColumn("DE PIE", format="%.2f"),
+    },
+)
+df_final = aplicar_tabla_correccion_posiciones(df_final, tabla_posiciones_editada)
+estado_orto_seguro, tabla_orto_segura = validar_respuesta_ortostatica_esperada(df_final)
+if "REVISAR" in estado_orto_seguro:
+    st.error(estado_orto_seguro)
+elif estado_orto_seguro.startswith("Respuesta"):
+    st.success(estado_orto_seguro)
+else:
+    st.warning(estado_orto_seguro)
+st.dataframe(tabla_orto_segura, use_container_width=True)
+
+st.subheader("Datos integrados validados para informe")
 st.dataframe(df_final, use_container_width=True)
 
 # =========================================================
