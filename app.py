@@ -481,6 +481,76 @@ def es_linea_dzdt_no_ic(texto: Any) -> bool:
         return True
     return "dzdt" in t_compacto or "dzdtmax" in t_compacto
 
+def es_etiqueta_ic_explicita(texto: Any) -> bool:
+    """Acepta IC solo cuando el rótulo corresponde al índice cardíaco.
+
+    Esta función evita que variables de impedancia/contractilidad como dZ/dt MAX,
+    DZDT, ITC, IV, IAC, IH o textos compuestos sean interpretados como IC.
+    """
+    if texto is None:
+        return False
+    raw = str(texto)
+    if es_linea_itc_no_ic(raw) or es_linea_dzdt_no_ic(raw):
+        return False
+    t = normalizar_txt(raw)
+    t_norm = re.sub(r"[^a-z0-9/]+", " ", t).strip()
+
+    # Etiquetas largas inequívocas.
+    if re.search(r"\bindice\s+cardiaco\b|\bcardiac\s+index\b", t_norm, flags=re.IGNORECASE):
+        return True
+
+    # Abreviaturas aceptadas solo como etiqueta aislada, con separador/valor o acompañada de unidades.
+    if re.fullmatch(r"(?:ic|ci)(?:\s*(?:l\s*/\s*min(?:\s*/\s*m2|\s*/\s*m\s*2|\s*/\s*m²)?)?)?", t_norm):
+        return True
+    if re.search(r"^(?:ic|ci)\s*[:= -]", t_norm):
+        return True
+    if re.search(r"(?<![a-z0-9])(ic|ci)(?![a-z0-9])", t_norm) and re.search(r"l\s*/\s*min|l/min|m2|m²", t_norm):
+        return True
+
+    return False
+
+
+def extraer_ic_seguro_desde_lineas(lineas: List[str]) -> Optional[float]:
+    """Extrae IC únicamente desde rótulos explícitos de índice cardíaco.
+
+    Regla de seguridad: si no se encuentra una fuente explícita para IC, devuelve
+    None. Nunca usa dZ/dt MAX, DZDT, ITC ni otras variables como sustituto.
+    """
+    candidatos: List[Tuple[int, int, float]] = []
+    for i, linea in enumerate(lineas):
+        txt = str(linea or "").strip()
+        if not txt or es_linea_itc_no_ic(txt) or es_linea_dzdt_no_ic(txt):
+            continue
+        t = normalizar_txt(txt)
+        t_norm = re.sub(r"[^a-z0-9/.,:=-]+", " ", t).strip()
+
+        score = 0
+        if re.search(r"\bindice\s+cardiaco\b|\bcardiac\s+index\b", t_norm):
+            score = 3
+        elif re.search(r"(?<![a-z0-9])(ic|ci)(?![a-z0-9])", t_norm) and re.search(r"l\s*/\s*min|l/min|m2|m²", t_norm):
+            score = 2
+        elif re.fullmatch(r"(?:ic|ci)\s*[:= -]?.*", t_norm):
+            score = 1
+        else:
+            continue
+
+        # Preferir números después del rótulo dentro de la misma línea.
+        nums = extraer_numeros_post_etiqueta(txt, "ic")
+        if not nums and i + 1 < len(lineas):
+            sig = str(lineas[i + 1] or "")
+            if not es_linea_itc_no_ic(sig) and not es_linea_dzdt_no_ic(sig) and not es_etiqueta(sig):
+                nums = [n for n in numeros_en_texto(sig) if rango_plausible("ic", n)]
+        for v in nums:
+            vv = limpiar_numero(v)
+            if vv is not None and rango_plausible("ic", vv):
+                candidatos.append((score, i, float(vv)))
+
+    if not candidatos:
+        return None
+    # Mayor score y, ante empate, la última aparición útil del resumen.
+    candidatos.sort(key=lambda x: (x[0], x[1]))
+    return candidatos[-1][2]
+
 
 def contiene_sinonimo_seguro(nombre_col: str, sinonimo: str) -> bool:
     """Coincidencia segura de sinónimos.
@@ -899,7 +969,7 @@ PATRONES_CLAVE = {
     "fc": r"(?:frecuencia\s+card[ií]aca|frecuencia\s+cardiaca|heart\s+rate|\bhr\b|\bfc\b)",
     "vm": r"(?:\bvm\b|volumen\s+minuto|cardiac\s+output|\bco\b)",
     # IC estricto: NO incluir ITC/índice de trabajo cardíaco.
-    "ic": r"(?:[ií]ndice\s+card[ií]aco|indice\s+cardiaco|cardiac\s+index|\bci\b|\bic\b)(?!.*dz\s*/\s*dt)",
+    "ic": r"(?:[ií]ndice\s+card[ií]aco|indice\s+cardiaco|cardiac\s+index|(?<![a-zA-Z0-9])ci(?![a-zA-Z0-9])|(?<![a-zA-Z0-9])ic(?![a-zA-Z0-9]))",
     "irv": r"(?:[ií]ndice\s+(?:de\s+)?resistencia\s+vascular|resistencia\s+vascular\s+sist[eé]mica|\brvs\b|\birv\b|\bsvr\b)",
     "ca": r"(?:complacencia\s+arterial|arterial\s+compliance|\bca\b)",
     "ih": r"(?:[ií]ndice\s+de\s+heather|heather|\bih\b)",
@@ -922,14 +992,15 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
     # Orden intencional: CFTnr antes que CFT para no confundir ambos.
     orden = ["cftnr", "cft", "ih", "iac", "cts", "pas_pad", "fc", "vm", "ic", "irv", "ca", "iv", "ea", "ees", "ava", "ds", "ids", "z0"]
     for clave in orden:
-        if clave == "ic" and (bloquea_ic_por_itc or bloquea_ic_por_dzdt):
-            continue
+        if clave == "ic":
+            if bloquea_ic_por_itc or bloquea_ic_por_dzdt or not es_etiqueta_ic_explicita(txt):
+                continue
         pat = PATRONES_CLAVE.get(clave)
         if pat and re.search(pat, txt, flags=re.IGNORECASE):
             halladas.append(clave)
     # Complemento con el detector por sinónimos existente.
     k = clave_por_linea(linea)
-    if k == "ic" and (bloquea_ic_por_itc or bloquea_ic_por_dzdt):
+    if k == "ic" and (bloquea_ic_por_itc or bloquea_ic_por_dzdt or not es_etiqueta_ic_explicita(txt)):
         k = None
     if k and k not in halladas:
         halladas.append(k)
@@ -948,7 +1019,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
 def extraer_numeros_post_etiqueta(linea: str, clave: str) -> List[float]:
     """Devuelve números preferentemente ubicados después del rótulo, evitando números de unidades."""
     txt = str(linea)
-    if clave == "ic" and (es_linea_itc_no_ic(txt) or es_linea_dzdt_no_ic(txt)):
+    if clave == "ic" and (es_linea_itc_no_ic(txt) or es_linea_dzdt_no_ic(txt) or not es_etiqueta_ic_explicita(txt)):
         return []
     pat = PATRONES_CLAVE.get(clave)
     candidatos: List[float] = []
@@ -1054,7 +1125,7 @@ def aplicar_fallback_regex_global(lineas: List[str], filas: List[Dict[str, Any]]
 def aplicar_extraccion_tablas(lineas: List[str], filas: List[Dict[str, Any]]) -> None:
     """Detecta líneas con varias etiquetas y una fila de valores siguiente."""
     for i, linea in enumerate(lineas[:-1]):
-        claves = [k for k in claves_en_linea_robusto(linea) if k in CLAVES_NUMERICAS and k != "pas_pad"]
+        claves = [k for k in claves_en_linea_robusto(linea) if k in CLAVES_NUMERICAS and k not in ["pas_pad", "ic"]]
         # Quitar duplicados manteniendo orden.
         claves = list(dict.fromkeys(claves))
         if len(claves) < 2:
@@ -1179,6 +1250,14 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
     ava = resumen.get("AVA")
     if limpiar_numero(ava) is None and limpiar_numero(resumen.get("EA")) is not None and limpiar_numero(resumen.get("EES")) not in [None, 0]:
         ava = limpiar_numero(resumen.get("EA")) / limpiar_numero(resumen.get("EES"))
+
+    # Corrección crítica IC: el índice cardíaco se toma solo desde rótulo explícito IC/Índice Cardíaco.
+    # Si no se identifica una fuente explícita, no se completa IC con otra variable.
+    ic_seguro = extraer_ic_seguro_desde_lineas(lineas)
+    if ic_seguro is not None:
+        resumen["IC"] = ic_seguro
+    else:
+        resumen.pop("IC", None)
 
     fecha_estudio = formatear_fecha_ddmmyyyy(resumen.get("FECHA_ESTUDIO") or resumen.get("FECHA"))
     fecha_nacimiento = formatear_fecha_ddmmyyyy(resumen.get("FECHA_NACIMIENTO"))
@@ -1381,8 +1460,9 @@ def canon_col(col: Any) -> str:
     for canon, s in pares:
         # Si el canon candidato es IC, aceptar solo etiquetas explícitas de índice cardíaco.
         # Rechazar cualquier columna con trabajo cardíaco/ITC o dZ/dt MAX.
-        if canon == "IC" and (es_linea_itc_no_ic(n_original) or es_linea_dzdt_no_ic(n_original)):
-            continue
+        if canon == "IC":
+            if es_linea_itc_no_ic(n_original) or es_linea_dzdt_no_ic(n_original) or not es_etiqueta_ic_explicita(n_original):
+                continue
         if contiene_sinonimo_seguro(n_original, s):
             return canon
     return n_original
@@ -1891,6 +1971,9 @@ def _valor_fila_case_insensitive(fila: Dict[str, Any], *claves: str) -> Any:
     for clave in claves:
         k = normalizar_txt(clave).replace(" ", "_")
         if k in mapa and es_valor_util(mapa[k]):
+            # Para IC no aceptar claves derivadas de dZ/dt/ITC aunque hayan sobrevivido como columnas.
+            if normalizar_txt(clave).replace(" ", "_") in ["ic", "indice_cardiaco", "índice_cardíaco", "cardiac_index", "ci"] and not es_etiqueta_ic_explicita(clave):
+                continue
             return mapa[k]
 
     equivalencias = {
