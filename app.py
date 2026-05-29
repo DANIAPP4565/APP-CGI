@@ -2618,7 +2618,7 @@ def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.D
         y_min = max(1.2, min(2.0, min(ys) - 0.6))
         y_max = max(5.0, max(ys) + 0.8)
 
-        fig, ax = plt.subplots(figsize=(8.8, 5.2))
+        fig, ax = plt.subplots(figsize=(15.0, 5.8))
         ax.set_facecolor("#F8FAFC")
 
         # Zonas clínicas. Los límites se corresponden con la clasificación usada por la app.
