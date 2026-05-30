@@ -9161,6 +9161,284 @@ except Exception:
     pass
 
 
+
+# =========================================================
+# PATCH DEFINITIVO: INTEGRACIÓN BASAL = ACOSTADO OR CINTA OR SPOT;
+# ORTOSTATISMO = comparación contra PARADO explícito
+# =========================================================
+
+POSICIONES_BASALES_VALIDAS_FINAL = {"acostado"}
+METODOS_BASALES_VALIDOS_FINAL = {"cinta", "spot"}
+
+
+def _colname_norm_final(c: Any) -> str:
+    return re.sub(r"[^a-z0-9/]+", "", normalizar_txt(c))
+
+
+def _buscar_columna_exacta_final(dfx: pd.DataFrame, variable: str) -> List[str]:
+    """Busca columnas estructuradas por nombre exacto/seguro, evitando solapamientos.
+
+    Esta función es deliberadamente estricta para impedir que IDS alimente IV,
+    CA alimente IAC o dZ/dt alimente IC. Se usa para valores ya estructurados
+    por fila/posición.
+    """
+    if dfx is None or dfx.empty:
+        return []
+    aliases = {
+        "IC": ["ic", "ci", "indicecardiaco", "índicecardíaco", "cardiacindex"],
+        "IRV": ["irv", "svri", "indicederesistenciavascular", "indiceresistenciavascular", "systemicvascularresistanceindex"],
+        "RVS": ["rvs", "svr", "resistenciavascularsistemica", "resistenciavascularsistémica", "systemicvascularresistance"],
+        "FC": ["fc", "hr", "frecuenciacardiaca", "frecuenciacardíaca", "heartrate"],
+        "PAS": ["pas", "sistolica", "sistólica", "sbp"],
+        "PAD": ["pad", "diastolica", "diastólica", "dbp"],
+        "CA": ["ca", "complacenciaarterial", "arterialcompliance"],
+        "CFT": ["cft", "tfc", "contenidodefluidostoracicos", "contenidodefluidostorácicos", "thoracicfluidcontent"],
+        "CFTnr": ["cftnr", "cftn.r", "cftnormalizado", "tfcindex", "thoracicfluidcontentindex", "cftindice", "cftíndice"],
+        "IV": ["iv", "vi", "indicedevelocidad", "velocityindex"],
+        "IAC": ["iac", "aci", "indicedeaceleracion", "índicedeaceleración", "accelerationindex"],
+        "IH": ["ih", "hi", "indicedeheather", "índicedeheather", "heatherindex"],
+        "CTS": ["cts", "str", "pep/lvet", "pep/tevi"],
+        "EA": ["ea", "elastanciaarterial", "arterialelastance"],
+        "EES": ["ees", "elastanciadefindesistole", "elastanciadefindesístole", "endsystolicelastance"],
+        "EA/EES": ["ea/ees", "ava", "acoplamientoventriculoarterial", "acoplamientoventrículoarterial"],
+        "DS": ["ds", "sv", "descargasistolica", "descargasistólica", "strokevolume"],
+        "IDS": ["ids", "si", "indicededescargasistolica", "índicededescargasistólica", "strokeindex"],
+        "Z0": ["z0", "impedanciabasal"],
+    }
+    wanted = set(aliases.get(variable, []))
+    out = []
+    for col in dfx.columns:
+        cn = _colname_norm_final(col)
+        if cn in wanted:
+            out.append(col)
+    return out
+
+
+def _leer_variable_desde_filas_basal_final(dfx: pd.DataFrame, variable: str) -> Optional[float]:
+    """Lee variable desde TODAS las filas del bloque basal/parado seleccionado.
+
+    Prioridad:
+    1. Columnas estructuradas con nombre exacto y valor plausible, recorriendo todas las filas.
+    2. Etiqueta exacta en texto del bloque.
+    3. Para EA/EES, cálculo EA/EES si ambos existen.
+
+    IC puede venir de columna exacta IC/CI o etiqueta exacta, pero nunca de dZ/dt, ITC,
+    IDS, IV, IAC, etc. La seguridad viene del nombre exacto de columna y del filtro de plausibilidad.
+    """
+    if dfx is None or dfx.empty:
+        return None
+
+    if variable == "EA/EES":
+        v_col = None
+    else:
+        v_col = None
+
+    # 1) columnas exactas en todas las filas
+    for col in _buscar_columna_exacta_final(dfx, variable):
+        # bloqueos explícitos de solapamiento
+        cn = _colname_norm_final(col)
+        if variable == "IC" and any(x in cn for x in ["dz", "dt", "itc", "trabajo", "iv", "iac", "ih", "ids", "ds", "cft", "ca", "rvs", "irv"]):
+            continue
+        if variable == "IV" and cn in {"ids", "indicededescargasistolica", "índicededescargasistólica", "strokeindex"}:
+            continue
+        if variable == "IAC" and cn in {"ca", "complacenciaarterial", "arterialcompliance"}:
+            continue
+        for val in dfx[col].tolist():
+            v = limpiar_numero(val)
+            if v is not None and _valor_plausible_final(variable, v):
+                v_col = v
+                break
+        if v_col is not None:
+            break
+
+    # 2) etiqueta exacta en el texto completo del bloque, útil cuando PDF no viene tabulado
+    texto = _texto_de_filas_final(dfx)
+    v_txt = _extraer_valor_etiqueta_exacto_final(texto, variable)
+    if v_txt is not None:
+        return v_txt
+
+    # 3) usar columna estructurada exacta si no hubo texto exacto
+    if v_col is not None:
+        return v_col
+
+    # 4) derivación EA/EES
+    if variable == "EA/EES":
+        ea = _leer_variable_desde_filas_basal_final(dfx, "EA")
+        ees = _leer_variable_desde_filas_basal_final(dfx, "EES")
+        if ea is not None and ees not in [None, 0]:
+            return ea / ees
+    return None
+
+
+def _seleccionar_basal_df_final(df: pd.DataFrame) -> pd.DataFrame:
+    """Selecciona el bloque de referencia diagnóstica: ACOSTADO OR CINTA OR SPOT.
+
+    No usa PARADO como basal. Si hay varias filas basales complementarias del mismo estudio,
+    las conserva juntas para completar variables faltantes sin mezclar con PARADO.
+    Prioridad clínica: CINTA/ACOSTADO > ACOSTADO > CINTA > SPOT > cualquier no-PARADO.
+    """
+    dfx = _df_con_posicion_final(df)
+    if dfx.empty:
+        return pd.DataFrame()
+
+    no_parado = dfx[dfx["Posición_reconocida"] != "de_pie"].copy()
+    if no_parado.empty:
+        return pd.DataFrame()
+
+    ac_cinta = no_parado[(no_parado["Posición_reconocida"] == "acostado") & (no_parado["Método_reconocido"] == "cinta")]
+    if not ac_cinta.empty:
+        return ac_cinta.reset_index(drop=True)
+
+    acostado = no_parado[no_parado["Posición_reconocida"] == "acostado"]
+    if not acostado.empty:
+        return acostado.reset_index(drop=True)
+
+    cinta = no_parado[no_parado["Método_reconocido"] == "cinta"]
+    if not cinta.empty:
+        return cinta.reset_index(drop=True)
+
+    spot = no_parado[no_parado["Método_reconocido"] == "spot"]
+    if not spot.empty:
+        return spot.reset_index(drop=True)
+
+    return no_parado.reset_index(drop=True)
+
+
+def _seleccionar_pie_df_final(df: pd.DataFrame) -> pd.DataFrame:
+    """Selecciona PARADO explícito y solamente PARADO para ortostatismo."""
+    dfx = _df_con_posicion_final(df)
+    if dfx.empty:
+        return pd.DataFrame()
+    pie = dfx[dfx["Posición_reconocida"] == "de_pie"].copy()
+    if not pie.empty:
+        return pie.reset_index(drop=True)
+    return pd.DataFrame()
+
+
+def _resumen_desde_df_posicion_final(dfx: pd.DataFrame) -> Dict[str, Any]:
+    """Resumen posicional robusto.
+
+    Usa todas las filas del bloque seleccionado para evitar que la tabla ortostática
+    quede parcial (por ejemplo IRV/FC presentes pero IC/PAS/PAD en None).
+    """
+    if dfx is None or dfx.empty:
+        return {}
+    fila0 = dfx.iloc[0].to_dict()
+    out = {
+        "paciente": _valor_fila_case_insensitive(fila0, "Paciente", "paciente"),
+        "posicion": detectar_posicion_fila(fila0),
+        "metodo": detectar_metodo_fila(fila0),
+    }
+    for var in VARIABLES_POSICIONALES_FINAL:
+        key = CLAVE_DICT_FINAL.get(var)
+        if not key:
+            continue
+        val = _leer_variable_desde_filas_basal_final(dfx, var)
+        if val is not None:
+            out[key] = val
+    if limpiar_numero(out.get("irv")) is None and limpiar_numero(out.get("rvs")) is not None:
+        out["irv"] = out.get("rvs")
+    ea = limpiar_numero(out.get("ea")); ees = limpiar_numero(out.get("ees"))
+    if ea is not None and ees not in [None, 0]:
+        out["ava"] = ea / ees
+    return out
+
+
+def seleccionar_df_diagnostico(df: pd.DataFrame) -> pd.DataFrame:
+    return _seleccionar_basal_df_final(df)
+
+
+def seleccionar_df_de_pie(df: pd.DataFrame) -> pd.DataFrame:
+    return _seleccionar_pie_df_final(df)
+
+
+def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    basal_df = _seleccionar_basal_df_final(df)
+    parado_df = _seleccionar_pie_df_final(df)
+    basal = _resumen_desde_df_posicion_final(basal_df)
+    parado = _resumen_desde_df_posicion_final(parado_df)
+    if basal:
+        basal["posicion"] = "acostado/cinta/spot"
+        basal["metodo"] = basal.get("metodo") or "integración basal"
+    if parado:
+        parado["posicion"] = "parado"
+        parado["metodo"] = parado.get("metodo") or "parado"
+    return basal, parado
+
+
+def resumen_acostado_cinta_para_patron(df: Optional[pd.DataFrame], r_default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    base = dict(r_default or {})
+    try:
+        basal_df = _seleccionar_basal_df_final(df) if df is not None and not df.empty else pd.DataFrame()
+        rb = _resumen_desde_df_posicion_final(basal_df)
+        if rb:
+            for k, v in rb.items():
+                if es_valor_util(v):
+                    base[k] = v
+            base["posicion_referencia"] = "acostado/cinta/spot"
+    except Exception:
+        pass
+    return base
+
+# Reaplicar override global de resumen integrado con la regla definitiva.
+try:
+    _extraer_resumen_integrado_pre_basal_spot_parado = extraer_resumen_integrado
+    def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
+        r0 = _extraer_resumen_integrado_pre_basal_spot_parado(df)
+        return resumen_acostado_cinta_para_patron(df, r0)
+except Exception:
+    pass
+
+
+def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
+    puntos: List[Dict[str, Any]] = []
+    rb, rp = obtener_resumenes_ortostaticos(df) if df is not None and isinstance(df, pd.DataFrame) and not df.empty else ({}, {})
+    if not rb:
+        rb = dict(r or {})
+    ic_b = limpiar_numero(rb.get("ic")); irv_b = limpiar_numero(rb.get("irv"))
+    if ic_b is not None and irv_b is not None:
+        puntos.append({"etiqueta": "ACOSTADO/CINTA/SPOT\nreferencia", "ic": ic_b, "irv": irv_b})
+    ic_p = limpiar_numero(rp.get("ic")); irv_p = limpiar_numero(rp.get("irv"))
+    if ic_p is not None and irv_p is not None:
+        puntos.append({"etiqueta": "PARADO\nrespuesta ortostática", "ic": ic_p, "irv": irv_p})
+    return puntos
+
+
+def evaluar_dominio_ortostatico(df: Optional[pd.DataFrame]) -> Dict[str, Any]:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return {"estado": "ORTOSTATISMO NO EVALUABLE", "score": None, "detalle": "No se detectó registro PARADO válido."}
+    rb, rp = obtener_resumenes_ortostaticos(df)
+    if not rb or not rp:
+        return {"estado": "ORTOSTATISMO NO EVALUABLE", "score": None, "detalle": "No se detectó registro PARADO explícito. La integración diagnóstica usa ACOSTADO/CINTA/SPOT; no se mezcla con otros números del informe."}
+    ic_b = limpiar_numero(rb.get("ic")); ic_p = limpiar_numero(rp.get("ic"))
+    irv_b = limpiar_numero(rb.get("irv")); irv_p = limpiar_numero(rp.get("irv"))
+    if None in [ic_b, ic_p, irv_b, irv_p]:
+        return {"estado": "ORTOSTATISMO NO EVALUABLE", "score": None, "detalle": "Registro PARADO detectado, pero faltan IC o IRV para comparar."}
+    ok_ic = ic_p < ic_b
+    ok_irv = irv_p > irv_b
+    if ok_ic and ok_irv:
+        return {"estado": "PATRÓN ORTOSTÁTICO CONSERVADO", "score": 0, "detalle": "Respuesta fisiológica: IC desciende e IRV/RVS aumenta al pasar a PARADO."}
+    return {"estado": "REVISAR CARGA/MATCHEO DE DATOS ORTOSTÁTICOS", "score": 2, "detalle": "La respuesta esperada es descenso de IC y aumento de IRV/RVS al comparar ACOSTADO/CINTA/SPOT contra PARADO."}
+
+
+def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
+    rb, rp = obtener_resumenes_ortostaticos(df)
+    if not rb or not rp:
+        return {
+            "basal": rb or {}, "de_pie": {}, "delta_ic": None, "delta_irv": None, "delta_fc": None,
+            "delta_pas": None, "delta_pad": None,
+            "detalle": "ORTOSTATISMO NO EVALUABLE: la referencia diagnóstica es ACOSTADO/CINTA/SPOT. Solo se compara contra PARADO explícito con sus datos correspondientes."
+        }
+    res = {"basal": rb, "de_pie": rp}
+    for key, delta_key in [("ic","delta_ic"),("irv","delta_irv"),("fc","delta_fc"),("pas","delta_pas"),("pad","delta_pad")]:
+        vb = limpiar_numero(rb.get(key)); vp = limpiar_numero(rp.get(key))
+        res[delta_key] = (vp - vb) if vb is not None and vp is not None else None
+    ok_ic = res.get("delta_ic") is not None and res["delta_ic"] < 0
+    ok_irv = res.get("delta_irv") is not None and res["delta_irv"] > 0
+    res["detalle"] = "Respuesta ortostática fisiológica." if (ok_ic and ok_irv) else "REVISAR CARGA/MATCHEO: se espera que IC baje e IRV/RVS aumente al pasar a PARADO."
+    return res
+
+
 # =========================================================
 # INTERFAZ
 # =========================================================
