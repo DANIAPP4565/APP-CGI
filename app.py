@@ -38,7 +38,7 @@ def aplicar_estilos() -> None:
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght=400;500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
         :root {
             --brand-primary: #0066cc;
             --brand-secondary: #004d99;
@@ -273,4 +273,16 @@ def validar_hemodinamica_inteligente(df: pd.DataFrame, contexto_embarazo: Option
         return None
 
     basal = resumen["ACOSTADO"]
-    ic = buscar_var("ic", basal) or buscar_var("indice cardiac
+    ic = buscar_var("ic", basal) or buscar_var("indice cardiaco", basal)
+    rvs = buscar_var("rvs", basal) or buscar_var("resistencia vascular", basal) or buscar_var("irvs", basal)
+    fc = buscar_var("fc", basal) or buscar_var("frecuencia cardiaca", basal)
+
+    if ic and ic > 4.2:
+        alertas.append("Perfil Circulatorio Hiperdinámico (Índice Cardíaco Elevado en reposo).")
+    elif ic and ic < 2.2:
+        alertas.append("Perfil Circulatorio Hipodinámico (Índice Cardíaco Limítrofe/Bajo).")
+
+    if rvs and rvs > 2400:
+        alertas.append("Vasoconstricción Periférica Aumentada (Resistencias Vasculares Elevadas).")
+    elif rvs and rvs < 1400:
+        alertas.append("Vasodilatación Marcada o Resistencias Periféricas Dis
