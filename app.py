@@ -131,4 +131,146 @@ def parsear_archivo_estudio(contenido: bytes, extension: str) -> Optional[pd.Dat
     """
     df_resultado = None
 
-    if
+    if extension in [".csv", ".txt"]:
+        try:
+            texto = contenido.decode("utf-8", errors="ignore")
+            if "situacion" in texto.lower() or "fase" in texto.lower() or "fc" in texto.lower():
+                sep = ";" if ";" in texto else ","
+                df_resultado = pd.read_csv(io.StringIO(texto), sep=sep)
+        except Exception:
+            try:
+                texto = contenido.decode("latin-1", errors="ignore")
+                sep = ";" if ";" in texto else ","
+                df_resultado = pd.read_csv(io.StringIO(texto), sep=sep)
+            except Exception:
+                pass
+                
+    elif extension in [".xls", ".xlsx"]:
+        try:
+            df_resultado = pd.read_excel(io.BytesIO(contenido))
+        except Exception:
+            pass
+
+    if df_resultado is not None and not df_resultado.empty:
+        df_resultado.columns = [c.strip() for c in df_resultado.columns]
+        return df_resultado
+
+    return None
+
+
+# =========================================================
+# COMPONENTES AUXILIARES DEL MODELO DE INFORME CLÍNICO
+# =========================================================
+
+REFERENCIAS_BIBLIOGRAFICAS = [
+    "Van De Water JM, et al. Impedance cardiography: the next step in noninvasive hemodynamic monitoring. J Clin Monit. 2003.",
+    "Albert NM, et al. Impedance cardiography: an integral part of advanced practice nursing in heart failure. AACN Clin Issues. 2004.",
+    "Ferrario CM, et al. Use of impedance cardiography in the management of hypertension. Curr Hypertens Rep. 2007.",
+    "Sanford MR, et al. Noninvasive hemodynamic monitoring in hypertension: a review of impedance cardiography. J Clin Hypertens. 2011."
+]
+
+SOPORTE_BIBLIOGRAFICO_APP = """
+Esta aplicación procesa datos derivados de sistemas de cardiografía de impedancia (ICG),
+utilizando algoritmos estandarizados basados en guías internacionales de evaluación hemodinámica 
+no invasiva y el análisis de la onda de pulso aórtica.
+""".strip()
+
+
+def limpiar_patrones_prohibidos(texto: str) -> str:
+    """Remueve modismos de IA o frases redundantes para un informe de nivel institucional."""
+    patrones = [
+        r"aquí está su informe",
+        r"claro, con gusto",
+        r"de acuerdo al análisis de los datos",
+        r"este es el reporte generado",
+    ]
+    for p in patrones:
+        texto = re.sub(p, "", texto, flags=re.IGNORECASE)
+    return texto.strip()
+
+
+def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Dict[str, Any]:
+    """Calcula promedios agregados separando el registro basal del ortostático."""
+    resumen = {
+        "ACOSTADO": {},
+        "PARADO": {}
+    }
+    
+    col_situacion = None
+    for c in df.columns:
+        if normalizar_txt(c) in ["situacion", "posicion", "estado", "fase"]:
+            col_situacion = c
+            break
+            
+    if not col_situacion:
+        return resumen
+
+    for idx, fila in df.iterrows():
+        sit = str(fila[col_situacion])
+        sit_norm = normalizar_txt(sit)
+        
+        destino = None
+        if "acostado" in sit_norm or "cinta" in sit_norm or "spot" in sit_norm or "basal" in sit_norm:
+            destino = "ACOSTADO"
+        elif "parado" in sit_norm or "bipedestacion" in sit_norm or "pie" in sit_norm:
+            destino = "PARADO"
+            
+        if destino:
+            for col_num in df.columns:
+                if col_num != col_situacion:
+                    try:
+                        val = float(fila[col_num])
+                        if col_num not in resumen[destino]:
+                            resumen[destino][col_num] = []
+                        resumen[destino][col_num].append(val)
+                    except ValueError:
+                        pass
+
+    for pos in ["ACOSTADO", "PARADO"]:
+        for k in list(resumen[pos].keys()):
+            valores = resumen[pos][k]
+            resumen[pos][k] = sum(valores) / len(valores) if valores else 0.0
+
+    return resumen
+
+
+# =========================================================
+# LÓGICA DE INFERENCIA CLÍNICA PRINCIPAL
+# =========================================================
+
+def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
+    """Mide la respuesta y variabilidad hemodinámica ante el estrés ortostático."""
+    res = obtener_resumenes_ortostaticos(df)
+    deltas = {}
+    
+    claves_acostado = res["ACOSTADO"]
+    claves_parado = res["PARADO"]
+    
+    for c_parado in claves_parado:
+        if c_parado in claves_acostado:
+            val_basal = claves_acostado[c_parado]
+            val_parado = claves_parado[c_parado]
+            deltas[c_parado] = {
+                "basal": val_basal,
+                "parado": val_parado,
+                "delta_abs": val_parado - val_basal,
+                "delta_pct": ((val_parado - val_basal) / val_basal * 100) if val_basal != 0 else 0.0
+            }
+    return deltas
+
+
+def validar_hemodinamica_inteligente(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Detecta perfiles fisiopatológicos: hiperdinamia, vasoconstricción, desacople, etc."""
+    resumen = obtener_resumenes_ortostaticos(df)
+    alertas = []
+    
+    def buscar_var(nom: str, datos: Dict[str, float]) -> Optional[float]:
+        n_norm = normalizar_txt(nom)
+        for k, v in datos.items():
+            k_norm = normalizar_txt(k)
+            if n_norm == k_norm or n_norm in k_norm:
+                return v
+        return None
+
+    basal = resumen["ACOSTADO"]
+    ic = buscar_var("ic", basal) or buscar_var("indice cardiac
