@@ -115,7 +115,6 @@ def normalizar_txt(t: Any) -> str:
     if not isinstance(t, str):
         t = str(t) if t is not None else ""
     t = t.lower().strip()
-    # Reemplazos básicos de acentos
     t = re.sub(r'[áàäâ]', 'a', t)
     t = re.sub(r'[éèëê]', 'e', t)
     t = re.sub(r'[íìïî]', 'i', t)
