@@ -8905,6 +8905,255 @@ except Exception:
     pass
 
 
+
+
+# =========================================================
+# V_FINAL_IC_UNICO_SIN_MEZCLA_POSICIONES
+# Corrección definitiva de incoherencia IC: el valor usado en tablas,
+# dominios, gráficos y PDF debe ser el mismo IC ACOSTADO/CINTA.
+# Nunca se toma dZ/dt, ITC ni otro número de la página como IC.
+# No se crea registro DE PIE si no existe una posición explícita.
+# =========================================================
+
+VARIABLES_POSICIONALES_FINAL = [
+    "FC", "IC", "IRV", "RVS", "CA", "CFT", "CFTnr", "IV", "IAC", "CTS",
+    "EA", "EES", "EA/EES", "DS", "IDS", "Z0"
+]
+
+CLAVE_DICT_FINAL = {
+    "FC": "fc", "IC": "ic", "IRV": "irv", "RVS": "rvs", "CA": "ca", "CFT": "cft", "CFTnr": "cftnr",
+    "IV": "iv", "IAC": "iac", "CTS": "cts", "EA": "ea", "EES": "ees", "EA/EES": "ava",
+    "DS": "ds", "IDS": "ids", "Z0": "z0",
+}
+
+# Variables que NO deben alimentar IC ni otros campos por similitud/posición.
+PROHIBIDO_PARA_VARIABLE_FINAL.update({
+    "IC": [
+        r"dZ\s*/?\s*dT", r"dzdt", r"d\s*z\s*/\s*d\s*t", r"max", r"ITC", r"trabajo\s+card",
+        r"\bIV\b", r"velocidad", r"\bIAC\b", r"aceleraci", r"\bIH\b", r"heather",
+        r"\bDS\b", r"\bIDS\b", r"descarga", r"stroke", r"\bZ0\b", r"impedancia",
+        r"\bCFT\b", r"\bCA\b", r"complacencia", r"\bRVS\b", r"\bIRV\b", r"resistencia"
+    ],
+    "IRV": [r"\bRVS\b", r"resistencia\s+vascular\s+sist[eé]mica(?!.*[ií]ndice)", r"\bSVR\b(?!I)"],
+    "RVS": [r"\bIRV\b", r"[ií]ndice\s+(?:de\s+)?resistencia\s+vascular", r"\bSVRI\b"],
+})
+
+
+def _texto_de_filas_final(dfx: pd.DataFrame) -> str:
+    if dfx is None or dfx.empty:
+        return ""
+    partes = []
+    for _, fila in dfx.iterrows():
+        d = fila.to_dict()
+        # Primero las columnas estructuradas, luego el texto original si existe.
+        partes.append(" | ".join(f"{k}: {v}" for k, v in d.items() if es_valor_util(v)))
+        for col in ["texto_extraido", "Texto_PDF", "linea_origen", "Posición", "origen_parser"]:
+            if col in d and es_valor_util(d.get(col)):
+                partes.append(str(d.get(col)))
+    return "\n".join(partes)
+
+
+def _df_con_posicion_final(df: pd.DataFrame) -> pd.DataFrame:
+    dfx = estandarizar_columnas_clinicas(df).copy() if df is not None else pd.DataFrame()
+    if dfx.empty:
+        return dfx
+    dfx["Posición_reconocida"] = [detectar_posicion_fila(f.to_dict()) for _, f in dfx.iterrows()]
+    dfx["Método_reconocido"] = [detectar_metodo_fila(f.to_dict()) for _, f in dfx.iterrows()]
+    return dfx
+
+
+def _seleccionar_basal_df_final(df: pd.DataFrame) -> pd.DataFrame:
+    """Selecciona solo ACOSTADO/CINTA. Nunca elige DE PIE como basal."""
+    dfx = _df_con_posicion_final(df)
+    if dfx.empty:
+        return pd.DataFrame()
+    # CINTA no-de-pie es la fuente basal por excelencia.
+    basal = dfx[(dfx["Método_reconocido"] == "cinta") & (dfx["Posición_reconocida"] != "de_pie")]
+    if not basal.empty:
+        ac = basal[basal["Posición_reconocida"] == "acostado"]
+        return (ac if not ac.empty else basal).iloc[[0]].reset_index(drop=True)
+    # Acostado explícito.
+    basal = dfx[dfx["Posición_reconocida"] == "acostado"]
+    if not basal.empty:
+        return basal.iloc[[0]].reset_index(drop=True)
+    # Si no hay de pie explícito, una única fila se acepta como basal.
+    no_pie = dfx[dfx["Posición_reconocida"] != "de_pie"]
+    if not no_pie.empty:
+        return no_pie.iloc[[0]].reset_index(drop=True)
+    return pd.DataFrame()
+
+
+def _seleccionar_pie_df_final(df: pd.DataFrame) -> pd.DataFrame:
+    """Selecciona DE PIE solo si la posición está explícitamente reconocida."""
+    dfx = _df_con_posicion_final(df)
+    if dfx.empty:
+        return pd.DataFrame()
+    pie = dfx[dfx["Posición_reconocida"] == "de_pie"]
+    if not pie.empty:
+        return pie.iloc[[-1]].reset_index(drop=True)
+    return pd.DataFrame()
+
+
+def _leer_variable_desde_fila_o_texto_final(dfx: pd.DataFrame, variable: str) -> Optional[float]:
+    """Lee una variable con prioridad: columna estructurada -> etiqueta exacta en texto.
+    Para IC se exige etiqueta exacta y se bloquea dZ/dt/ITC/otros.
+    """
+    if dfx is None or dfx.empty:
+        return None
+    key = CLAVE_DICT_FINAL.get(variable)
+    row = dfx.iloc[0].to_dict()
+    # 1) Columna estructurada solo si es plausible.
+    candidatos_cols = []
+    if key:
+        candidatos_cols += [key, key.upper(), key.capitalize()]
+    candidatos_cols += [variable, variable.upper(), variable.lower()]
+    if variable == "EA/EES":
+        candidatos_cols += ["EA/EES", "AVA", "ava"]
+    for col in candidatos_cols:
+        if col in row and es_valor_util(row.get(col)):
+            v = limpiar_numero(row.get(col))
+            if v is not None and _valor_plausible_final(variable, v):
+                # Para IC: aceptar columna solo si no viene de una fila/texto prohibido. Si hay texto exacto disponible, priorizarlo.
+                if variable != "IC":
+                    return v
+                break
+    # 2) Etiqueta exacta en la fila/texto. Esta es la fuente definitiva para IC.
+    texto = _texto_de_filas_final(dfx)
+    v_txt = _extraer_valor_etiqueta_exacto_final(texto, variable)
+    if v_txt is not None:
+        return v_txt
+    # 3) Si no se pudo por texto y la columna era plausible, usar columna solo para no-IC.
+    if variable != "IC":
+        for col in candidatos_cols:
+            if col in row and es_valor_util(row.get(col)):
+                v = limpiar_numero(row.get(col))
+                if v is not None and _valor_plausible_final(variable, v):
+                    return v
+    # Para IC sin etiqueta exacta: no inventar.
+    return None
+
+
+def _resumen_desde_df_posicion_final(dfx: pd.DataFrame) -> Dict[str, Any]:
+    if dfx is None or dfx.empty:
+        return {}
+    out = {}
+    fila = dfx.iloc[0].to_dict()
+    out["paciente"] = _valor_fila_case_insensitive(fila, "Paciente", "paciente")
+    out["posicion"] = detectar_posicion_fila(fila)
+    out["metodo"] = detectar_metodo_fila(fila)
+    for var in VARIABLES_POSICIONALES_FINAL:
+        key = CLAVE_DICT_FINAL.get(var)
+        if not key:
+            continue
+        val = _leer_variable_desde_fila_o_texto_final(dfx, var)
+        if val is not None:
+            out[key] = val
+    # Preferencia para eje vascular: IRV indexado; si no existe, usar RVS como respaldo separado.
+    if limpiar_numero(out.get("irv")) is None and limpiar_numero(out.get("rvs")) is not None:
+        out["irv"] = out.get("rvs")
+    # EA/EES derivado siempre que sea posible.
+    ea = limpiar_numero(out.get("ea")); ees = limpiar_numero(out.get("ees"))
+    if ea is not None and ees not in [None, 0]:
+        out["ava"] = ea / ees
+    return out
+
+# Override selección diagnóstica para alinear todos los módulos.
+def seleccionar_df_diagnostico(df: pd.DataFrame) -> pd.DataFrame:
+    return _seleccionar_basal_df_final(df)
+
+
+def seleccionar_df_de_pie(df: pd.DataFrame) -> pd.DataFrame:
+    return _seleccionar_pie_df_final(df)
+
+# Override resumen ortostático: no crea de pie si no existe explícitamente.
+def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    basal_df = _seleccionar_basal_df_final(df)
+    pie_df = _seleccionar_pie_df_final(df)
+    basal = _resumen_desde_df_posicion_final(basal_df)
+    pie = _resumen_desde_df_posicion_final(pie_df)
+    if basal:
+        basal["posicion"] = "acostado"
+        basal["metodo"] = basal.get("metodo") or "cinta"
+    if pie:
+        pie["posicion"] = "de_pie"
+    return basal, pie
+
+# Override resumen basal para patrón/panel/PDF/gráfico.
+def resumen_acostado_cinta_para_patron(df: Optional[pd.DataFrame], r_default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    base = dict(r_default or {})
+    try:
+        if df is not None and not df.empty:
+            basal_df = _seleccionar_basal_df_final(df)
+            rb = _resumen_desde_df_posicion_final(basal_df)
+            if rb:
+                # Los valores posicionales críticos SIEMPRE pisan el default para evitar mezcla con de pie/dZdt.
+                for k, v in rb.items():
+                    if es_valor_util(v):
+                        base[k] = v
+                base["posicion_referencia"] = "acostado/cinta"
+                return base
+    except Exception:
+        pass
+    return base
+
+# Override resumen integrado global: alinear IC/IRV/CFT/etc. con ACOSTADO/CINTA.
+try:
+    _extraer_resumen_integrado_pre_ic_final = extraer_resumen_integrado
+    def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
+        r0 = _extraer_resumen_integrado_pre_ic_final(df)
+        return resumen_acostado_cinta_para_patron(df, r0)
+except Exception:
+    pass
+
+# Override puntos del gráfico: usar el mismo IC basal que el informe. Flecha solo si DE PIE explícito.
+def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
+    puntos: List[Dict[str, Any]] = []
+    rb, rp = obtener_resumenes_ortostaticos(df) if df is not None and isinstance(df, pd.DataFrame) and not df.empty else ({}, {})
+    if not rb:
+        rb = dict(r or {})
+    ic_b = limpiar_numero(rb.get("ic")); irv_b = limpiar_numero(rb.get("irv"))
+    if ic_b is not None and irv_b is not None:
+        puntos.append({"etiqueta": "ACOSTADO/CINTA\nreferencia", "ic": ic_b, "irv": irv_b})
+    ic_p = limpiar_numero(rp.get("ic")); irv_p = limpiar_numero(rp.get("irv"))
+    if ic_p is not None and irv_p is not None:
+        puntos.append({"etiqueta": "DE PIE\nrespuesta ortostática", "ic": ic_p, "irv": irv_p})
+    return puntos
+
+# Override del dominio ortostático: sin DE PIE explícito, no evaluable.
+try:
+    _evaluar_dominio_ortostatico_pre_ic_final = evaluar_dominio_ortostatico
+    def evaluar_dominio_ortostatico(df: Optional[pd.DataFrame]) -> Dict[str, Any]:
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return {"estado": "ORTOSTATISMO NO EVALUABLE", "score": None, "detalle": "No se detectó registro DE PIE válido."}
+        rb, rp = obtener_resumenes_ortostaticos(df)
+        if not rb or not rp:
+            return {"estado": "ORTOSTATISMO NO EVALUABLE", "score": None, "detalle": "No se detectó registro DE PIE válido. No corresponde clasificar respuesta ortostática."}
+        return _evaluar_dominio_ortostatico_pre_ic_final(df)
+except Exception:
+    pass
+
+# Override delta ortostático: no calcula deltas si falta DE PIE explícito.
+try:
+    _calcular_delta_ortostatico_pre_ic_final = calcular_delta_ortostatico
+    def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
+        rb, rp = obtener_resumenes_ortostaticos(df)
+        if not rb or not rp:
+            return {
+                "basal": rb or {}, "de_pie": {}, "delta_ic": None, "delta_irv": None, "delta_fc": None,
+                "delta_pas": None, "delta_pad": None,
+                "detalle": "ORTOSTATISMO NO EVALUABLE: no se detectó registro DE PIE explícito. No se deben mezclar valores basales con otros números del informe."
+            }
+        res = _calcular_delta_ortostatico_pre_ic_final(df)
+        # Reemplazar basal/de_pie por los resúmenes estrictos.
+        res["basal"] = rb; res["de_pie"] = rp
+        for key, delta_key in [("ic","delta_ic"),("irv","delta_irv"),("fc","delta_fc"),("pas","delta_pas"),("pad","delta_pad")]:
+            vb = limpiar_numero(rb.get(key)); vp = limpiar_numero(rp.get(key))
+            res[delta_key] = (vp - vb) if vb is not None and vp is not None else None
+        return res
+except Exception:
+    pass
+
+
 # =========================================================
 # INTERFAZ
 # =========================================================
