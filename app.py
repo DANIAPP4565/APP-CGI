@@ -934,7 +934,7 @@ def extraer_contexto_clinico_pdf(lineas: List[str]) -> Dict[str, Any]:
         # Posición: SOLO aceptar si es un campo explícito con etiqueta (e.g. "Posición: acostado",
         # "Situación: CINTA") O un encabezado de estudio (e.g. "ESTUDIO BASAL (CINTA)").
         # NUNCA inferir posición desde texto libre, leyendas de gráficos o frases comparativas;
-        # eso causaría que el PDF acostado quede etiquetado como "de pie" si menciona esa posición
+        # eso causaría que el PDF acostado quede etiquetado como "parado" si menciona esa posición
         # en alguna comparación o leyenda.
         if posicion is None:
             # Opción 1: etiqueta explícita de posición con separador (: - –)
@@ -943,10 +943,10 @@ def extraer_contexto_clinico_pdf(lineas: List[str]) -> Dict[str, Any]:
                 val = limpiar_campo(val)
                 if val and len(val) >= 3:
                     posicion = val[:120]
-            # Opción 2: encabezado de estudio explícito ("ESTUDIO BASAL", "ESTUDIO DE PIE", "ESTUDIO CINTA")
-            elif re.search(r"\bestudio\s+(basal|cinta|de\s+pie|spot|parad)\b", raw, re.IGNORECASE):
+            # Opción 2: encabezado de estudio explícito ("ESTUDIO BASAL", "ESTUDIO CINTA", "ESTUDIO SPOT", "ESTUDIO PARADO")
+            elif re.search(r"\bestudio\s+(basal|cinta|spot|acostad[oa]|parad[oa])\b", raw, re.IGNORECASE):
                 # Extraer solo la parte de posición del encabezado
-                m = re.search(r"\bestudio\s+(basal|cinta|de\s*pie|spot|parad[oa])\b", raw, re.IGNORECASE)
+                m = re.search(r"\bestudio\s+(basal|cinta|spot|acostad[oa]|parad[oa])\b", raw, re.IGNORECASE)
                 if m:
                     posicion = m.group(0).strip()[:120]
 
@@ -1168,24 +1168,24 @@ def aplicar_extraccion_tablas(lineas: List[str], filas: List[Dict[str, Any]]) ->
                 agregar_si_util(filas, var, elegido, linea)
 
 def _detectar_separador_posicion(lineas: List[str]) -> Optional[int]:
-    """Detecta el índice de la línea que marca el inicio del bloque DE PIE en el texto.
+    """Detecta el índice de la línea que marca el inicio del bloque PARADO en el texto.
 
     SOLO aplica cuando un ÚNICO PDF contiene AMBAS posiciones separadas por un encabezado
-    explícito de sección (e.g. "ESTUDIO DE PIE", "BIPEDESTACIÓN", "SPOT").
+    explícito de sección (e.g. "ESTUDIO PARADO" o "PARADO").
 
     Criterios ESTRICTOS para evitar falsos positivos en PDFs individuales:
     1. La línea debe ser CORTA (≤ 40 chars una vez normalizada), es decir, es un título/encabezado,
        no texto embebido en una oración, leyenda o gráfico de referencia.
     2. La palabra clave de posición debe ocupar la mayor parte de la línea.
     3. NUNCA disparar sobre líneas con otros datos hemodinámicos o demográficos en la misma línea.
-    4. Debe haber visto PRIMERO al menos 10 líneas de datos de la posición acostado/cinta
+    4. Debe haber visto PRIMERO al menos 10 líneas de datos de la posición acostado/cinta/spot
        (para asegurarse de que el bloque basal es sustancial, no apenas un header).
 
     Si no se cumplen estos criterios, devuelve None (= el PDF es de una sola posición).
     """
-    # Patrón de encabezado explícito de sección DE PIE (debe ser la mayor parte de la línea)
+    # Patrón de encabezado explícito de sección PARADO (debe ser la mayor parte de la línea)
     pat_header_pie = re.compile(
-        r"^[\s*#\-=_]*(?:estudio\s+)?(?:de\s*pie|bipedestaci[oó]n|ortostatismo|standing|upright|estudio\s+spot)[\s*#\-=_]*$",
+        r"^[\s*#\-=_]*(?:estudio\s+)?(?:parad[oa])[\s*#\-=_]*$",
         re.IGNORECASE
     )
     # Patrón de datos de posición acostado/basal (para contar líneas sustanciales)
@@ -1193,7 +1193,7 @@ def _detectar_separador_posicion(lineas: List[str]) -> Optional[int]:
         r"\b(acostado|dec[uú]bito|supino|basal|cinta\b|lying|supine|estudio\s+basal)",
         re.IGNORECASE
     )
-    # Patrón de datos hemodinámicos numéricos (si está en la misma línea que "de pie", NO es encabezado)
+    # Patrón de datos hemodinámicos numéricos (si está en la misma línea que "parado", NO es encabezado)
     pat_datos = re.compile(r"\d+[.,]\d+|\b\d{3,}\b")
 
     lineas_ac_vistas = 0
@@ -1289,7 +1289,7 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
     - Reconoce IAC/ACI y CTS/PEP-LVET aunque aparezcan como abreviaturas.
     - Interpreta tablas con varias etiquetas en una línea y valores en la línea siguiente.
     - Aplica fallback global por regex si el primer barrido no encuentra una variable.
-    - Si el PDF contiene dos bloques de posición (acostado + de pie), genera DOS filas.
+    - Si el PDF contiene dos bloques de posición (acostado + parado), genera DOS filas.
     """
     if not registros:
         return pd.DataFrame()
@@ -1299,7 +1299,7 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
 
     # -----------------------------------------------------------------------
     # DETECCIÓN DE DOS BLOQUES DE POSICIÓN EN UN ÚNICO PDF
-    # Si el PDF contiene tanto acostado como de pie, separar en dos bloques y
+    # Si el PDF contiene tanto acostado como parado, separar en dos bloques y
     # generar dos filas independientes para que el análisis ortostático funcione.
     # -----------------------------------------------------------------------
     sep_idx = _detectar_separador_posicion(lineas)
@@ -1307,7 +1307,7 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
         lineas_ac = lineas[:sep_idx]
         lineas_pie = lineas[sep_idx:]
         bloque_ac = _parsear_bloque_lineas(lineas_ac, archivo_origen, posicion_forzada="acostado")
-        bloque_pie = _parsear_bloque_lineas(lineas_pie, archivo_origen, posicion_forzada="de pie")
+        bloque_pie = _parsear_bloque_lineas(lineas_pie, archivo_origen, posicion_forzada="parado")
 
         def _construir_fila(bloque: Dict[str, Any], paciente_archivo: Optional[str], pos_forzada: str) -> Dict[str, Any]:
             res = bloque["resumen"]
@@ -1364,9 +1364,9 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
             if re.search(r"\bpulsos?\b|\blpm\b|\bmin\b", pac_archivo, re.IGNORECASE):
                 pac_archivo = None
 
-        # Solo incluir el bloque de pie si tiene al menos IC o IRV (evita filas vacías)
+        # Solo incluir el bloque parado si tiene al menos IC o IRV (evita filas vacías)
         fila_ac = _construir_fila(bloque_ac, pac_archivo, "acostado")
-        fila_pie = _construir_fila(bloque_pie, pac_archivo, "de pie")
+        fila_pie = _construir_fila(bloque_pie, pac_archivo, "parado")
         filas_out = [fila_ac]
         if es_valor_util(fila_pie.get("IC")) or es_valor_util(fila_pie.get("IRV")):
             filas_out.append(fila_pie)
@@ -1526,7 +1526,7 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
         "IDS": resumen.get("IDS"),
         "Z0": resumen.get("Z0"),
         # origen_parser incluye la posición detectada para que detectar_posicion_fila pueda usarla
-        # sin necesidad de escanear el Texto_PDF completo (que puede contener "de pie" fuera de contexto).
+        # sin necesidad de escanear el Texto_PDF completo (que puede contener "parado" fuera de contexto).
         "origen_parser": "PDF extraído con parser robusto — posición: " + (contexto_pdf.get("Posición") or "no reconocida"),
     }
 
@@ -1633,7 +1633,7 @@ SINONIMOS_COLUMNAS: Dict[str, List[str]] = {
     "Fecha": ["fecha"],
     "Diagnóstico": ["diagnóstico", "diagnostico", "diagnosis", "dx"],
     "Medicación": ["medicación", "medicacion", "tratamiento", "medication"],
-    "Posición": ["posición", "posicion", "situación", "situacion", "postura", "decubito", "decúbito", "acostado", "supino", "de pie", "bipedestacion", "bipedestación", "standing", "supine"],
+    "Posición": ["posición", "posicion", "situación", "situacion", "postura", "decubito", "decúbito", "acostado", "supino", "parado", "bipedestacion", "bipedestación", "standing", "supine"],
     "Texto_PDF": ["texto_pdf", "texto pdf", "texto extraido", "texto_extraido"],
     "PAS": ["pas", "sistolica", "sistólica", "sbp", "sys"],
     "PAD": ["pad", "diastolica", "diastólica", "dbp", "dia"],
@@ -1784,37 +1784,39 @@ def obtener_primero(row: Dict[str, Any], nombres: List[str]) -> Any:
 def normalizar_posicion_estudio(texto: Any) -> str:
     """Devuelve 'acostado', 'de_pie' o 'no_reconocida'.
 
-    Regla clínica actualizada:
-    - Las métricas diagnósticas principales se toman del registro en CINTA,
-      que en este flujo corresponde al registro basal/acostado.
-    - El registro DE PIE se usa solo para evaluación ortostática.
-    - SPOT no debe reemplazar a CINTA para diagnóstico si existe CINTA.
+    Regla definitiva solicitada:
+    - La integración diagnóstica basal acepta ACOSTADO OR CINTA OR SPOT.
+    - SPOT NO es ortostatismo; entra como registro basal/integrable.
+    - El ortostatismo solo se reconoce cuando el informe/campo dice PARADO/PARADA.
+    - No se debe clasificar como ortostatismo por leyendas generales como "parado",
+      "bipedestación" u "ortostatismo" si no existe el rótulo explícito PARADO.
     """
     t = normalizar_txt(texto)
     if not t:
         return "no_reconocida"
 
-    # Prioridad de pie: si el texto dice de pie/bipedestación, nunca clasificar como acostado.
-    patrones_de_pie = [
-        r"\bde\s*pie\b", r"\bbipedest", r"\bparad[oa]\b", r"\bortostat", r"\bstanding\b", r"\bupright\b",
-    ]
-    if any(re.search(p, t) for p in patrones_de_pie):
+    # ÚNICA marca válida para respuesta ortostática: PARADO / PARADA.
+    # Esto evita que textos comparativos o leyendas con "parado" generen una fila ortostática falsa.
+    if re.search(r"\bparad[oa]s?\b", t):
         return "de_pie"
 
-    patrones_acostado = [
-        r"\bacostad[oa]\b", r"\bdecubito\b", r"\bsupin[oa]\b", r"\bclinostat", r"\breposo\b",
-        r"\blying\b", r"\bsupine\b", r"\bbasal\b", r"\bac\s*(?:cinta|spot)\b", r"\bsituacion\s+ac\b", r"\bsituación\s+ac\b",
+    # Integración basal: ACOSTADO OR CINTA OR SPOT.
+    patrones_basal = [
+        r"\bacostad[oa]s?\b", r"\bdecubito\b", r"\bdec[uú]bito\b", r"\bsupin[oa]s?\b",
+        r"\bclinostat", r"\breposo\b", r"\blying\b", r"\bsupine\b", r"\bbasal\b",
+        r"\bcinta\b", r"\bspot\b", r"\bac\s*(?:cinta|spot)\b", r"\bsituacion\s+ac\b", r"\bsituación\s+ac\b",
     ]
-    if any(re.search(p, t) for p in patrones_acostado):
+    if any(re.search(p, t) for p in patrones_basal):
         return "acostado"
 
     return "no_reconocida"
 
-
 def normalizar_metodo_estudio(texto: Any) -> str:
     """Devuelve 'cinta', 'spot' o 'no_reconocido'.
-    CINTA/SPOT son método de adquisición, no posición. La selección diagnóstica
-    prioriza CINTA por ser la medición basal/acostada en este flujo.
+
+    Regla definitiva:
+    - CINTA y SPOT son métodos válidos para la integración diagnóstica basal.
+    - PARADO no es método; es la única posición que habilita ortostatismo.
     """
     t = normalizar_txt(texto)
     if not t:
@@ -1825,7 +1827,6 @@ def normalizar_metodo_estudio(texto: Any) -> str:
         return "spot"
     return "no_reconocido"
 
-
 def detectar_posicion_fila(fila: Dict[str, Any]) -> str:
     """Determina la posición clínica de una fila.
 
@@ -1834,9 +1835,9 @@ def detectar_posicion_fila(fila: Dict[str, Any]) -> str:
     bloques de PDFs con dos posiciones).
 
     NO usa Texto_PDF, Diagnóstico, Paciente ni origen genérico, porque esos campos
-    pueden contener "de pie" o "basal" en contextos que no son la posición del estudio
+    pueden contener "parado" o "basal" en contextos que no son la posición del estudio
     (leyendas de gráficos, diagnósticos clínicos, comparaciones, etc.) y causarían
-    asignaciones incorrectas que intercambian acostado/de pie.
+    asignaciones incorrectas que intercambian acostado/parado.
     """
     partes = []
     # Solo columnas con información de posición confiable y explícita
@@ -1856,16 +1857,10 @@ def detectar_metodo_fila(fila: Dict[str, Any]) -> str:
 
 
 def seleccionar_df_diagnostico(df: pd.DataFrame) -> pd.DataFrame:
-    """Selecciona el registro que debe usarse para diagnóstico clínico principal.
+    """Selecciona el registro de integración diagnóstica principal.
 
-    Prioridad nueva:
-    1) CINTA + acostado/decúbito (estándar diagnóstico).
-    2) CINTA, aunque la posición no haya sido reconocida explícitamente.
-    3) Acostado/decúbito, si no hay CINTA.
-    4) Primer registro no-de-pie.
-    5) Último recurso: primer registro.
-
-    El registro DE PIE nunca se usa para diagnóstico principal si existe otra opción.
+    Regla definitiva: ACOSTADO OR CINTA OR SPOT.
+    El registro PARADO queda exclusivamente reservado para ortostatismo.
     """
     if df is None or df.empty:
         return pd.DataFrame()
@@ -1873,28 +1868,30 @@ def seleccionar_df_diagnostico(df: pd.DataFrame) -> pd.DataFrame:
     dfx["Posición_reconocida"] = [detectar_posicion_fila(f.to_dict()) for _, f in dfx.iterrows()]
     dfx["Método_reconocido"] = [detectar_metodo_fila(f.to_dict()) for _, f in dfx.iterrows()]
 
-    cinta_acostado = dfx[(dfx["Método_reconocido"] == "cinta") & (dfx["Posición_reconocida"] == "acostado")]
-    if not cinta_acostado.empty:
-        return cinta_acostado.iloc[[0]].reset_index(drop=True)
+    # Nunca usar PARADO como basal si existe cualquier alternativa basal/integrable.
+    basal = dfx[dfx["Posición_reconocida"] != "de_pie"].copy()
+    if basal.empty:
+        return pd.DataFrame()
 
-    cinta = dfx[dfx["Método_reconocido"] == "cinta"]
-    if not cinta.empty:
-        return cinta.iloc[[0]].reset_index(drop=True)
-
-    acostado = dfx[dfx["Posición_reconocida"] == "acostado"]
+    # Prioridad: acostado explícito + cinta; luego acostado; luego cinta; luego spot; luego primer basal.
+    ac_cinta = basal[(basal["Posición_reconocida"] == "acostado") & (basal["Método_reconocido"] == "cinta")]
+    if not ac_cinta.empty:
+        return ac_cinta.iloc[[0]].reset_index(drop=True)
+    acostado = basal[basal["Posición_reconocida"] == "acostado"]
     if not acostado.empty:
         return acostado.iloc[[0]].reset_index(drop=True)
-
-    no_de_pie = dfx[dfx["Posición_reconocida"] != "de_pie"]
-    if not no_de_pie.empty:
-        return no_de_pie.iloc[[0]].reset_index(drop=True)
-
-    return dfx.iloc[[0]].reset_index(drop=True)
-
+    cinta = basal[basal["Método_reconocido"] == "cinta"]
+    if not cinta.empty:
+        return cinta.iloc[[0]].reset_index(drop=True)
+    spot = basal[basal["Método_reconocido"] == "spot"]
+    if not spot.empty:
+        return spot.iloc[[0]].reset_index(drop=True)
+    return basal.iloc[[0]].reset_index(drop=True)
 
 def seleccionar_df_de_pie(df: pd.DataFrame) -> pd.DataFrame:
-    """Selecciona el registro de pie para evaluación ortostática.
-    Solo toma filas que digan explícitamente DE PIE/bipedestación/ortostatismo.
+    """Selecciona registro PARADO para evaluación ortostática.
+
+    Solo toma filas cuya posición explícita haya sido normalizada como de_pie por contener PARADO/PARADA.
     """
     if df is None or df.empty:
         return pd.DataFrame()
@@ -1905,22 +1902,18 @@ def seleccionar_df_de_pie(df: pd.DataFrame) -> pd.DataFrame:
         return pie.iloc[[-1]].reset_index(drop=True)
     return pd.DataFrame()
 
-
 def describir_regla_posicion(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return "No hay registros para determinar posición/método."
     dfx = estandarizar_columnas_clinicas(df).copy()
     posiciones = [detectar_posicion_fila(f.to_dict()) for _, f in dfx.iterrows()]
     metodos = [detectar_metodo_fila(f.to_dict()) for _, f in dfx.iterrows()]
-    if "cinta" in metodos:
-        if "de_pie" in posiciones:
-            return "Diagnóstico principal basado en medición con CINTA (basal/acostada). El registro que dice DE PIE se utiliza solo para evaluación ortostática."
-        return "Diagnóstico principal basado en medición con CINTA, tomada como referencia basal/acostada."
-    if "acostado" in posiciones:
-        return "Diagnóstico principal basado en el registro en decúbito/acostado. El registro de pie se utiliza solo para evaluación ortostática."
-    if "spot" in metodos:
-        return "No se encontró medición con CINTA; se usa SPOT solo como respaldo y se debe interpretar con cautela."
-    return "No se reconoció posición/método; por defecto se usa el primer archivo como referencia diagnóstica."
+    if "de_pie" in posiciones:
+        return "Integración diagnóstica con ACOSTADO OR CINTA OR SPOT. El registro PARADO se utiliza solo para evaluación ortostática."
+    if any(m in metodos for m in ["cinta", "spot"]) or "acostado" in posiciones:
+        return "Integración diagnóstica basada en ACOSTADO OR CINTA OR SPOT. No se detectó registro PARADO para ortostatismo."
+    return "No se reconoció posición/método; por defecto se usa el primer registro no PARADO como referencia diagnóstica."
+
 def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
     if df.empty:
         return {}
@@ -2056,7 +2049,7 @@ def clasificacion_dinamica_obligatoria(r: Dict[str, Any], contexto: Optional[Dic
     """Devuelve siempre Normodinamia, Hiperdinamia o Hipodinamia.
 
     Regla corregida de coherencia clínica:
-    - El patrón hemodinámico de referencia se define con los valores ACOSTADO/CINTA.
+    - El patrón hemodinámico de referencia se define con los valores ACOSTADO/CINTA/SPOT.
     - No se clasifica Hipodinamia si IC e IRV están en rango normal.
     - Embarazo/HDP/PE usa la misma clasificación basal IC + IRV/RVS; los datos obstétricos
       modifican el riesgo clínico, pero no cambian el patrón circulatorio si la hemodinamia es normal.
@@ -2129,7 +2122,7 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
     if pam is not None and fc not in [None, 0]:
         map_hr_txt = fmt(pam / fc, 2)
     if contexto.get("embarazada"):
-        return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, IRV {rvs}, relación PAM/FC {map_hr_txt}. En embarazo se informa la hemodinamia basal ACOSTADO/CINTA; los datos obstétricos se integran como contexto clínico sin cambiar el patrón si IC e IRV están en rango normal."
+        return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, IRV {rvs}, relación PAM/FC {map_hr_txt}. En embarazo se informa la hemodinamia basal ACOSTADO/CINTA/SPOT; los datos obstétricos se integran como contexto clínico sin cambiar el patrón si IC e IRV están en rango normal."
     return f"Clasificación dinámica obligatoria: {clase}. Base: IC {ic}, IRV {rvs}."
 
 def diagnostico_volemia(cft: Any, cftnr: Any) -> str:
@@ -2240,7 +2233,7 @@ def extraer_resumen_ortostatico_desde_fila(fila: pd.Series) -> Dict[str, Any]:
     """Extrae métricas directamente de UNA fila real.
 
     No usa extraer_resumen_integrado(), porque esa función puede volver a seleccionar
-    el registro basal y hacer que acostado y de pie queden iguales.
+    el registro basal y hacer que acostado y parado queden iguales.
     """
     d = fila.to_dict()
     return {
@@ -2260,19 +2253,19 @@ def extraer_resumen_ortostatico_desde_fila(fila: pd.Series) -> Dict[str, Any]:
 
 
 def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Devuelve resumen basal/acostado y de pie con selección real de filas.
+    """Devuelve resumen basal/acostado y parado con selección real de filas.
 
     Basal:
     1) CINTA no-de-pie.
     2) Acostado/decúbito.
     3) Cualquier fila no-de-pie.
 
-    De pie:
-    - Solo fila reconocida explícitamente como de pie.
+    Parado:
+    - Solo fila reconocida explícitamente como parado.
 
     Corrección crítica:
     no se reintegra cada sub-DataFrame, para evitar que el registro basal sea reutilizado
-    como registro de pie y genere ΔIC = 0 o ΔIRV = 0 artificial.
+    como registro parado y genere ΔIC = 0 o ΔIRV = 0 artificial.
     """
     if df is None or df.empty:
         return {}, {}
@@ -2293,12 +2286,12 @@ def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Di
         basal = dfx[dfx["Posición_reconocida"] != "de_pie"]
 
     # Respaldo clínico obligatorio: si hay dos archivos/filas y la detección textual
-    # marca erróneamente todo como DE PIE, usar la primera fila como ACOSTADO/CINTA basal.
+    # marca erróneamente todo como PARADO, usar la primera fila como ACOSTADO/CINTA/SPOT basal.
     if basal.empty and len(dfx) >= 2:
         basal = dfx.iloc[[0]]
 
     pie = dfx[dfx["Posición_reconocida"] == "de_pie"]
-    # Si no se reconoció DE PIE pero hay dos registros, usar la última fila como respuesta ortostática.
+    # Si no se reconoció PARADO pero hay dos registros, usar la última fila como respuesta ortostática.
     if pie.empty and len(dfx) >= 2:
         pie = dfx.iloc[[-1]]
 
@@ -2315,7 +2308,7 @@ def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Di
 
 
 def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
-    """Calcula deltas ortostáticos como: valor de pie - valor basal/acostado."""
+    """Calcula deltas ortostáticos como: valor parado - valor basal/acostado."""
     r1, r2 = obtener_resumenes_ortostaticos(df)
 
     resultado = {
@@ -2345,7 +2338,7 @@ def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
             continue
         delta = v2 - v1
         resultado[out_key] = delta
-        partes.append(f"{nombre}: basal {fmt(v1)} → de pie {fmt(v2)}; Δ {fmt(delta)} {unidad}")
+        partes.append(f"{nombre}: basal {fmt(v1)} → parado {fmt(v2)}; Δ {fmt(delta)} {unidad}")
 
     resultado["detalle"] = " | ".join(partes) if partes else "No se pudieron calcular deltas ortostáticos por datos insuficientes."
     return resultado
@@ -2393,7 +2386,7 @@ def descripcion_patron_ortostatico(patron: str) -> str:
     if "hiperdinamico" in p:
         return "Respuesta con aumento exagerado del índice cardíaco o del volumen minuto en bipedestación; sugiere activación simpática aumentada o compensación circulatoria intensa."
     if "vasodilatador" in p:
-        return "Respuesta con caída o aumento insuficiente de la resistencia vascular sistémica al ponerse de pie; sugiere vasoconstricción periférica inadecuada o vasodilatación relativa."
+        return "Respuesta con caída o aumento insuficiente de la resistencia vascular sistémica al ponerse parado; sugiere vasoconstricción periférica inadecuada o vasodilatación relativa."
     if "vasoconstrictor" in p:
         return "Respuesta con aumento predominante de la resistencia vascular sistémica, manteniendo compensación tensional y perfusional."
     if "alterado" in p:
@@ -2405,7 +2398,7 @@ def descripcion_patron_ortostatico(patron: str) -> str:
 
 def interpretar_ortostatismo(df: pd.DataFrame) -> str:
     if df is None or len(df) < 2:
-        return "No aplicable: se requieren dos registros comparables, basal/acostado y de pie."
+        return "No aplicable: se requieren dos registros comparables, basal/acostado y parado."
 
     d = calcular_delta_ortostatico(df)
     if not d.get("detalle") or "No se pudieron" in d.get("detalle", ""):
@@ -2420,8 +2413,8 @@ def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Opti
     """Diferencia el patrón hemodinámico de referencia del patrón en bipedestación.
 
     Regla clínica solicitada:
-    - El patrón diagnóstico de referencia es el registro ACOSTADO/CINTA.
-    - El registro DE PIE describe la respuesta ortostática y no reemplaza el diagnóstico basal.
+    - El patrón diagnóstico de referencia es el registro ACOSTADO/CINTA/SPOT.
+    - El registro PARADO describe la respuesta ortostática y no reemplaza el diagnóstico basal.
     - Ambos se expresan solo como HIPODINAMIA, NORMODINAMIA o HIPERDINAMIA.
     """
     contexto = contexto or {}
@@ -2442,9 +2435,9 @@ def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Opti
         )
 
     lineas = [
-        "**El patrón hemodinámico de referencia es el basal/acostado o CINTA.** El registro de pie se informa por separado para caracterizar la adaptación ortostática.",
-        linea(r_basal, "Patrón hemodinámico ACOSTADO/CINTA", referencia=True),
-        linea(r_pie, "Patrón hemodinámico DE PIE", referencia=False),
+        "**El patrón hemodinámico de referencia es el basal/acostado o CINTA.** El registro parado se informa por separado para caracterizar la adaptación ortostática.",
+        linea(r_basal, "Patrón hemodinámico ACOSTADO/CINTA/SPOT", referencia=True),
+        linea(r_pie, "Patrón hemodinámico PARADO", referencia=False),
     ]
     return "\n".join(lineas)
 
@@ -2506,7 +2499,7 @@ def evaluar_dominio_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
         return {
             "score": None,
             "estado": "No disponible",
-            "detalle": "Dominio ortostático no evaluable por ausencia de IC/IRV/FC comparables entre basal y de pie.",
+            "detalle": "Dominio ortostático no evaluable por ausencia de IC/IRV/FC comparables entre basal y parado.",
         }
 
     score = sum(scores) / len(scores)
@@ -2613,11 +2606,11 @@ def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] 
     if score_global is None:
         categoria = "perfil hemodinámico integrado con datos insuficientes para definir resultado"
     elif score_global >= 0.80:
-        categoria = "patrón de referencia ACOSTADO/CINTA conservado"
+        categoria = "patrón de referencia ACOSTADO/CINTA/SPOT conservado"
     elif score_global >= 0.50:
-        categoria = "patrón de referencia ACOSTADO/CINTA con variables en precaución clínica"
+        categoria = "patrón de referencia ACOSTADO/CINTA/SPOT con variables en precaución clínica"
     else:
-        categoria = "patrón de referencia ACOSTADO/CINTA con alteración hemodinámica"
+        categoria = "patrón de referencia ACOSTADO/CINTA/SPOT con alteración hemodinámica"
 
     texto_orto = ""
     if ortostatico is not None:
@@ -2941,7 +2934,7 @@ def crear_acelerador_circular_bytes(
 def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
     """Devuelve puntos reales del paciente para el gráfico IC vs IRV/RVS.
 
-    Si hay dos registros comparables, muestra Acostado/CINTA como referencia diagnóstica y De pie como respuesta ortostática con flecha.
+    Si hay dos registros comparables, muestra Acostado/CINTA como referencia diagnóstica y Parado como respuesta ortostática con flecha.
     Si no, muestra el valor integrado disponible.
     """
     puntos: List[Dict[str, Any]] = []
@@ -2950,9 +2943,9 @@ def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = 
         ic_b = limpiar_numero(basal.get("ic")); irv_b = limpiar_numero(basal.get("irv"))
         ic_p = limpiar_numero(pie.get("ic")); irv_p = limpiar_numero(pie.get("irv"))
         if ic_b is not None and irv_b is not None:
-            puntos.append({"etiqueta": "ACOSTADO/CINTA\nreferencia", "ic": ic_b, "irv": irv_b})
+            puntos.append({"etiqueta": "ACOSTADO/CINTA/SPOT\nreferencia", "ic": ic_b, "irv": irv_b})
         if ic_p is not None and irv_p is not None:
-            puntos.append({"etiqueta": "DE PIE\nrespuesta ortostática", "ic": ic_p, "irv": irv_p})
+            puntos.append({"etiqueta": "PARADO\nrespuesta ortostática", "ic": ic_p, "irv": irv_p})
     if not puntos:
         ic = limpiar_numero(r.get("ic"))
         irv = limpiar_numero(r.get("irv"))
@@ -2965,7 +2958,7 @@ def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.D
     """Gráfico dinámico del fenotipo circulatorio real del paciente.
 
     Eje X: IRV/RVS. Eje Y: IC. El punto del paciente se ubica sobre zonas clínicas
-    de hipodinamia, normodinamia o hiperdinamia. Si existen mediciones basal y de pie,
+    de hipodinamia, normodinamia o hiperdinamia. Si existen mediciones basal y parado,
     se dibuja una flecha para mostrar el comportamiento ortostático real, pero la clasificación principal se calcula con el registro Acostado/CINTA.
     """
     puntos = _puntos_fenotipado_paciente(r, df)
@@ -3028,13 +3021,13 @@ def crear_grafico_fenotipado_dinamico_bytes(r: Dict[str, Any], df: Optional[pd.D
 
         punto_referencia = puntos[0]
         patron = diagnostico_perfil_hemodinamico(punto_referencia.get("ic"), punto_referencia.get("irv"))
-        ax.set_title("Fenotipado clínico automatizado: patrón ACOSTADO/CINTA de referencia", fontsize=14, fontweight="bold", color="#0B4F8A")
+        ax.set_title("Fenotipado clínico automatizado: patrón ACOSTADO/CINTA/SPOT de referencia", fontsize=14, fontweight="bold", color="#0B4F8A")
         ax.set_xlabel("Índice de Resistencia Vascular - IRV (dyn.s.cm-5.m2)", fontsize=11, fontweight="bold")
         ax.set_ylabel("Índice cardíaco - IC (L/min/m²)", fontsize=11, fontweight="bold")
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
         ax.grid(True, alpha=0.20)
-        ax.text(0.01, -0.18, f"Clasificación automática del patrón ACOSTADO/CINTA: {patron}", transform=ax.transAxes, fontsize=10, color="#0F172A", fontweight="bold")
+        ax.text(0.01, -0.18, f"Clasificación automática del patrón ACOSTADO/CINTA/SPOT: {patron}", transform=ax.transAxes, fontsize=10, color="#0F172A", fontweight="bold")
         plt.tight_layout()
         buffer = io.BytesIO()
         fig.savefig(buffer, format="png", dpi=180, bbox_inches="tight")
@@ -4298,7 +4291,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         pdf.set_font("Arial", "B", 15)
         pdf.multi_cell(0, 8, "FENOTIPADO CLINICO AUTOMATIZADO", align="C")
         pdf.ln(2)
-        pdf_texto(pdf, "Ubicacion real del paciente en el plano indice cardiaco versus resistencia vascular sistemica. Si existen mediciones basal y de pie, la flecha muestra el comportamiento ortostatico real.", 9)
+        pdf_texto(pdf, "Ubicacion real del paciente en el plano indice cardiaco versus resistencia vascular sistemica. Si existen mediciones basal y parado, la flecha muestra el comportamiento ortostatico real.", 9)
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 tmp.write(graf_fenotipo.getvalue())
@@ -4459,7 +4452,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
 
 def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> bytes:
     """Genera un informe ejecutivo de una sola hoja PDF.
-    Usa el registro acostado/decúbito para diagnóstico principal y reserva de pie para ortostatismo.
+    Usa el registro acostado/decúbito para diagnóstico principal y reserva parado para ortostatismo.
     """
     pdf = crear_pdf_objeto()
     texto_fallback = generar_informe_texto(df, contexto_embarazo)
@@ -4613,7 +4606,7 @@ def construir_fila_paciente_integrada(df: pd.DataFrame, contexto_embarazo: Optio
     """Devuelve un DataFrame de UNA SOLA fila con los datos integrados del paciente.
 
     Toma los datos clinicos (PAS/PAD ficha clinica) y las metricas hemodinamicas
-    (CINTA basal/acostada) ya consolidadas por extraer_resumen_integrado, y
+    (ACOSTADO/CINTA/SPOT) ya consolidadas por extraer_resumen_integrado, y
     agrega las conclusiones diagnosticas. Esta es la fila final por paciente
     que resulta de la integracion de los uno o dos PDFs cargados.
     """
@@ -4699,8 +4692,8 @@ def excel_bytes_paciente_integrado(df: pd.DataFrame, contexto_embarazo: Optional
 
 # =========================================================
 # OVERRIDE V13 - INTEGRACION CORREGIDA PAS/PAD + IRV
-# Regla: métricas hemodinámicas del diagnóstico = CINTA basal/acostada.
-# El registro DE PIE se reserva para ortostatismo. PAS/PAD pueden rescatarse
+# Regla: métricas hemodinámicas del diagnóstico = ACOSTADO/CINTA/SPOT.
+# El registro PARADO se reserva para ortostatismo. PAS/PAD pueden rescatarse
 # desde otro archivo si no están en la fila CINTA, porque pertenecen a la ficha clínica.
 # =========================================================
 
@@ -4755,13 +4748,13 @@ def seleccionar_df_diagnostico(df: pd.DataFrame) -> pd.DataFrame:
     """Selección diagnóstica corregida.
 
     Prioridad:
-    1) CINTA que no diga DE PIE.
+    1) CINTA que no diga PARADO.
     2) CINTA + acostado, si está explícito.
     3) Acostado/decúbito no-de-pie.
     4) Cualquier fila no-de-pie.
     5) Último recurso: primera fila.
 
-    Esto evita que el registro DE PIE reemplace al basal y evita que SPOT pise a CINTA.
+    Esto evita que el registro PARADO reemplace al basal y evita que SPOT pise a CINTA.
     """
     if df is None or df.empty:
         return pd.DataFrame()
@@ -4851,7 +4844,7 @@ def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
 
     def buscar_hemo(col: str, variable: Optional[str] = None) -> Any:
         variable = variable or col
-        # Hemodinámica: SOLO fila diagnóstica CINTA/basal. No rescatar desde SPOT o DE PIE.
+        # Hemodinámica: SOLO fila diagnóstica CINTA/basal. No rescatar desde SPOT o PARADO.
         return _buscar_en_df_v13(df_diag, col, variable, desde_final=False)
 
     ea = buscar_hemo("EA")
@@ -4878,7 +4871,7 @@ def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
         # PAS/PAD son ficha clínica: se rescatan aunque no figuren en la fila CINTA.
         "pas": buscar_contexto("PAS", "PAS"),
         "pad": buscar_contexto("PAD", "PAD"),
-        # Métricas hemodinámicas: solo CINTA/basal.
+        # Métricas hemodinámicas: ACOSTADO / CINTA / SPOT/basal.
         "fc": buscar_hemo("FC", "FC"),
         "ic": buscar_hemo("IC", "IC"),
         "irv": buscar_hemo("IRV", "IRV"),
@@ -4905,7 +4898,7 @@ def filtrar_df_cinta_diagnostica(df: pd.DataFrame) -> pd.DataFrame:
     - En el control de integración de PDFs se muestran SOLO las métricas correspondientes a CINTA.
     - Si existe CINTA acostada/basal, se prioriza esa fila por archivo.
     - Los registros SPOT no se muestran en esta tabla.
-    - Los registros DE PIE se excluyen de esta tabla y quedan reservados para ortostatismo.
+    - Los registros PARADO se excluyen de esta tabla y quedan reservados para ortostatismo.
     """
     if df is None or df.empty:
         return pd.DataFrame()
@@ -4913,7 +4906,7 @@ def filtrar_df_cinta_diagnostica(df: pd.DataFrame) -> pd.DataFrame:
     dfx["Posición_reconocida"] = [detectar_posicion_fila(f.to_dict()) for _, f in dfx.iterrows()]
     dfx["Método_reconocido"] = [detectar_metodo_fila(f.to_dict()) for _, f in dfx.iterrows()]
 
-    # Solo CINTA; de pie no entra en la tabla diagnóstica.
+    # ACOSTADO / CINTA / SPOT; parado no entra en la tabla diagnóstica.
     cinta = dfx[(dfx["Método_reconocido"] == "cinta") & (dfx["Posición_reconocida"] != "de_pie")].copy()
     if cinta.empty:
         return pd.DataFrame()
@@ -4938,9 +4931,9 @@ def construir_resumen_por_archivo_cinta(df: pd.DataFrame) -> pd.DataFrame:
 def generar_tabla_integracion(df: pd.DataFrame) -> pd.DataFrame:
     """Tabla de control de integración restringida a CINTA.
 
-    Importante: esta tabla ya no mezcla SPOT ni DE PIE. Por eso evita mostrar
+    Importante: esta tabla ya no mezcla SPOT ni PARADO. Por eso evita mostrar
     valores incorrectos o no diagnósticos como IRV 326 si provienen de una
-    adquisición que no corresponde a CINTA basal/acostada.
+    adquisición que no corresponde a ACOSTADO/CINTA/SPOT.
     """
     df_cinta = filtrar_df_cinta_diagnostica(df)
     if df_cinta.empty:
@@ -5010,7 +5003,7 @@ def resumen_calidad_integracion(df: pd.DataFrame) -> Dict[str, Any]:
 # Objetivos:
 # 1) Validar que cada valor sea fisiológicamente plausible.
 # 2) Detectar incoherencias entre métricas relacionadas.
-# 3) Mantener diagnóstico con CINTA basal/acostada y DE PIE solo para ortostatismo.
+# 3) Mantener diagnóstico con ACOSTADO/CINTA/SPOT y PARADO solo para ortostatismo.
 # 4) Evitar que valores aislados o mal capturados generen conclusiones automáticas.
 # =========================================================
 
@@ -5056,7 +5049,7 @@ def _estado_rango_v15(variable: str, valor: Any) -> Tuple[str, str]:
 def validar_hemodinamica_inteligente(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Valida coherencia fisiológica y semántica del estudio diagnóstico.
 
-    Usa exclusivamente el resumen integrado basado en CINTA basal/acostada. No usa el registro DE PIE
+    Usa exclusivamente el resumen integrado basado en ACOSTADO/CINTA/SPOT. No usa el registro PARADO
     salvo para informar disponibilidad ortostática.
     """
     r = extraer_resumen_integrado(df)
@@ -5149,10 +5142,10 @@ def validar_hemodinamica_inteligente(df: pd.DataFrame, contexto_embarazo: Option
     if "cinta" not in metodo:
         alertas.append("El diagnóstico no quedó respaldado por CINTA reconocida; interpretar con cautela.")
     if "de_pie" in posicion or "pie" in posicion:
-        alertas.append("La fila diagnóstica parece corresponder a DE PIE; debe usarse solo para ortostatismo. Revisar selección de CINTA basal/acostada.")
+        alertas.append("La fila diagnóstica parece corresponder a PARADO; debe usarse solo para ortostatismo. Revisar selección de ACOSTADO/CINTA/SPOT.")
 
     # Estado global.
-    alertas_revision = [a for a in alertas if any(p in a.lower() for p in ["revisar", "discord", "inválido", "cautela", "no quedó", "de pie", "desproporcion"])]
+    alertas_revision = [a for a in alertas if any(p in a.lower() for p in ["revisar", "discord", "inválido", "cautela", "no quedó", "parado", "desproporcion"])]
     if revisiones > 0 or len(alertas_revision) >= 2:
         estado_global = "REVISAR ANTES DE INFORMAR"
     elif faltantes >= 4 or len(alertas_revision) == 1:
@@ -5182,7 +5175,7 @@ def texto_validacion_hemodinamica_inteligente(df: pd.DataFrame, contexto_embaraz
     lineas = [
         f"Estado global de validación: {v['estado_global']}",
         v["conclusion"],
-        "Regla aplicada: diagnóstico con CINTA basal/acostada; DE PIE reservado para evaluación ortostática.",
+        "Regla aplicada: diagnóstico con ACOSTADO/CINTA/SPOT; PARADO reservado para evaluación ortostática.",
     ]
     if v["alertas"]:
         lineas.append("Alertas y coherencias detectadas:")
@@ -5520,7 +5513,7 @@ Definiciones para reporte:
 - Hiperdinamia: patrón de alto flujo y baja resistencia, más compatible con eje materno/metabólico-volémico.
 - Normodinamia: IC y RVS sin desviación extrema.
 
-Nota metodológica: el diagnóstico principal se calcula con CINTA basal/acostada; el estudio de pie se reserva para ortostatismo. Este score es una herramienta de estratificación hemodinámica y no reemplaza los criterios diagnósticos obstétricos ni el laboratorio."""
+Nota metodológica: el diagnóstico principal se calcula con ACOSTADO/CINTA/SPOT; el estudio parado se reserva para ortostatismo. Este score es una herramienta de estratificación hemodinámica y no reemplaza los criterios diagnósticos obstétricos ni el laboratorio."""
 
 
 def tabla_score_paper_clinico_df(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
@@ -5600,7 +5593,7 @@ def crear_grafico_score_paper_bytes(r: Dict[str, Any], contexto: Optional[Dict[s
 def generar_metodologia_paper_texto() -> str:
     return """MÉTODO PROPUESTO PARA REPORTE CIENTÍFICO
 Diseño: análisis hemodinámico no invasivo basado en cardiografía de impedancia integrada a datos obstétricos.
-Registro diagnóstico: se prioriza CINTA basal/acostada para clasificación principal. El registro de pie se usa exclusivamente para respuesta ortostática.
+Registro diagnóstico: se prioriza ACOSTADO/CINTA/SPOT para clasificación principal. El registro parado se usa exclusivamente para respuesta ortostática.
 Variables principales: PAS, PAD, FC, IC/CI, RVS/IRV/TPVR, CFT/CFTnr, IV/VI, IAC/ACI, CTS, EA, EES y EA/EES.
 Fenotipos: hipodinamia, normodinamia e hiperdinamia. En gestantes con HDP se clasifica eje probable placentario/vascular vs materno/metabólico-volémico y se informa AGA o SGA/RCIU/FGR/IUGR si el dato está disponible.
 Score PE/HDP 0-100: PA/HDP 25 puntos, IC-RVS 30 puntos, eje feto-placentario 20 puntos, edad gestacional 10 puntos, marcadores complementarios 15 puntos.
@@ -6189,8 +6182,8 @@ if _generar_tabla_validacion_hemodinamica_v15_base_eaees is not None:
 # V21 - COHERENCIA FINAL DEL PATRÓN HEMODINÁMICO
 # =========================================================
 # Regla clínica obligatoria:
-# - El patrón hemodinámico diagnóstico se informa siempre desde ACOSTADO/CINTA.
-# - DE PIE se informa exclusivamente como respuesta ortostática.
+# - El patrón hemodinámico diagnóstico se informa siempre desde ACOSTADO/CINTA/SPOT.
+# - PARADO se informa exclusivamente como respuesta ortostática.
 # - No se usa "patrón definido" como patrón circulatorio.
 # - El patrón circulatorio solo puede ser HIPODINAMIA, NORMODINAMIA o HIPERDINAMIA.
 
@@ -6213,13 +6206,13 @@ def diagnostico_perfil_hemodinamico_acostado_cinta(r: Dict[str, Any], contexto: 
         significado = "predominio de bajo flujo y/o resistencia vascular elevada."
     else:
         significado = "IC e IRV dentro del rango esperado."
-    return f"**Patrón hemodinámico de referencia ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}. Significado: {significado}"
+    return f"**Patrón hemodinámico de referencia ACOSTADO/CINTA/SPOT: {patron}.** Base: IC {ic}; IRV/RVS {rvs}. Significado: {significado}"
 
 
 _texto_clasificacion_dinamica_pre_v21 = texto_clasificacion_dinamica
 
 def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
-    """Salida final coherente: patrón basal/acostado, sin mezclar con de pie."""
+    """Salida final coherente: patrón basal/acostado, sin mezclar con parado."""
     contexto = contexto or {}
     patron = patron_circulatorio_simple_acostado_cinta(r, contexto)
     ic = fmt((r or {}).get("ic"), 2, " L/min/m²")
@@ -6232,8 +6225,8 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
         pam = pad + (pas - pad) / 3.0
         map_hr_txt = fmt(pam / fc, 2)
     if contexto.get("embarazada"):
-        return f"**Patrón circulatorio ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}; PAM/FC {map_hr_txt}. Si IC e IRV están en rango normal, el patrón es NORMODINAMIA. El registro de pie se interpreta solo como respuesta ortostática."
-    return f"**Patrón circulatorio ACOSTADO/CINTA: {patron}.** Base: IC {ic}; IRV/RVS {rvs}. El registro de pie se interpreta solo como respuesta ortostática."
+        return f"**Patrón circulatorio ACOSTADO/CINTA/SPOT: {patron}.** Base: IC {ic}; IRV/RVS {rvs}; PAM/FC {map_hr_txt}. Si IC e IRV están en rango normal, el patrón es NORMODINAMIA. El registro parado se interpreta solo como respuesta ortostática."
+    return f"**Patrón circulatorio ACOSTADO/CINTA/SPOT: {patron}.** Base: IC {ic}; IRV/RVS {rvs}. El registro parado se interpreta solo como respuesta ortostática."
 
 
 _diagnostico_acoplamiento_pre_v21 = diagnostico_acoplamiento
@@ -6259,7 +6252,7 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
 _evaluar_dominios_hemodinamicos_pre_v21 = evaluar_dominios_hemodinamicos
 
 def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Dict[str, Dict[str, Any]]:
-    """Dominios coherentes: la función circulatoria usa solo el patrón ACOSTADO/CINTA."""
+    """Dominios coherentes: la función circulatoria usa solo el patrón ACOSTADO/CINTA/SPOT."""
     dominios = _evaluar_dominios_hemodinamicos_pre_v21(r, df)
     if "Función circulatoria" in dominios:
         score = dominios["Función circulatoria"].get("score")
@@ -6278,7 +6271,7 @@ _perfil_hemodinamico_integrado_pre_v21 = perfil_hemodinamico_integrado
 def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
     """Conclusión integrada sin mezcla de patrones.
 
-    El único patrón hemodinámico principal es el de ACOSTADO/CINTA.
+    El único patrón hemodinámico principal es el de ACOSTADO/CINTA/SPOT.
     Volemia, contractilidad, acoplamiento y ortostatismo se informan como dominios complementarios.
     """
     patron_ref = diagnostico_perfil_hemodinamico_acostado_cinta(r, None)
@@ -6309,12 +6302,12 @@ def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Opti
 
     def linea_basal(r_local: Dict[str, Any]) -> str:
         if not r_local:
-            return "- **Patrón hemodinámico ACOSTADO/CINTA:** no disponible por falta de registro basal reconocible."
+            return "- **Patrón hemodinámico ACOSTADO/CINTA/SPOT:** no disponible por falta de registro basal reconocible."
         patron = patron_circulatorio_simple_acostado_cinta(r_local, contexto)
         metodo = str(r_local.get("metodo") or "no reconocido").upper()
         posicion = str(r_local.get("posicion") or "no reconocida").replace("_", " ").upper()
         return (
-            f"- **Patrón hemodinámico ACOSTADO/CINTA: {patron}.** "
+            f"- **Patrón hemodinámico ACOSTADO/CINTA/SPOT: {patron}.** "
             f"IC {fmt(r_local.get('ic'), 2, ' L/min/m²')}; "
             f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn.s.cm-5')}; "
             f"método {metodo}; posición {posicion}. **Referencia diagnóstica principal.**"
@@ -6322,17 +6315,17 @@ def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Opti
 
     def linea_pie(r_local: Dict[str, Any]) -> str:
         if not r_local:
-            return "- **Registro DE PIE:** no disponible o no reconocido; no se modifica el patrón basal."
+            return "- **Registro PARADO:** no disponible o no reconocido; no se modifica el patrón basal."
         patron = patron_circulatorio_simple_acostado_cinta(r_local, contexto)
         return (
-            f"- **Registro DE PIE: respuesta ortostática con comportamiento {patron}.** "
+            f"- **Registro PARADO: respuesta ortostática con comportamiento {patron}.** "
             f"IC {fmt(r_local.get('ic'), 2, ' L/min/m²')}; "
             f"IRV/RVS {fmt(r_local.get('irv'), 0, ' dyn.s.cm-5')}. "
-            f"Este registro describe adaptación postural y **no reemplaza** al patrón ACOSTADO/CINTA."
+            f"Este registro describe adaptación postural y **no reemplaza** al patrón ACOSTADO/CINTA/SPOT."
         )
 
     return "\n".join([
-        "**Patrón hemodinámico principal: siempre ACOSTADO/CINTA.** El registro DE PIE se informa solo como comportamiento ortostático.",
+        "**Patrón hemodinámico principal: siempre ACOSTADO/CINTA/SPOT.** El registro PARADO se informa solo como comportamiento ortostático.",
         linea_basal(r_basal),
         linea_pie(r_pie),
     ])
@@ -6343,8 +6336,8 @@ def texto_patron_hemodinamico_acostado_y_de_pie(df: pd.DataFrame, contexto: Opti
 # V22 - INFORME DE DOMINIOS INTEGRADOS RESUMIDO Y DIDÁCTICO
 # =========================================================
 # Reglas obligatorias:
-# - El patrón hemodinámico principal se informa SIEMPRE desde ACOSTADO/CINTA.
-# - El registro DE PIE describe respuesta ortostática y no reemplaza el patrón basal.
+# - El patrón hemodinámico principal se informa SIEMPRE desde ACOSTADO/CINTA/SPOT.
+# - El registro PARADO describe respuesta ortostática y no reemplaza el patrón basal.
 # - No se utilizan las expresiones "patrón definido", "patrón definido" ni "patrón definido".
 # - El gráfico de cuadrantes hemodinámicos IC vs IRV/RVS se integra al informe médico.
 
@@ -6356,7 +6349,7 @@ PATRONES_PROHIBIDOS_RE = re.compile(
 def limpiar_patrones_prohibidos(texto: Any) -> str:
     """Normaliza el lenguaje del informe para mantenerlo claro, breve y definitivo."""
     t = str(texto or "")
-    t = PATRONES_PROHIBIDOS_RE.sub("patrón circulatorio ACOSTADO/CINTA definido", t)
+    t = PATRONES_PROHIBIDOS_RE.sub("patrón circulatorio ACOSTADO/CINTA/SPOT definido", t)
     reemplazos = {
         r"datos\s+incomplet[oa]s?": "datos insuficientes para definir el resultado",
         r"no\s+clasificable": "datos insuficientes para definir",
@@ -6376,7 +6369,7 @@ def limpiar_patrones_prohibidos(texto: Any) -> str:
 
 
 def resumen_acostado_cinta_para_patron(df: Optional[pd.DataFrame], r_default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Devuelve el registro ACOSTADO/CINTA para usarlo como única referencia diagnóstica."""
+    """Devuelve el registro ACOSTADO/CINTA/SPOT para usarlo como única referencia diagnóstica."""
     r_default = dict(r_default or {})
     try:
         if df is not None and not df.empty:
@@ -6453,7 +6446,7 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
         [
             "Patrón hemodinámico de referencia",
             patron,
-            f"Resultado calculado solo con ACOSTADO/CINTA. IC {fmt(rb.get('ic'), 2, ' L/min/m²')} e IRV/RVS {fmt(rb.get('irv'), 0, ' dyn.s.cm-5')}. Es el eje diagnóstico principal.",
+            f"Resultado calculado solo con ACOSTADO/CINTA/SPOT. IC {fmt(rb.get('ic'), 2, ' L/min/m²')} e IRV/RVS {fmt(rb.get('irv'), 0, ' dyn.s.cm-5')}. Es el eje diagnóstico principal.",
         ],
         [
             "Volemia",
@@ -6473,14 +6466,14 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
         [
             "Comportamiento ortostático",
             orto_estado,
-            "Describe la respuesta al ponerse de pie. No modifica ni reemplaza el patrón hemodinámico ACOSTADO/CINTA.",
+            "Describe la respuesta al ponerse parado. No modifica ni reemplaza el patrón hemodinámico ACOSTADO/CINTA/SPOT.",
         ],
     ]
     return [[limpiar_patrones_prohibidos(c) for c in row] for row in rows]
 
 
 def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFrame] = None, html: bool = True) -> str:
-    """Informe integrado breve, didáctico y con un único patrón basal ACOSTADO/CINTA."""
+    """Informe integrado breve, didáctico y con un único patrón basal ACOSTADO/CINTA/SPOT."""
     rows = tabla_dominios_integrados_sin_ambiguedad(r, df)[1:]
     patron = rows[0][1]
     volemia = rows[1][1]
@@ -6489,11 +6482,11 @@ def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFra
     orto = rows[4][1]
 
     lineas = [
-        f"**Patrón hemodinámico basal ACOSTADO/CINTA:** {patron}. {rows[0][2]}",
+        f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT:** {patron}. {rows[0][2]}",
         f"**Volemia:** {volemia}. {rows[1][2]}",
         f"**Contractilidad:** {contractilidad}. {rows[2][2]}",
         f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {rows[3][2]}",
-        f"**Respuesta ortostática:** {orto}. El registro DE PIE describe adaptación postural y no cambia el diagnóstico basal.",
+        f"**Respuesta ortostática:** {orto}. El registro PARADO describe adaptación postural y no cambia el diagnóstico basal.",
         f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; respuesta ortostática {orto}.",
     ]
     txt = "<br>".join(lineas) if html else "\n".join(lineas)
@@ -6538,7 +6531,7 @@ def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
 
     # Patrón hemodinámico principal (1 línea)
     patron = clasificacion_dinamica_obligatoria(r_local, contexto_embarazo)
-    lineas.append(f"Patrón hemodinámico (ACOSTADO/CINTA): {patron}")
+    lineas.append(f"Patrón hemodinámico (ACOSTADO/CINTA/SPOT): {patron}")
 
     if es_emb:
         # Módulo embarazo: clasificación gestacional
@@ -6576,8 +6569,8 @@ def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
 
 # =========================================================
 # V23 - EMBARAZO / RIESGO DE PREECLAMPSIA
-# Regla obligatoria: la referencia hemodinámica obstétrica es ACOSTADO/CINTA.
-# El registro DE PIE se informa solo como respuesta ortostática y no modifica
+# Regla obligatoria: la referencia hemodinámica obstétrica es ACOSTADO/CINTA/SPOT.
+# El registro PARADO se informa solo como respuesta ortostática y no modifica
 # el fenotipo materno ni el score de riesgo PE/HDP.
 # =========================================================
 
@@ -6589,15 +6582,15 @@ def _referencia_obstetrica_acostado_cinta_txt(r: Optional[Dict[str, Any]] = None
         metodo = "CINTA/BASAL" if metodo in ["", "NO DISPONIBLE", "NONE"] else metodo
     if "PIE" in posicion:
         posicion = "ACOSTADO/BASAL"
-    return f"ACOSTADO/CINTA como referencia diagnóstica basal (posición: {posicion}; método: {metodo})"
+    return f"ACOSTADO/CINTA/SPOT como referencia diagnóstica basal (posición: {posicion}; método: {metodo})"
 
 
 def _agregar_aviso_referencia_obstetrica(texto: str, r: Optional[Dict[str, Any]] = None) -> str:
     aviso = (
         "Referencia hemodinámica obstétrica: "
         + _referencia_obstetrica_acostado_cinta_txt(r)
-        + ". Los valores usados para hemodinamia materna y riesgo de preeclampsia son IC, IRV/RVS, PA, FC, CFT/CFTnr y CA de ACOSTADO/CINTA. "
-        + "La medición DE PIE se reserva para comportamiento ortostático y no reemplaza el fenotipo basal."
+        + ". Los valores usados para hemodinamia materna y riesgo de preeclampsia son IC, IRV/RVS, PA, FC, CFT/CFTnr y CA de ACOSTADO/CINTA/SPOT. "
+        + "La medición PARADO se reserva para comportamiento ortostático y no reemplaza el fenotipo basal."
     )
     t = str(texto or "")
     if "Referencia hemodinámica obstétrica:" in t:
@@ -6608,7 +6601,7 @@ def _agregar_aviso_referencia_obstetrica(texto: str, r: Optional[Dict[str, Any]]
 _interpretar_hemodinamica_embarazo_pre_v23 = interpretar_hemodinamica_embarazo
 
 def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
-    """Módulo embarazo: usa y declara ACOSTADO/CINTA como referencia basal."""
+    """Módulo embarazo: usa y declara ACOSTADO/CINTA/SPOT como referencia basal."""
     r_ref = dict(r or {})
     texto = _interpretar_hemodinamica_embarazo_pre_v23(r_ref, contexto)
     return _agregar_aviso_referencia_obstetrica(texto, r_ref)
@@ -6617,13 +6610,13 @@ def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict
 _calcular_riesgo_preeclampsia_pre_v23 = calcular_riesgo_preeclampsia
 
 def calcular_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Score PE: los componentes hemodinámicos se interpretan desde ACOSTADO/CINTA."""
+    """Score PE: los componentes hemodinámicos se interpretan desde ACOSTADO/CINTA/SPOT."""
     r_ref = dict(r or {})
     res = _calcular_riesgo_preeclampsia_pre_v23(r_ref, contexto)
     try:
         if res.get("aplicable"):
             factores = list(res.get("factores", []))
-            nota = "Referencia hemodinámica del score: ACOSTADO/CINTA basal; el registro DE PIE no modifica el puntaje y queda para ortostatismo."
+            nota = "Referencia hemodinámica del score: ACOSTADO/CINTA/SPOT basal; el registro PARADO no modifica el puntaje y queda para ortostatismo."
             if nota not in factores:
                 factores.insert(0, nota)
             res["factores"] = factores
@@ -6642,7 +6635,7 @@ def texto_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, An
 _crear_grafico_riesgo_preeclampsia_bytes_pre_v23 = crear_grafico_riesgo_preeclampsia_bytes
 
 def crear_grafico_riesgo_preeclampsia_bytes(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Optional[io.BytesIO]:
-    """Gauge PE calculado con la referencia ACOSTADO/CINTA que recibe el módulo."""
+    """Gauge PE calculado con la referencia ACOSTADO/CINTA/SPOT que recibe el módulo."""
     return _crear_grafico_riesgo_preeclampsia_bytes_pre_v23(dict(r or {}), contexto)
 
 
@@ -6652,7 +6645,7 @@ def clasificar_fenotipo_hdp_publicable(r: Dict[str, Any], contexto: Optional[Dic
     out = _clasificar_fenotipo_hdp_publicable_pre_v23(dict(r or {}), contexto)
     try:
         regla = str(out.get("regla") or "")
-        nota = "Referencia hemodinámica: ACOSTADO/CINTA basal."
+        nota = "Referencia hemodinámica: ACOSTADO/CINTA/SPOT basal."
         if nota not in regla:
             out["regla"] = (nota + " " + regla).strip()
     except Exception:
@@ -6671,7 +6664,7 @@ def calcular_score_preeclampsia_publicable(r: Dict[str, Any], contexto: Optional
                 "Componente": "Referencia hemodinámica",
                 "Puntos": 0,
                 "Máximo": 0,
-                "Razón": "ACOSTADO/CINTA basal; el registro DE PIE se usa solo para respuesta ortostática.",
+                "Razón": "ACOSTADO/CINTA/SPOT basal; el registro PARADO se usa solo para respuesta ortostática.",
             })
             out["componentes"] = comps
     except Exception:
@@ -6684,7 +6677,7 @@ _texto_clasificacion_dinamica_pre_v23 = texto_clasificacion_dinamica
 def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
     texto = _texto_clasificacion_dinamica_pre_v23(dict(r or {}), contexto)
     if contexto and contexto.get("embarazada"):
-        texto += " Referencia obstétrica: ACOSTADO/CINTA basal; DE PIE solo para ortostatismo."
+        texto += " Referencia obstétrica: ACOSTADO/CINTA/SPOT basal; PARADO solo para ortostatismo."
     return limpiar_patrones_prohibidos(texto)
 
 
@@ -6694,7 +6687,7 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
 # V24 - HEMODINAMIA MATERNA GESTACIONAL
 # Clasificación por trimestre: el patrón materno en embarazo se compara con
 # la fisiología esperada del embarazo, no con rangos generales no gestacionales.
-# El punto diagnóstico usa exclusivamente ACOSTADO/CINTA.
+# El punto diagnóstico usa exclusivamente ACOSTADO/CINTA/SPOT.
 # =========================================================
 
 def trimestre_gestacional_desde_contexto(contexto: Optional[Dict[str, Any]] = None) -> str:
@@ -6739,7 +6732,7 @@ def clasificacion_hemodinamica_materna_gestacional(r: Dict[str, Any], contexto: 
             "patron_principal": "NO CLASIFICABLE",
             "subtipo": "datos insuficientes",
             "diagnostico": "NO CLASIFICABLE",
-            "interpretacion": "No se dispone simultáneamente de IC e IRV ACOSTADO/CINTA para clasificar la hemodinamia materna.",
+            "interpretacion": "No se dispone simultáneamente de IC e IRV ACOSTADO/CINTA/SPOT para clasificar la hemodinamia materna.",
             "referencia": ref,
             "ic": ic,
             "rvs": rvs,
@@ -6826,11 +6819,11 @@ def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str,
         c = clasificacion_hemodinamica_materna_gestacional(r, contexto)
         ref = c["referencia"]
         return (
-            f"Clasificación dinámica materna ACOSTADO/CINTA: {c['diagnostico']}. "
+            f"Clasificación dinámica materna ACOSTADO/CINTA/SPOT: {c['diagnostico']}. "
             f"Base: IC {fmt(c.get('ic'),2,' L/min/m²')}; IRV/RVS {fmt(c.get('rvs'),0,' dyn.s.cm-5')}. "
             f"Referencia gestacional: {ref['label']} ({'EG ' + fmt(c.get('edad_gestacional'),0) + ' semanas' if c.get('edad_gestacional') is not None else 'EG no especificada'}); "
             f"rango operativo esperado IC {fmt(ref['ic_low'],1)}-{fmt(ref['ic_high'],1)} L/min/m² y RVS {fmt(ref['rvs_low'],0)}-{fmt(ref['rvs_high'],0)} dyn.s.cm-5. "
-            "DE PIE se interpreta solo como respuesta ortostática."
+            "PARADO se interpreta solo como respuesta ortostática."
         )
     return _texto_clasificacion_dinamica_pre_v24(r, contexto)
 
@@ -6853,12 +6846,12 @@ def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict
 
     lineas = []
     lineas.append("Interpretación hemodinámica materna en embarazo")
-    lineas.append("- Referencia diagnóstica: ACOSTADO/CINTA basal. El registro DE PIE se reserva para ortostatismo.")
+    lineas.append("- Referencia diagnóstica: ACOSTADO/CINTA/SPOT basal. El registro PARADO se reserva para ortostatismo.")
     if c.get("edad_gestacional") is not None:
         lineas.append(f"- Edad gestacional: {fmt(c.get('edad_gestacional'),0)} semanas; referencia usada: {ref['label']}.")
     else:
         lineas.append(f"- Edad gestacional no especificada; referencia usada: {ref['label']}.")
-    lineas.append(f"- Patrón circulatorio materno ACOSTADO/CINTA: {c['diagnostico']}.")
+    lineas.append(f"- Patrón circulatorio materno ACOSTADO/CINTA/SPOT: {c['diagnostico']}.")
     lineas.append(f"- Base real del estudio: IC {fmt(c.get('ic'),2,' L/min/m²')}; IRV/RVS {fmt(c.get('rvs'),0,' dyn.s.cm-5')}.")
     lineas.append(f"- Comparación con edad gestacional: para {ref['label']} se espera IC {fmt(ref['ic_low'],1)}-{fmt(ref['ic_high'],1)} L/min/m² y RVS {fmt(ref['rvs_low'],0)}-{fmt(ref['rvs_high'],0)} dyn.s.cm-5.")
     if c.get("ic") is not None and c.get("rvs") is not None:
@@ -6892,7 +6885,7 @@ def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict
 
 
 def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Optional[io.BytesIO]:
-    """Gráfico diagnóstico IC vs RVS con referencia gestacional y punto real ACOSTADO/CINTA."""
+    """Gráfico diagnóstico IC vs RVS con referencia gestacional y punto real ACOSTADO/CINTA/SPOT."""
     c = clasificacion_hemodinamica_materna_gestacional(r, contexto)
     ic = limpiar_numero(c.get("ic"))
     rvs = limpiar_numero(c.get("rvs"))
@@ -6953,7 +6946,7 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
 
     ax.scatter([rvs], [ic], s=200, color="#111827", edgecolor="white", linewidth=2.2, zorder=5)
     ax.annotate(
-        f"ACOSTADO/CINTA\nIC {fmt(ic,2)} | RVS {fmt(rvs,0)}\n{c['diagnostico']}",
+        f"ACOSTADO/CINTA/SPOT\nIC {fmt(ic,2)} | RVS {fmt(rvs,0)}\n{c['diagnostico']}",
         xy=(rvs, ic), xytext=(32, 28), textcoords="offset points",
         bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="#0B4F8A", lw=1.6, alpha=0.97),
         arrowprops=dict(arrowstyle="->", color="#0B4F8A", lw=1.5),
@@ -6966,7 +6959,7 @@ def crear_grafico_hemodinamia_materna_gestacional_bytes(r: Dict[str, Any], conte
     ax.grid(True, alpha=0.22)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
-    ax.text(0.01, -0.11, f"Lectura: el punto ACOSTADO/CINTA se compara contra la referencia de {tri_label} ({eg_label}). DE PIE queda reservado para respuesta ortostática. Diagnóstico: {c['diagnostico']}.", transform=ax.transAxes, fontsize=9.5, color="#334155")
+    ax.text(0.01, -0.11, f"Lectura: el punto ACOSTADO/CINTA/SPOT se compara contra la referencia de {tri_label} ({eg_label}). PARADO queda reservado para respuesta ortostática. Diagnóstico: {c['diagnostico']}.", transform=ax.transAxes, fontsize=9.5, color="#334155")
     fig.tight_layout(pad=1.8)
     buf = _io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
@@ -7159,7 +7152,7 @@ def calcular_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str,
         if contexto and contexto.get("embarazada") and res.get("aplicable"):
             c = clasificacion_hemodinamica_materna_gestacional(r, contexto)
             factores = list(res.get("factores", []))
-            nota = f"Clasificación gestacional ACOSTADO/CINTA: {c['diagnostico']} con IC {fmt(c.get('ic'),2)} e IRV/RVS {fmt(c.get('rvs'),0)}."
+            nota = f"Clasificación gestacional ACOSTADO/CINTA/SPOT: {c['diagnostico']} con IC {fmt(c.get('ic'),2)} e IRV/RVS {fmt(c.get('rvs'),0)}."
             if nota not in factores:
                 factores.insert(1 if factores else 0, nota)
             res["factores"] = factores
@@ -8109,7 +8102,7 @@ def _paper_conclusion_ejecutiva(r: Dict[str, Any], contexto_embarazo: Optional[D
     return (
         f"El estudio sugiere {dinamia.lower()} en el patrón basal/acostado o CINTA, que es la referencia diagnóstica principal. "
         f"Diagnóstico de volemia: {volemia} "
-        "El registro de pie, cuando está disponible, debe diferenciarse como respuesta ortostática. "
+        "El registro parado, cuando está disponible, debe diferenciarse como respuesta ortostática. "
         "La conducta debe individualizarse con clínica, comorbilidades y respuesta terapéutica."
     )
 
@@ -8182,7 +8175,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
                 r_panel[_k] = r_ref_pdf.get(_k)
     except Exception:
         r_panel = dict(r)
-    # r_cinta: referencia garantizada ACOSTADO/CINTA para módulo embarazo
+    # r_cinta: referencia garantizada ACOSTADO/CINTA/SPOT para módulo embarazo
     r_cinta = resumen_acostado_cinta_para_patron(df, r)
     es_embarazo = bool(contexto_embarazo and contexto_embarazo.get("embarazada"))
     buffer = io.BytesIO()
@@ -8238,7 +8231,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
             ["FC", f"{_paper_fmt_val(r_cinta.get('fc'),0)} lpm", "Normal: 60-100 lpm. Taquicardia frecuente en T2/T3."],
             ["IC (indice cardiaco)", f"{_paper_fmt_val(r_cinta.get('ic'),2)} L/min/m2", f"Ref. {_tri_lbl}: {_ic_rng}. IC aumenta fisiologicamente en T2/T3."],
             ["RVS / IRV", f"{_paper_fmt_val(r_cinta.get('irv'),0)} dyn.s.cm-5", f"Ref. {_tri_lbl}: {_rvs_rng}. RVS cae en T2 por vasodilatacion gestacional."],
-            ["Clasificacion gestacional", _dx_gest, "Comparacion IC e IRV vs rango operativo del trimestre (ACOSTADO/CINTA)."],
+            ["Clasificacion gestacional", _dx_gest, "Comparacion IC e IRV vs rango operativo del trimestre (ACOSTADO/CINTA/SPOT)."],
             ["HDP / HTA obstetrica", _hdp_txt, "HDP presente orienta fenotipo vascular-placentario si IC bajo + RVS alta."],
             ["CFT / CFTnr", f"{_paper_fmt_val(r_cinta.get('cft'),2)} / {_paper_fmt_val(r_cinta.get('cftnr'),2)}", "Fluidos toracicos. Elevado en preeclampsia con sobrecarga de volumen."],
             ["IV / IAC", f"{_paper_fmt_val(r_cinta.get('iv'),2)} / {_paper_fmt_val(r_cinta.get('iac'),2)}", "Funcion aortica sistolica. Valores bajos pueden acompanar disfuncion en HDP."],
@@ -8262,7 +8255,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         # ── D. Gráfico de cuadrantes hemodinámicos (solo clínico) ────────────
         story.append(_paper_paragraph("D. Grafico de cuadrantes hemodinamicos", stl["PaperH"]))
         story.append(_paper_paragraph(
-            "El grafico IC vs IRV/RVS muestra la situacion real del paciente. El punto ACOSTADO/CINTA es la referencia diagnostica principal; el punto DE PIE, si esta disponible, describe solo la respuesta ortostatica.",
+            "El grafico IC vs IRV/RVS muestra la situacion real del paciente. El punto ACOSTADO/CINTA/SPOT es la referencia diagnostica principal; el punto PARADO, si esta disponible, describe solo la respuesta ortostatica.",
             stl["PaperBody"],
         ))
         try:
@@ -8289,7 +8282,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         _doppler = str((contexto_embarazo or {}).get("doppler_uterino") or "No informado")
         dominios_emb = [
             ["Dominio", "Resultado", "Interpretacion gestacional"],
-            ["Patron hemodinamico gestacional (ACOSTADO/CINTA)", _c2.get("diagnostico","N/D"),
+            ["Patron hemodinamico gestacional (ACOSTADO/CINTA/SPOT)", _c2.get("diagnostico","N/D"),
              _c2.get("interpretacion","Ver clasificacion gestacional.")],
             ["Volemia / fluidos toracicos", _vol_txt,
              f"CFT {_paper_fmt_val(r_cinta.get('cft'),2)} / CFTnr {_paper_fmt_val(r_cinta.get('cftnr'),2)}. En HDP puede reflejar sobrecarga o hipovolemia relativa."],
@@ -8301,7 +8294,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         story.append(_paper_table(dominios_emb, col_widths=[ancho*0.26, ancho*0.24, ancho*0.50], header=True))
     else:
         story.append(_paper_paragraph(
-            "Los dominios se informan como resultados separados. Solo el dominio de funcion circulatoria define el patron hemodinamico de referencia ACOSTADO/CINTA.",
+            "Los dominios se informan como resultados separados. Solo el dominio de funcion circulatoria define el patron hemodinamico de referencia ACOSTADO/CINTA/SPOT.",
             stl["PaperBody"],
         ))
         story.append(_paper_dominios_integrados_table(r, df, ancho))
@@ -8732,7 +8725,7 @@ def _linea_prohibida_para_variable(variable: str, linea: Any) -> bool:
 
 
 def _texto_posicion_diagnostica_final(df: pd.DataFrame) -> str:
-    """Texto de ACOSTADO/CINTA. Si no existe posición clara, usa texto no-de-pie."""
+    """Texto de ACOSTADO/CINTA/SPOT. Si no existe posición clara, usa texto no-de-pie."""
     if df is None or df.empty:
         return ""
     try:
@@ -8910,9 +8903,9 @@ except Exception:
 # =========================================================
 # V_FINAL_IC_UNICO_SIN_MEZCLA_POSICIONES
 # Corrección definitiva de incoherencia IC: el valor usado en tablas,
-# dominios, gráficos y PDF debe ser el mismo IC ACOSTADO/CINTA.
+# dominios, gráficos y PDF debe ser el mismo IC ACOSTADO/CINTA/SPOT.
 # Nunca se toma dZ/dt, ITC ni otro número de la página como IC.
-# No se crea registro DE PIE si no existe una posición explícita.
+# No se crea registro PARADO si no existe una posición explícita.
 # =========================================================
 
 VARIABLES_POSICIONALES_FINAL = [
@@ -8963,28 +8956,43 @@ def _df_con_posicion_final(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _seleccionar_basal_df_final(df: pd.DataFrame) -> pd.DataFrame:
-    """Selecciona solo ACOSTADO/CINTA. Nunca elige DE PIE como basal."""
+    """Selecciona la integración diagnóstica basal: ACOSTADO OR CINTA OR SPOT.
+
+    Nunca elige PARADO como basal. SPOT es integrable como basal cuando no hay CINTA/acostado,
+    y no debe considerarse ortostatismo.
+    """
     dfx = _df_con_posicion_final(df)
     if dfx.empty:
         return pd.DataFrame()
-    # CINTA no-de-pie es la fuente basal por excelencia.
-    basal = dfx[(dfx["Método_reconocido"] == "cinta") & (dfx["Posición_reconocida"] != "de_pie")]
-    if not basal.empty:
-        ac = basal[basal["Posición_reconocida"] == "acostado"]
-        return (ac if not ac.empty else basal).iloc[[0]].reset_index(drop=True)
-    # Acostado explícito.
-    basal = dfx[dfx["Posición_reconocida"] == "acostado"]
-    if not basal.empty:
-        return basal.iloc[[0]].reset_index(drop=True)
-    # Si no hay de pie explícito, una única fila se acepta como basal.
-    no_pie = dfx[dfx["Posición_reconocida"] != "de_pie"]
-    if not no_pie.empty:
-        return no_pie.iloc[[0]].reset_index(drop=True)
-    return pd.DataFrame()
 
+    basal = dfx[dfx["Posición_reconocida"] != "de_pie"].copy()
+    if basal.empty:
+        return pd.DataFrame()
+
+    ac_cinta = basal[(basal["Posición_reconocida"] == "acostado") & (basal["Método_reconocido"] == "cinta")]
+    if not ac_cinta.empty:
+        return ac_cinta.iloc[[0]].reset_index(drop=True)
+
+    acostado = basal[basal["Posición_reconocida"] == "acostado"]
+    if not acostado.empty:
+        return acostado.iloc[[0]].reset_index(drop=True)
+
+    cinta = basal[basal["Método_reconocido"] == "cinta"]
+    if not cinta.empty:
+        return cinta.iloc[[0]].reset_index(drop=True)
+
+    spot = basal[basal["Método_reconocido"] == "spot"]
+    if not spot.empty:
+        return spot.iloc[[0]].reset_index(drop=True)
+
+    return basal.iloc[[0]].reset_index(drop=True)
 
 def _seleccionar_pie_df_final(df: pd.DataFrame) -> pd.DataFrame:
-    """Selecciona DE PIE solo si la posición está explícitamente reconocida."""
+    """Selecciona PARADO solo si la posición está explícitamente reconocida.
+
+    Como normalizar_posicion_estudio solo clasifica como de_pie cuando aparece PARADO/PARADA,
+    este selector no toma SPOT, CINTA ni ACOSTADO como ortostatismo.
+    """
     dfx = _df_con_posicion_final(df)
     if dfx.empty:
         return pd.DataFrame()
@@ -8992,7 +9000,6 @@ def _seleccionar_pie_df_final(df: pd.DataFrame) -> pd.DataFrame:
     if not pie.empty:
         return pie.iloc[[-1]].reset_index(drop=True)
     return pd.DataFrame()
-
 
 def _leer_variable_desde_fila_o_texto_final(dfx: pd.DataFrame, variable: str) -> Optional[float]:
     """Lee una variable con prioridad: columna estructurada -> etiqueta exacta en texto.
@@ -9065,7 +9072,7 @@ def seleccionar_df_diagnostico(df: pd.DataFrame) -> pd.DataFrame:
 def seleccionar_df_de_pie(df: pd.DataFrame) -> pd.DataFrame:
     return _seleccionar_pie_df_final(df)
 
-# Override resumen ortostático: no crea de pie si no existe explícitamente.
+# Override resumen ortostático: no crea parado si no existe explícitamente.
 def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     basal_df = _seleccionar_basal_df_final(df)
     pie_df = _seleccionar_pie_df_final(df)
@@ -9086,17 +9093,17 @@ def resumen_acostado_cinta_para_patron(df: Optional[pd.DataFrame], r_default: Op
             basal_df = _seleccionar_basal_df_final(df)
             rb = _resumen_desde_df_posicion_final(basal_df)
             if rb:
-                # Los valores posicionales críticos SIEMPRE pisan el default para evitar mezcla con de pie/dZdt.
+                # Los valores posicionales críticos SIEMPRE pisan el default para evitar mezcla con parado/dZdt.
                 for k, v in rb.items():
                     if es_valor_util(v):
                         base[k] = v
-                base["posicion_referencia"] = "acostado/cinta"
+                base["posicion_referencia"] = "acostado/cinta/spot"
                 return base
     except Exception:
         pass
     return base
 
-# Override resumen integrado global: alinear IC/IRV/CFT/etc. con ACOSTADO/CINTA.
+# Override resumen integrado global: alinear IC/IRV/CFT/etc. con ACOSTADO/CINTA/SPOT.
 try:
     _extraer_resumen_integrado_pre_ic_final = extraer_resumen_integrado
     def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
@@ -9105,7 +9112,7 @@ try:
 except Exception:
     pass
 
-# Override puntos del gráfico: usar el mismo IC basal que el informe. Flecha solo si DE PIE explícito.
+# Override puntos del gráfico: usar el mismo IC basal que el informe. Flecha solo si PARADO explícito.
 def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
     puntos: List[Dict[str, Any]] = []
     rb, rp = obtener_resumenes_ortostaticos(df) if df is not None and isinstance(df, pd.DataFrame) and not df.empty else ({}, {})
@@ -9113,26 +9120,26 @@ def _puntos_fenotipado_paciente(r: Dict[str, Any], df: Optional[pd.DataFrame] = 
         rb = dict(r or {})
     ic_b = limpiar_numero(rb.get("ic")); irv_b = limpiar_numero(rb.get("irv"))
     if ic_b is not None and irv_b is not None:
-        puntos.append({"etiqueta": "ACOSTADO/CINTA\nreferencia", "ic": ic_b, "irv": irv_b})
+        puntos.append({"etiqueta": "ACOSTADO/CINTA/SPOT\nreferencia", "ic": ic_b, "irv": irv_b})
     ic_p = limpiar_numero(rp.get("ic")); irv_p = limpiar_numero(rp.get("irv"))
     if ic_p is not None and irv_p is not None:
-        puntos.append({"etiqueta": "DE PIE\nrespuesta ortostática", "ic": ic_p, "irv": irv_p})
+        puntos.append({"etiqueta": "PARADO\nrespuesta ortostática", "ic": ic_p, "irv": irv_p})
     return puntos
 
-# Override del dominio ortostático: sin DE PIE explícito, no evaluable.
+# Override del dominio ortostático: sin PARADO explícito, no evaluable.
 try:
     _evaluar_dominio_ortostatico_pre_ic_final = evaluar_dominio_ortostatico
     def evaluar_dominio_ortostatico(df: Optional[pd.DataFrame]) -> Dict[str, Any]:
         if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-            return {"estado": "ORTOSTATISMO NO EVALUABLE", "score": None, "detalle": "No se detectó registro DE PIE válido."}
+            return {"estado": "ORTOSTATISMO NO EVALUABLE", "score": None, "detalle": "No se detectó registro PARADO válido."}
         rb, rp = obtener_resumenes_ortostaticos(df)
         if not rb or not rp:
-            return {"estado": "ORTOSTATISMO NO EVALUABLE", "score": None, "detalle": "No se detectó registro DE PIE válido. No corresponde clasificar respuesta ortostática."}
+            return {"estado": "ORTOSTATISMO NO EVALUABLE", "score": None, "detalle": "No se detectó registro PARADO válido. No corresponde clasificar respuesta ortostática."}
         return _evaluar_dominio_ortostatico_pre_ic_final(df)
 except Exception:
     pass
 
-# Override delta ortostático: no calcula deltas si falta DE PIE explícito.
+# Override delta ortostático: no calcula deltas si falta PARADO explícito.
 try:
     _calcular_delta_ortostatico_pre_ic_final = calcular_delta_ortostatico
     def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
@@ -9141,7 +9148,7 @@ try:
             return {
                 "basal": rb or {}, "de_pie": {}, "delta_ic": None, "delta_irv": None, "delta_fc": None,
                 "delta_pas": None, "delta_pad": None,
-                "detalle": "ORTOSTATISMO NO EVALUABLE: no se detectó registro DE PIE explícito. No se deben mezclar valores basales con otros números del informe."
+                "detalle": "ORTOSTATISMO NO EVALUABLE: no se detectó registro PARADO explícito. No se deben mezclar valores basales con otros números del informe."
             }
         res = _calcular_delta_ortostatico_pre_ic_final(df)
         # Reemplazar basal/de_pie por los resúmenes estrictos.
@@ -9275,7 +9282,7 @@ try:
                 "PAD": delta_orto.get("basal", {}).get("pad"),
             },
             {
-                "Posición": "De pie",
+                "Posición": "Parado",
                 "Método": delta_orto.get("de_pie", {}).get("metodo"),
                 "IC": delta_orto.get("de_pie", {}).get("ic"),
                 "IRV/RVS": delta_orto.get("de_pie", {}).get("irv"),
@@ -9284,7 +9291,7 @@ try:
                 "PAD": delta_orto.get("de_pie", {}).get("pad"),
             },
             {
-                "Posición": "Delta de pie - basal",
+                "Posición": "Delta parado - basal",
                 "Método": "",
                 "IC": delta_orto.get("delta_ic"),
                 "IRV/RVS": delta_orto.get("delta_irv"),
@@ -9302,11 +9309,11 @@ with st.expander("📘 Glosario de métricas hemodinámicas", expanded=False):
     st.text(glosario_metricas_cgi_texto())
 
 calidad_integracion = resumen_calidad_integracion(df_final)
-st.subheader("Control de integración de PDFs - solo CINTA")
-st.caption("Esta tabla muestra únicamente métricas obtenidas con CINTA basal/acostada. SPOT y DE PIE no se mezclan aquí; DE PIE queda reservado para ortostatismo.")
+st.subheader("Control de integración de PDFs - ACOSTADO / CINTA / SPOT")
+st.caption("Esta tabla muestra métricas integradas desde ACOSTADO OR CINTA OR SPOT. PARADO no se mezcla aquí; PARADO queda reservado exclusivamente para ortostatismo.")
 st.dataframe(calidad_integracion["tabla"], use_container_width=True)
 if calidad_integracion.get("falta_cinta"):
-    st.warning("No se detectó ningún registro CINTA basal/acostado para el control de integración. Revisar los PDFs importados.")
+    st.warning("No se detectó ningún registro ACOSTADO/CINTA/SPOT para el control de integración. Revisar los PDFs importados.")
 elif calidad_integracion["faltantes"]:
     st.warning("Variables críticas faltantes o no reconocidas: " + ", ".join(calidad_integracion["faltantes"]))
 else:
@@ -9389,8 +9396,8 @@ contexto_embarazo = construir_contexto_embarazo(
     diagnostico_textual=embarazo_detectado.get("diagnostico_textual"),
 )
 
-# Panel principal: usar SIEMPRE valores ACOSTADO/CINTA como referencia diagnóstica.
-# El registro DE PIE se reserva para la respuesta ortostática y no debe reemplazar estos valores.
+# Panel principal: usar SIEMPRE valores ACOSTADO/CINTA/SPOT como referencia diagnóstica.
+# El registro PARADO se reserva para la respuesta ortostática y no debe reemplazar estos valores.
 r_acostado_cinta_panel, r_depie_panel = obtener_resumenes_ortostaticos(df_final)
 r_panel = dict(r)
 for _k in ["ic", "irv", "fc", "pas", "pad", "ca", "cft", "cftnr"]:
@@ -9400,16 +9407,16 @@ r_panel["posicion_referencia"] = r_acostado_cinta_panel.get("posicion") or r.get
 r_panel["metodo_referencia"] = r_acostado_cinta_panel.get("metodo") or r.get("metodo_referencia")
 
 if not contexto_embarazo.get("embarazada"):
-    st.caption("Valores mostrados en las tarjetas: ACOSTADO/CINTA, patrón basal de referencia diagnóstica. El registro DE PIE se informa por separado como respuesta ortostática.")
+    st.caption("Valores mostrados en las tarjetas: ACOSTADO OR CINTA OR SPOT, patrón basal de referencia diagnóstica. PARADO se informa por separado como respuesta ortostática.")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(f"<div class='metric-card'><b>IC - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('ic'))}<br><span class='muted'>{clasificar_ic(r_panel.get('ic'))}</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><b>IC - ACOSTADO/CINTA/SPOT</b><br>{fmt(r_panel.get('ic'))}<br><span class='muted'>{clasificar_ic(r_panel.get('ic'))}</span></div>", unsafe_allow_html=True)
     with c2:
-        st.markdown(f"<div class='metric-card'><b>IRV / RVS - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('irv'),0)}<br><span class='muted'>{clasificar_irv(r_panel.get('irv'))}</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><b>IRV / RVS - ACOSTADO/CINTA/SPOT</b><br>{fmt(r_panel.get('irv'),0)}<br><span class='muted'>{clasificar_irv(r_panel.get('irv'))}</span></div>", unsafe_allow_html=True)
     with c3:
-        st.markdown(f"<div class='metric-card'><b>CFT / CFTnr - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('cft'))} / {fmt(r_panel.get('cftnr'))}<br><span class='muted'>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr')).split('.')[0]}</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><b>CFT / CFTnr - ACOSTADO/CINTA/SPOT</b><br>{fmt(r_panel.get('cft'))} / {fmt(r_panel.get('cftnr'))}<br><span class='muted'>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr')).split('.')[0]}</span></div>", unsafe_allow_html=True)
     with c4:
-        st.markdown(f"<div class='metric-card'><b>CA - ACOSTADO/CINTA</b><br>{fmt(r_panel.get('ca'))}<br><span class='muted'>Complacencia arterial basal</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><b>CA - ACOSTADO/CINTA/SPOT</b><br>{fmt(r_panel.get('ca'))}<br><span class='muted'>Complacencia arterial basal</span></div>", unsafe_allow_html=True)
 
 
 _es_embarazo_ui = bool(contexto_embarazo.get("embarazada"))
@@ -9421,7 +9428,7 @@ if not _es_embarazo_ui:
         st.subheader("Fenotipado clínico automatizado")
         st.image(
             graf_fenotipo_ui,
-            caption="Gráfico dinámico IC vs IRV/RVS: ubicación real del paciente y desplazamiento ortostático basal → de pie.",
+            caption="Gráfico dinámico IC vs IRV/RVS: ubicación real del paciente y desplazamiento ortostático basal → PARADO solo si existe registro PARADO explícito.",
             use_container_width=True,
         )
     st.subheader("Interpretación automática")
@@ -9447,7 +9454,7 @@ else:
     st.markdown(f"<div class='card'><b>Hemodinamia materna:</b><br>{interpretar_hemodinamica_embarazo(r_panel, contexto_embarazo).replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
     graf_materno_ui = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
     if graf_materno_ui is not None:
-        st.image(graf_materno_ui, caption="Gráfico diagnóstico de hemodinamia materna: IC vs RVS con referencia gestacional (ACOSTADO/CINTA)", use_container_width=True)
+        st.image(graf_materno_ui, caption="Gráfico diagnóstico de hemodinamia materna: IC vs RVS con referencia gestacional (ACOSTADO/CINTA/SPOT)", use_container_width=True)
     graf_eg_ui = crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(r_panel, contexto_embarazo)
     if graf_eg_ui is not None:
         st.image(graf_eg_ui, caption="Hemodinamia materna vs edad gestacional: IC y RVS sobre curvas de referencia fisiológica gestacional, con conclusiones clínicas remarcadas", use_container_width=True)
@@ -9623,7 +9630,7 @@ def construir_bloque_referencias_pdf() -> str:
 # =========================================================
 # V_FINAL_LENGUAJE_DIDACTICO
 # Normalización final del lenguaje de informes: sin términos no deseados,
-# con patrón basal ACOSTADO/CINTA y lectura resumida por dominios.
+# con patrón basal ACOSTADO/CINTA/SPOT y lectura resumida por dominios.
 # =========================================================
 
 try:
