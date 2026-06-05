@@ -1342,9 +1342,7 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
                 fecha_e = None
             edad_c = calcular_edad_desde_fechas(fecha_n, fecha_e)
             edad_f = edad_c if edad_c is not None else res.get("EDAD")
-            ava_b = res.get("AVA")
-            if limpiar_numero(ava_b) is None and limpiar_numero(res.get("EA")) is not None and limpiar_numero(res.get("EES")) not in [None, 0]:
-                ava_b = limpiar_numero(res.get("EA")) / limpiar_numero(res.get("EES"))
+            ava_b = calcular_acoplamiento_va(res.get("EA"), res.get("EES"), res.get("AVA"))
             return {
                 "Paciente": normalizar_nombre_paciente(res.get("PACIENTE")) or normalizar_nombre_paciente(paciente_archivo) or "No disponible",
                 "DNI": sanitizar_dni(res.get("DNI")),
@@ -1452,9 +1450,7 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
                 fecha_e = None
             edad_c = calcular_edad_desde_fechas(fecha_n, fecha_e)
             edad_f = edad_c if edad_c is not None else res.get("EDAD")
-            ava_b = res.get("AVA")
-            if limpiar_numero(ava_b) is None and limpiar_numero(res.get("EA")) is not None and limpiar_numero(res.get("EES")) not in [None, 0]:
-                ava_b = limpiar_numero(res.get("EA")) / limpiar_numero(res.get("EES"))
+            ava_b = calcular_acoplamiento_va(res.get("EA"), res.get("EES"), res.get("AVA"))
             return {
                 "Paciente": normalizar_nombre_paciente(res.get("PACIENTE")) or normalizar_nombre_paciente(paciente_archivo) or "No disponible",
                 "DNI": sanitizar_dni(res.get("DNI")),
@@ -1616,9 +1612,7 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
             paciente_archivo = None
 
     # Recalcular AVA si no vino explícito.
-    ava = resumen.get("AVA")
-    if limpiar_numero(ava) is None and limpiar_numero(resumen.get("EA")) is not None and limpiar_numero(resumen.get("EES")) not in [None, 0]:
-        ava = limpiar_numero(resumen.get("EA")) / limpiar_numero(resumen.get("EES"))
+    ava = calcular_acoplamiento_va(resumen.get("EA"), resumen.get("EES"), resumen.get("AVA"))
 
     fecha_estudio = formatear_fecha_ddmmyyyy(resumen.get("FECHA_ESTUDIO") or resumen.get("FECHA"))
     fecha_nacimiento = formatear_fecha_ddmmyyyy(resumen.get("FECHA_NACIMIENTO"))
@@ -2081,9 +2075,7 @@ def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
 
     ea = buscar_col("EA")
     ees = buscar_col("EES")
-    ava = buscar_col("EA/EES")
-    if limpiar_numero(ava) is None and limpiar_numero(ea) is not None and limpiar_numero(ees) not in [None, 0]:
-        ava = limpiar_numero(ea) / limpiar_numero(ees)
+    ava = calcular_acoplamiento_va(ea, ees, buscar_col("EA/EES"))
 
     return {
         "paciente": normalizar_nombre_paciente(buscar_col("Paciente")),
@@ -2497,19 +2489,42 @@ def diagnostico_contractilidad(iv: Any, iac: Any, cts: Any) -> str:
     return "Contractilidad conservada o sin alteración predominante."
 
 
+def calcular_acoplamiento_va(ea: Any, ees: Any, ava: Any = None) -> Optional[float]:
+    """Calcula el acoplamiento ventrículo-arterial como EA/EES.
+
+    Regla clínica corregida:
+    - Si EA y EES están disponibles, SIEMPRE se recalcula EA/EES = EA / EES.
+    - El valor importado como AVA o EA/EES solo se usa como respaldo cuando falta EA o EES.
+    - Esto evita que el informe arrastre un valor previo, invertido o mal leído desde el PDF/Excel.
+    """
+    eav = limpiar_numero(ea)
+    eesv = limpiar_numero(ees)
+    avav = limpiar_numero(ava)
+
+    if eav is not None and eesv not in [None, 0]:
+        return round(eav / eesv, 3)
+    return avav
+
+
 def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
-    eav, eesv, avav = map(limpiar_numero, [ea, ees, ava])
-    if avav is None and eav is not None and eesv not in [None, 0]:
-        avav = eav / eesv
+    eav = limpiar_numero(ea)
+    eesv = limpiar_numero(ees)
+    avav = calcular_acoplamiento_va(ea, ees, ava)
     if avav is None:
         return "ACOPLAMIENTO VENTRÍCULO-ARTERIAL: datos insuficientes para definir resultado."
 
+    base = f"Relación EA/EES calculada: {fmt(avav)}"
+    if eav is not None and eesv not in [None, 0]:
+        base += f" (EA {fmt(eav)} / EES {fmt(eesv)})."
+    else:
+        base += "."
+
     if 0 <= avav <= 1.0:
-        return f"Acoplamiento ventrículo-arterial óptimo. Relación EA/EES: {fmt(avav)}."
+        return f"Acoplamiento ventrículo-arterial óptimo. {base}"
     if 1.0 < avav <= 1.3:
-        return f"Acoplamiento ventrículo-arterial en rango de precaución. Relación EA/EES: {fmt(avav)}. Sugiere incremento relativo de la carga arterial o menor reserva ventricular."
+        return f"Acoplamiento ventrículo-arterial subóptimo o en rango de precaución. {base} Sugiere incremento relativo de la carga arterial o menor reserva ventricular."
     if avav > 1.3:
-        return f"Desacoplamiento ventrículo-arterial. Relación EA/EES: {fmt(avav)}. Se asocia a mayor estrés hemodinámico y riesgo de insuficiencia cardíaca, según el contexto clínico."
+        return f"Desacoplamiento ventrículo-arterial. {base} Se asocia a mayor estrés hemodinámico y riesgo de insuficiencia cardíaca, según el contexto clínico."
 
     return f"Relación EA/EES fuera de rango fisiológico esperado: {fmt(avav)}. Revisar datos fuente."
 
@@ -2849,11 +2864,9 @@ def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame]
     iv = limpiar_numero(r.get("iv"))
     iac = limpiar_numero(r.get("iac"))
     cts = limpiar_numero(r.get("cts"))
-    ava = limpiar_numero(r.get("ava"))
     ea = limpiar_numero(r.get("ea"))
     ees = limpiar_numero(r.get("ees"))
-    if ava is None and ea is not None and ees not in [None, 0]:
-        ava = ea / ees
+    ava = calcular_acoplamiento_va(ea, ees, r.get("ava"))
 
     s_ic = score_dominio(ic, 2.5, 4.0)
     s_irv = score_dominio(irv, 1200, 2000)
@@ -2866,10 +2879,9 @@ def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame]
     scores_contractilidad = [x for x in [s_iv, s_iac, s_cts] if x is not None]
     score_contractilidad = sum(scores_contractilidad) / len(scores_contractilidad) if scores_contractilidad else None
 
-    s_cft = score_dominio(cft, 25, 35)
-    s_cftnr = score_dominio(cftnr, 25, 35)
-    scores_volemia = [x for x in [s_cft, s_cftnr] if x is not None]
-    score_volemia = sum(scores_volemia) / len(scores_volemia) if scores_volemia else None
+    # Volemia corregida: se usa exclusivamente CFT. CFTnr no participa del score.
+    s_cft = score_dominio(cft, 30, 50)
+    score_volemia = s_cft
 
     if ava is None:
         score_acoplamiento = None
@@ -2921,7 +2933,7 @@ def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame]
 
 def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
     perfil = diagnostico_perfil_hemodinamico(r.get("ic"), r.get("irv"))
-    volemia = diagnostico_volemia(r.get("cft"), r.get("cftnr"))
+    volemia = diagnostico_volemia(r.get("cft"))
     contractilidad = diagnostico_contractilidad(r.get("iv"), r.get("iac"), r.get("cts"))
     acoplamiento = diagnostico_acoplamiento(r.get("ea"), r.get("ees"), r.get("ava"))
     ortostatico = evaluar_dominio_ortostatico(df) if df is not None else None
@@ -3784,8 +3796,8 @@ def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict
     if imc is not None and imc >= 30:
         lineas.append("- Nota por obesidad: la obesidad puede aumentar el gasto/índice cardíaco y modificar la resistencia vascular; conviene analizarla como condición fisiopatológica adicional y no solo como dato demográfico.")
 
-    if cft is not None or cftnr is not None:
-        lineas.append(f"- Estado de fluidos torácicos: CFT {fmt(cft,2)}, CFTnr {fmt(cftnr,2)}. Integrar con edema, proteinuria, función renal, síntomas respiratorios y tratamiento antihipertensivo.")
+    if cft is not None:
+        lineas.append(f"- Estado de fluidos torácicos: {diagnostico_volemia(cft)} Integrar con edema, proteinuria, función renal, síntomas respiratorios y tratamiento antihipertensivo.")
 
     lineas.append("- Conducta sugerida: integrar este perfil con presión arterial seriada, proteinuria/laboratorio, Doppler uterino, biometría fetal, tratamiento actual y criterio de obstetricia de alto riesgo. Esta interpretación no reemplaza la clasificación obstétrica ni la decisión terapéutica individual.")
     return "\n".join(lineas)
@@ -3896,15 +3908,12 @@ def calcular_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str,
         puntaje += 1.0
         factores.append(f"IMC elevado ({fmt(imc,1)} kg/m²): aumenta probabilidad de fenotipo materno/metabólico y riesgo cardiovascular obstétrico.")
 
-    if cft is not None and cft > 45:
+    if cft is not None and cft > 50:
         puntaje += 0.75
-        factores.append(f"CFT aumentado ({fmt(cft,2)}): sugiere sobrecarga de fluidos torácicos; vigilar edema/disnea y función renal.")
-    if cftnr is not None and cftnr > 45:
-        puntaje += 0.75
-        factores.append(f"CFTnr aumentado ({fmt(cftnr,2)}): refuerza componente de sobrecarga de volumen.")
-    if cft is not None and cft < 25:
+        factores.append(f"CFT elevado ({fmt(cft,2)}): patrón hipervolémico; vigilar edema/disnea y función renal.")
+    if cft is not None and cft < 30:
         puntaje += 1.0
-        factores.append(f"CFT bajo ({fmt(cft,2)}): puede acompañar bajo volumen intravascular en fenotipo placentario.")
+        factores.append(f"CFT bajo ({fmt(cft,2)}): patrón hipovolémico; puede acompañar bajo volumen intravascular efectivo.")
 
     if iv is not None and iv < 50:
         puntaje += 0.75
@@ -4104,12 +4113,12 @@ def sugerencia_tratamiento_no_embarazada(r: Dict[str, Any], df: Optional[pd.Data
     No reemplaza guías clínicas ni criterio médico. La lógica sigue el algoritmo
     de Ferrario/ICG: CI alto -> beta bloqueante o calcioantagonista no DHP;
     SVRI/RVS alta -> IECA/ARA-II/calcioantagonista DHP/vasodilatador;
-    TFC/CFT alto o en ascenso -> diurético.
+    CFT > 50 -> considerar diurético; CFT < 30 -> evitar intensificar diurético y revisar hipovolemia.
     """
     ic = limpiar_numero(r.get("ic"))
     rvs = limpiar_numero(r.get("irv"))
     cft = limpiar_numero(r.get("cft"))
-    cftnr = limpiar_numero(r.get("cftnr"))
+    # CFTnr retirado de la decisión terapéutica: la volemia se define solo por CFT.
     fc = limpiar_numero(r.get("fc"))
     pas = limpiar_numero(r.get("pas"))
     pad = limpiar_numero(r.get("pad"))
@@ -4125,8 +4134,8 @@ def sugerencia_tratamiento_no_embarazada(r: Dict[str, Any], df: Optional[pd.Data
         lineas.append(f"- Índice cardíaco (IC): {fmt(ic,2,' L/min/m²')}.")
     if rvs is not None:
         lineas.append(f"- Resistencia vascular sistémica / IRV: {fmt(rvs,0,' dyn.s.cm-5')}.")
-    if cft is not None or cftnr is not None:
-        lineas.append(f"- Contenido de fluido torácico: CFT {fmt(cft,2)}; CFTnr {fmt(cftnr,2)}.")
+    if cft is not None:
+        lineas.append(f"- Patrón de volemia por CFT: {diagnostico_volemia(cft)}")
 
     recomendaciones = []
     fenotipos = []
@@ -4153,12 +4162,21 @@ def sugerencia_tratamiento_no_embarazada(r: Dict[str, Any], df: Optional[pd.Data
         fenotipos.append("Fenotipo vasoconstrictor probable por RVS elevada")
         recomendaciones.append("Favorecer estrategia vasodilatadora o bloqueo del sistema renina-angiotensina: IECA/ARA-II o calcioantagonista dihidropiridínico, individualizando por edad, ERC, diabetes y efectos adversos.")
 
-    # 4. Retención hídrica: TFC/CFT alto o incremento entre estudios.
-    cft_alto = (cft is not None and cft > 37) or (cftnr is not None and cftnr > 37)
-    cft_ascenso = (cft_prev is not None and cft_act is not None and (cft_act - cft_prev) > 2)
-    if cft_alto or cft_ascenso:
-        fenotipos.append("Fenotipo con probable retención de volumen por CFT elevado o en ascenso")
-        recomendaciones.append("Considerar agregar o titular diurético, con control de función renal, ionograma, ácido úrico, síntomas de hipovolemia y respuesta tensional.")
+    # 4. Patrón de volemia: decisión terapéutica corregida por CFT exclusivo.
+    cft_hipovolemia = cft is not None and cft < 30
+    cft_normovolemia = cft is not None and 30 <= cft <= 50
+    cft_hipervolemia = cft is not None and cft > 50
+    cft_ascenso_relevante = (cft_prev is not None and cft_act is not None and (cft_act - cft_prev) > 2 and cft_act > 50)
+
+    if cft_hipovolemia:
+        fenotipos.append("Patrón hipovolémico por CFT bajo")
+        recomendaciones.append("No intensificar diuréticos por criterio hemodinámico; revisar depleción de volumen, ingesta, pérdidas, función renal, ionograma, síntomas ortostáticos y medicación diurética previa antes de ajustar antihipertensivos.")
+    elif cft_normovolemia:
+        fenotipos.append("Patrón normovolémico por CFT")
+        recomendaciones.append("No hay indicación hemodinámica de modificar diuréticos por volemia; priorizar el ajuste terapéutico según IC, RVS/IRV, PA, comorbilidades y tolerancia.")
+    elif cft_hipervolemia or cft_ascenso_relevante:
+        fenotipos.append("Patrón hipervolémico por CFT elevado")
+        recomendaciones.append("Considerar agregar o titular diurético si el contexto clínico lo permite, con control de función renal, ionograma, ácido úrico, síntomas de hipovolemia y respuesta tensional.")
 
     # 5. Si no domina ningún patrón, orientar combinación racional.
     if not recomendaciones:
@@ -4182,7 +4200,7 @@ def sugerencia_tratamiento_no_embarazada(r: Dict[str, Any], df: Optional[pd.Data
 def crear_grafico_propuesta_terapeutica_bytes(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Optional[io.BytesIO]:
     """
     Flujograma ICG terapéutico basado en Ferrario et al. / Therapeutic Advances in Cardiovascular Disease.
-    Muestra las 4 ramas del algoritmo (hiperdinámica, hipodinámica, vasoconstrictora, retención de fluidos)
+    Muestra las 4 ramas del algoritmo (hiperdinámica, hipodinámica, vasoconstrictora, hipervolemia por CFT)
     y resalta en color la(s) que aplica(n) al paciente según sus valores reales.
     Ref: Ferrario CM et al. Ther Adv Cardiovasc Dis 2010;4(1):53-62. Figure 2.
     """
@@ -4197,7 +4215,6 @@ def crear_grafico_propuesta_terapeutica_bytes(r: Dict[str, Any], df: Optional[pd
     ic  = limpiar_numero((r or {}).get("ic"))
     rvs = limpiar_numero((r or {}).get("irv"))
     cft = limpiar_numero((r or {}).get("cft"))
-    cftnr = limpiar_numero((r or {}).get("cftnr"))
     fc  = limpiar_numero((r or {}).get("fc"))
 
     # ── Evaluar qué ramas aplican ────────────────────────────────────────────
@@ -4205,11 +4222,12 @@ def crear_grafico_propuesta_terapeutica_bytes(r: Dict[str, Any], df: Optional[pd
     rama_hipo   = ic is not None and ic < 2.5
     rama_vaso   = rvs is not None and rvs > 2000   # ≥2580 severo; >2000 probable
     rama_vaso_sev = rvs is not None and rvs > 2580
-    rama_fluid  = (cft is not None and cft > 37) or (cftnr is not None and cftnr > 37)
+    # Rama de volemia corregida: CFT > 50 = hipervolemia. CFTnr no se utiliza.
+    rama_fluid  = (cft is not None and cft > 50)
 
     try:
         cft_prev, cft_act = _valor_previo_y_actual(df, "cft")
-        if cft_prev is not None and cft_act is not None and (cft_act - cft_prev) > 2:
+        if cft_prev is not None and cft_act is not None and (cft_act - cft_prev) > 2 and cft_act > 50:
             rama_fluid = True
     except Exception:
         pass
@@ -4360,7 +4378,7 @@ def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     r = extraer_resumen_integrado(df)
     calidad = resumen_calidad_integracion(df)
     perfil = diagnostico_perfil_hemodinamico(r.get("ic"), r.get("irv"))
-    volemia = diagnostico_volemia(r.get("cft"), r.get("cftnr"))
+    volemia = diagnostico_volemia(r.get("cft"))
     contractilidad = diagnostico_contractilidad(r.get("iv"), r.get("iac"), r.get("cts"))
     acoplamiento = diagnostico_acoplamiento(r.get("ea"), r.get("ees"), r.get("ava"))
     orto = interpretar_ortostatismo(df)
@@ -4884,7 +4902,6 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         ("IC", fmt(r.get('ic'),2," L/min/m2")),
         ("RVS/IRV", fmt(r.get('irv'),0," dyn.s.cm-5")),
         ("CFT", fmt(r.get('cft'),2)),
-        ("CFTnr", fmt(r.get('cftnr'),2)),
         ("IV", fmt(r.get('iv'),2)),
         ("IAC/ACI", fmt(r.get('iac'),2)),
         ("CTS", fmt(r.get('cts'),2)),
@@ -5012,7 +5029,6 @@ def construir_fila_paciente_integrada(df: pd.DataFrame, contexto_embarazo: Optio
         "IRV_RVS": limpiar_numero(r.get("irv")),
         "CA": limpiar_numero(r.get("ca")),
         "CFT": limpiar_numero(r.get("cft")),
-        "CFTnr": limpiar_numero(r.get("cftnr")),
         "IV": limpiar_numero(r.get("iv")),
         "IAC": limpiar_numero(r.get("iac")),
         "CTS": limpiar_numero(r.get("cts")),
@@ -5023,7 +5039,7 @@ def construir_fila_paciente_integrada(df: pd.DataFrame, contexto_embarazo: Optio
         "IDS": limpiar_numero(r.get("ids")),
         "Z0": limpiar_numero(r.get("z0")),
         "Perfil_hemodinamico": diagnostico_perfil_hemodinamico(r.get("ic"), r.get("irv")),
-        "Estado_volemico": diagnostico_volemia(r.get("cft"), r.get("cftnr")),
+        "Estado_volemico": diagnostico_volemia(r.get("cft")),
         "Contractilidad": diagnostico_contractilidad(r.get("iv"), r.get("iac"), r.get("cts")),
         "Acoplamiento_VA": diagnostico_acoplamiento(r.get("ea"), r.get("ees"), r.get("ava")),
         "Tiene_registro_de_pie": bool(r.get("df_de_pie_disponible")),
@@ -5229,9 +5245,7 @@ def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
 
     ea = buscar_hemo("EA")
     ees = buscar_hemo("EES")
-    ava = buscar_hemo("EA/EES")
-    if limpiar_numero(ava) is None and limpiar_numero(ea) is not None and limpiar_numero(ees) not in [None, 0]:
-        ava = limpiar_numero(ea) / limpiar_numero(ees)
+    ava = calcular_acoplamiento_va(ea, ees, buscar_hemo("EA/EES"))
 
     fecha_est = buscar_contexto("Fecha_Estudio") or buscar_contexto("Fecha")
     fecha_nac = buscar_contexto("Fecha_Nacimiento")
@@ -6654,7 +6668,7 @@ def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] 
     Volemia, contractilidad, acoplamiento y ortostatismo se informan como dominios complementarios.
     """
     patron_ref = diagnostico_perfil_hemodinamico_acostado_cinta(r, None)
-    volemia = diagnostico_volemia((r or {}).get("cft"), (r or {}).get("cftnr"))
+    volemia = diagnostico_volemia((r or {}).get("cft"))
     contractilidad = diagnostico_contractilidad((r or {}).get("iv"), (r or {}).get("iac"), (r or {}).get("cts"))
     acoplamiento = diagnostico_acoplamiento((r or {}).get("ea"), (r or {}).get("ees"), (r or {}).get("ava"))
     texto_posicion = ""
@@ -6816,7 +6830,7 @@ def estado_ortostatico_simple(df: Optional[pd.DataFrame]) -> str:
 def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[List[str]]:
     rb = resumen_acostado_cinta_para_patron(df, r)
     patron = patron_circulatorio_simple_acostado_cinta(rb, None)
-    volemia_estado = estado_volemia_simple(rb.get("cft"), rb.get("cftnr"))
+    volemia_estado = estado_volemia_simple(rb.get("cft"))
     contract_estado = estado_contractilidad_simple(rb.get("iv") or r.get("iv"), rb.get("iac") or r.get("iac"), rb.get("cts") or r.get("cts"))
     acop_estado = estado_acoplamiento_simple(rb.get("ea") or r.get("ea"), rb.get("ees") or r.get("ees"), rb.get("ava") or r.get("ava"))
     orto_estado = estado_ortostatico_simple(df)
@@ -6830,7 +6844,7 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
         [
             "Volemia",
             volemia_estado,
-            f"Clasificación volémica por CFT basal. CFT {fmt(rb.get('cft'), 2)}; CFTnr {fmt(rb.get('cftnr'), 2)}.",
+            f"Clasificación volémica exclusivamente por CFT basal. CFT {fmt(rb.get('cft'), 2)}. CFTnr retirado de la interpretación.",
         ],
         [
             "Contractilidad",
@@ -6935,7 +6949,7 @@ def generar_informe_texto(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         lineas.append(f"Conducta: {res_pe.get('conducta','Ver módulo embarazo.')}")
     else:
         # Módulo clínico: dominios sin métricas
-        volemia = diagnostico_volemia(r_local.get("cft"), r_local.get("cftnr"))
+        volemia = diagnostico_volemia(r_local.get("cft"))
         contractilidad = diagnostico_contractilidad(r_local.get("iv"), r_local.get("iac"), r_local.get("cts"))
         acopl = diagnostico_acoplamiento(r_local.get("ea"), r_local.get("ees"), r_local.get("ava"))
         lineas.append(f"Volemia: {volemia.split('.')[0]}")
@@ -8081,7 +8095,6 @@ def construir_fila_historial_app(usuario_info: Dict[str, Any], df: pd.DataFrame,
         "IRV_RVS": limpiar_numero(r.get("irv")),
         "CA": limpiar_numero(r.get("ca")),
         "CFT": limpiar_numero(r.get("cft")),
-        "CFTnr": limpiar_numero(r.get("cftnr")),
         "IH": limpiar_numero(r.get("ih")),
         "IV": limpiar_numero(r.get("iv")),
         "IAC": limpiar_numero(r.get("iac")),
@@ -8090,7 +8103,7 @@ def construir_fila_historial_app(usuario_info: Dict[str, Any], df: pd.DataFrame,
         "EES_Capan": limpiar_numero(r.get("ees")),
         "EA_EES_calculado": limpiar_numero(r.get("ava")),
         "perfil_hemodinamico": diagnostico_perfil_hemodinamico(r.get("ic"), r.get("irv")),
-        "estado_volemico": diagnostico_volemia(r.get("cft"), r.get("cftnr")),
+        "estado_volemico": diagnostico_volemia(r.get("cft")),
         "contractilidad": diagnostico_contractilidad(r.get("iv"), r.get("iac"), r.get("cts")),
         "acoplamiento_va": diagnostico_acoplamiento(r.get("ea"), r.get("ees"), r.get("ava")),
         "informe_texto": informe_txt,
@@ -8468,7 +8481,7 @@ def _paper_metricas_panel(r: Dict[str, Any], ancho_total: float):
     rows += [
         ["Presión arterial", f"{_paper_fmt_val(r.get('pas'),0)}/{_paper_fmt_val(r.get('pad'),0)} mmHg; FC {_paper_fmt_val(r.get('fc'),0)} lpm", "Presión arterial interpretada según contexto clínico y tratamiento", "Precaución"],
         ["Flujo / resistencia", f"IC {_paper_fmt_val(r.get('ic'),2)} L/min/m2; IRV {_paper_fmt_val(r.get('irv'),0)} dyn.s.cm-5", f"{dinamia}: bajo flujo/alta resistencia si IC bajo y RVS elevada", "Alto" if "Hipodinamia" in dinamia else "Precaución"],
-        ["Volemia / fluidos", f"CFT {_paper_fmt_val(r.get('cft'),2)}; CFTnr {_paper_fmt_val(r.get('cftnr'),2)}", "Integrar con volemia clínica, función renal, edema, disnea y tratamiento", "Precaución"],
+        ["Volemia / fluidos", f"CFT {_paper_fmt_val(r.get('cft'),2)}", "CFT <30 hipovolemia; 30-50 normovolemia; >50 hipervolemia. Integrar con función renal, edema, disnea y tratamiento", "Precaución"],
         ["Contractilidad / onda", f"IV {_paper_fmt_val(r.get('iv'),2)}; IAC {_paper_fmt_val(r.get('iac'),2)}; CTS {_paper_fmt_val(r.get('cts'),2)}; DS {_paper_fmt_val(r.get('ds'),2)}", "Aceleración/onda sistólica con volumen sistólico a correlacionar", "Precaución"],
         ["Acoplamiento VA", f"EA {_paper_fmt_val(r.get('ea'),2)}; EES {_paper_fmt_val(r.get('ees'),2)}; EA/EES {_paper_fmt_val(r.get('ava'),2)}", "Carga arterial relativa aumentada si EA/EES > 1", "Precaución"],
     ]
@@ -8497,7 +8510,7 @@ def _paper_conclusion_ejecutiva(r: Dict[str, Any], contexto_embarazo: Optional[D
             "preeclampsia por sí solo, pero identifica un perfil que justifica vigilancia intensiva e integración con proteinuria, "
             "laboratorio materno, Doppler uterino/umbilical, crecimiento fetal y tratamiento actual."
         )
-    volemia = diagnostico_volemia(r.get("cft"), r.get("cftnr"))
+    volemia = diagnostico_volemia(r.get("cft"))
     return (
         f"El estudio sugiere {dinamia.lower()} en el patrón basal/acostado o CINTA, que es la referencia diagnóstica principal. "
         f"Diagnóstico de volemia: {volemia} "
@@ -8616,7 +8629,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         if es_embarazo:
             _c2 = clasificacion_hemodinamica_materna_gestacional(r_panel, contexto_embarazo)
             _pe = calcular_riesgo_preeclampsia(r_panel, contexto_embarazo)
-            _vol_txt = diagnostico_volemia(r_panel.get("cft"), r_panel.get("cftnr")).split(".")[0]
+            _vol_txt = diagnostico_volemia(r_panel.get("cft")).split(".")[0]
             dominios_1h = [
                 ["Dominio", "Resultado"],
                 ["Patron hemodinamico gestacional", _c2.get("diagnostico", "N/D")],
@@ -8738,7 +8751,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
             ["RVS / IRV", f"{_paper_fmt_val(r_cinta.get('irv'),0)} dyn.s.cm-5", f"Ref. {_tri_lbl}: {_rvs_rng}. RVS cae en T2 por vasodilatacion gestacional."],
             ["Clasificacion gestacional", _dx_gest, "Comparacion IC e IRV vs rango operativo del trimestre (ACOSTADO/CINTA/SPOT/ESTUDIO BASAL)."],
             ["HDP / HTA obstetrica", _hdp_txt, "HDP presente orienta fenotipo vascular-placentario si IC bajo + RVS alta."],
-            ["CFT", f"{_paper_fmt_val(r_cinta.get('cft'),2)} / {_paper_fmt_val(r_cinta.get('cftnr'),2)}", "Fluidos toracicos. Elevado en preeclampsia con sobrecarga de volumen."],
+            ["CFT", f"{_paper_fmt_val(r_cinta.get('cft'),2)}", "Volemia por CFT: <30 hipovolemia; 30-50 normovolemia; >50 hipervolemia."],
             ["IV / IAC", f"{_paper_fmt_val(r_cinta.get('iv'),2)} / {_paper_fmt_val(r_cinta.get('iac'),2)}", "Funcion aortica sistolica. Valores bajos pueden acompanar disfuncion en HDP."],
         ]
     else:
@@ -8748,7 +8761,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
             ["FC", f"{_paper_fmt_val(r.get('fc'),0)} lpm", "Integrar con medicacion, estado clinico y respuesta ortostatica."],
             ["IC", f"{_paper_fmt_val(r.get('ic'),2)} L/min/m2", "Bajo si <2,5 L/min/m2; elevado si >4,0 L/min/m2."],
             ["RVS/IRV", f"{_paper_fmt_val(r.get('irv'),0)} dyn.s.cm-5", "Elevada; eje de alta resistencia vascular."],
-            ["CFT", f"{_paper_fmt_val(r.get('cft'),2)} / {_paper_fmt_val(r.get('cftnr'),2)}", "Revisar e integrar con clinica, edema, disnea, tratamiento y funcion renal."],
+            ["CFT", f"{_paper_fmt_val(r.get('cft'),2)}", "Revisar e integrar con clinica, edema, disnea, tratamiento y funcion renal. CFTnr retirado."],
             ["IV / IAC / CTS", f"{_paper_fmt_val(r.get('iv'),2)} / {_paper_fmt_val(r.get('iac'),2)} / {_paper_fmt_val(r.get('cts'),2)}", "Evaluacion de onda sistolica y tiempos sistolicos."],
             ["EA / EES / EA-EES", f"{_paper_fmt_val(r.get('ea'),2)} / {_paper_fmt_val(r.get('ees'),2)} / {_paper_fmt_val(r.get('ava'),2)}", "Acoplamiento VA en rango de precaucion si EA/EES >1."],
             ["DS / IDS", f"{_paper_fmt_val(r.get('ds'),2)} / {_paper_fmt_val(r.get('ids'),2)}", "Volumen sistolico bajo si esta por debajo del rango esperado."],
@@ -8782,7 +8795,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         ))
         _c2 = clasificacion_hemodinamica_materna_gestacional(r_cinta, contexto_embarazo)
         _pe = calcular_riesgo_preeclampsia(r_cinta, contexto_embarazo)
-        _vol_txt = diagnostico_volemia(r_panel.get("cft"), r_panel.get("cftnr")).split(".")[0]
+        _vol_txt = diagnostico_volemia(r_panel.get("cft")).split(".")[0]
         _crecimiento = str((contexto_embarazo or {}).get("crecimiento_fetal") or "No informado")
         _doppler = str((contexto_embarazo or {}).get("doppler_uterino") or "No informado")
         dominios_emb = [
@@ -8790,7 +8803,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
             ["Patron hemodinamico gestacional (ACOSTADO/CINTA/SPOT/ESTUDIO BASAL)", _c2.get("diagnostico","N/D"),
              _c2.get("interpretacion","Ver clasificacion gestacional.")],
             ["Volemia / fluidos toracicos", _vol_txt,
-             f"CFT {_paper_fmt_val(r_cinta.get('cft'),2)} / CFTnr {_paper_fmt_val(r_cinta.get('cftnr'),2)}. En HDP puede reflejar sobrecarga o hipovolemia relativa."],
+             f"CFT {_paper_fmt_val(r_cinta.get('cft'),2)}. Clasificación: <30 hipovolemia; 30-50 normovolemia; >50 hipervolemia."],
             ["Fenotipo materno sugerido", _c2.get("subtipo","N/D"),
              "Basado en relacion IC/RVS vs referencia gestacional y presencia de HDP."],
             ["Crecimiento fetal / Doppler", _crecimiento, f"Doppler uterino: {_doppler}. Integrar con biometria fetal y criterios obstetricos."],
@@ -13836,7 +13849,7 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
     rb = resumen_acostado_cinta_para_patron(df, r)
     patron = patron_hemodinamico_oficial_desde_ic_irv(rb.get("ic"), rb.get("irv"), None)
     significado = significado_patron_hemodinamico_oficial(patron)
-    volemia_estado = estado_volemia_simple(rb.get("cft"), rb.get("cftnr"))
+    volemia_estado = estado_volemia_simple(rb.get("cft"))
     contract_estado = estado_contractilidad_simple(rb.get("iv") or (r or {}).get("iv"), rb.get("iac") or (r or {}).get("iac"), rb.get("cts") or (r or {}).get("cts"))
     acop_estado = estado_acoplamiento_simple(rb.get("ea") or (r or {}).get("ea"), rb.get("ees") or (r or {}).get("ees"), rb.get("ava") or (r or {}).get("ava"))
     orto_estado = estado_ortostatico_simple(df)
@@ -13850,7 +13863,7 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
         [
             "Volemia",
             volemia_estado,
-            f"Clasificación volémica por CFT basal. CFT {fmt(rb.get('cft'), 2)}; CFTnr {fmt(rb.get('cftnr'), 2)}.",
+            f"Clasificación volémica exclusivamente por CFT basal. CFT {fmt(rb.get('cft'), 2)}. CFTnr retirado de la interpretación.",
         ],
         [
             "Contractilidad",
@@ -14283,7 +14296,7 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
     rb = resumen_acostado_cinta_para_patron(df, r)
     patron = patron_circulatorio_simple_acostado_cinta(rb, None)
     significado = significado_patron_hemodinamico_oficial(patron)
-    volemia_estado = estado_volemia_simple(rb.get("cft"), rb.get("cftnr"))
+    volemia_estado = estado_volemia_simple(rb.get("cft"))
     contract_estado = estado_contractilidad_simple(rb.get("iv") or r.get("iv"), rb.get("iac") or r.get("iac"), rb.get("cts") or r.get("cts"))
     acop_estado = estado_acoplamiento_simple(rb.get("ea") or r.get("ea"), rb.get("ees") or r.get("ees"), rb.get("ava") or r.get("ava"))
     orto_estado = estado_ortostatico_simple(df)
@@ -14297,7 +14310,7 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
         [
             "Volemia",
             volemia_estado,
-            f"Clasificación volémica por CFT basal. CFT {fmt(rb.get('cft'), 2)}; CFTnr {fmt(rb.get('cftnr'), 2)}.",
+            f"Clasificación volémica exclusivamente por CFT basal. CFT {fmt(rb.get('cft'), 2)}. CFTnr retirado de la interpretación.",
         ],
         [
             "Contractilidad",
