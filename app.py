@@ -13734,6 +13734,193 @@ def estado_volemia_simple(cft: Any, cftnr: Any = None) -> str:
         return "NORMOVOLEMIA"
     return "VOLEMIA NO CLASIFICABLE"
 
+
+# =========================================================
+# V23 - SEGURIDAD EA/EES: NO ACEPTAR EA Y EES IDÉNTICAS
+# =========================================================
+# Corrección clínica:
+# - EA Capan y EES Capan son variables diferentes.
+# - Si el parser deja EA == EES, se asume error de captura o duplicación de columna.
+# - En ese caso NO se clasifica como acoplamiento óptimo por relación 1,00.
+# - Solo se reconstruye EES desde EA y AC/EA-EES importado si ese ratio es plausible
+#   y distinto de 1,00; de lo contrario el acoplamiento queda como NO CLASIFICABLE.
+
+def _ea_ees_identicos_sospechosos(ea: Any, ees: Any) -> bool:
+    eav = limpiar_numero(ea)
+    eesv = limpiar_numero(ees)
+    if eav is None or eesv is None:
+        return False
+    return abs(eav - eesv) <= max(0.01, 0.01 * max(abs(eav), abs(eesv), 1.0))
+
+
+def _extraer_ea_ees_lineal_v23(df: Optional[pd.DataFrame]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Extractor conservador de EA, EES y AC/EA-EES desde texto/filas.
+
+    Evita que EES sea tomado desde una línea de EA o desde la etiqueta EA/EES.
+    Devuelve (EA, EES, ratio_importado) si encuentra valores plausibles.
+    """
+    try:
+        texto = _texto_completo_df_v19(df)
+    except Exception:
+        texto = ""
+    texto = str(texto or "").replace("\u00a0", " ")
+    texto = re.sub(r"[|;]+", "\n", texto)
+    lineas = [ln.strip() for ln in texto.splitlines() if str(ln).strip()]
+
+    ea_val = None
+    ees_val = None
+    ratio_val = None
+
+    # Patrones específicos, evitando confusiones entre EA, EES y EA/EES.
+    pat_ratio = re.compile(r"(?:\bea\s*/\s*ees\b|\brelaci[oó]n\s+ea\s*/?\s*ees\b|\bac\s*capan\b|\bacoplamiento\s+(?:ventr[ií]culo|ventricular)\s*[- ]?arterial)", re.I)
+    pat_ees = re.compile(r"(?:\bees\s*(?:capan)?\b|\be\.\s*e\.\s*s\.\s*(?:capan)?\b|elastancia\s+(?:de\s+)?fin\s+de\s+s[ií]stole(?:\s+capan)?|elastancia\s+ventricular(?:\s+capan)?)", re.I)
+    pat_ea = re.compile(r"(?:\bea\s*(?:capan)?\b|\be\.\s*a\.\s*(?:capan)?\b|elastancia\s+arterial(?:\s+capan)?)", re.I)
+    etiquetas_corte = re.compile(r"(?:PAS|PAD|FC|HR|IC|CI|ITC|IRV|RVS|SVR|TPVR|CA|CFT|TFC|IH|IV|VI|IAC|ACI|CTS|EA\s*/\s*EES|AC\s*Capan|EA\b|EES\b|DS|IDS|Z0)", re.I)
+
+    def nums_despues(linea: str, m: re.Match, variable: str):
+        cola = linea[m.end():]
+        primer_num = re.search(r"[-+]?[0-9]+(?:[.,][0-9]+)?", cola)
+        corte = etiquetas_corte.search(cola)
+        if corte and (primer_num is None or corte.start() < primer_num.start()):
+            cola = cola[:corte.start()]
+        vals = [n for n in numeros_en_texto(cola) if valor_plausible_integracion_v13(variable, n)]
+        return vals[0] if vals else None
+
+    for ln in lineas:
+        # Primero ratio/acoplamiento. No usar esta línea para EA ni EES.
+        mr = pat_ratio.search(ln)
+        if mr and ratio_val is None:
+            v = nums_despues(ln, mr, "EA/EES")
+            if v is not None:
+                ratio_val = v
+            continue
+
+        # EES explícito: se lee solo desde etiqueta EES, no desde EA/EES.
+        if ees_val is None:
+            me = pat_ees.search(ln)
+            if me and not pat_ratio.search(ln[:me.end()+10]):
+                v = nums_despues(ln, me, "EES")
+                if v is not None:
+                    ees_val = v
+
+        # EA explícito: bloquear líneas que también sean EA/EES o EES.
+        if ea_val is None:
+            ma = pat_ea.search(ln)
+            if ma and not pat_ratio.search(ln) and not pat_ees.search(ln):
+                v = nums_despues(ln, ma, "EA")
+                if v is not None:
+                    ea_val = v
+
+        if ea_val is not None and ees_val is not None and ratio_val is not None:
+            break
+
+    return ea_val, ees_val, ratio_val
+
+
+def _corregir_acoplamiento_identico_v23(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+    out = dict(r or {})
+    ea_txt, ees_txt, ratio_txt = _extraer_ea_ees_lineal_v23(df)
+
+    # Si el extractor conservador encontró EA/EES, priorizarlo sobre el dato contaminado.
+    if ea_txt is not None:
+        out["ea"] = ea_txt
+    if ees_txt is not None:
+        out["ees"] = ees_txt
+
+    eav = limpiar_numero(out.get("ea"))
+    eesv = limpiar_numero(out.get("ees"))
+    ratio_importado = limpiar_numero(ratio_txt)
+    if ratio_importado is None:
+        ratio_importado = limpiar_numero(out.get("ava_importado_ignorado"))
+
+    out["ava_alerta"] = ""
+
+    if _ea_ees_identicos_sospechosos(eav, eesv):
+        out["ees_sospechoso"] = eesv
+        # Si existe un AC/EA-EES importado plausible y distinto de 1, permite reconstruir EES.
+        if ratio_importado is not None and 0.1 <= ratio_importado <= 5.0 and abs(ratio_importado - 1.0) > 0.05 and eav is not None:
+            out["ees"] = eav / ratio_importado
+            out["ava"] = calcular_ea_ees_derivado(out.get("ea"), out.get("ees"))
+            out["ava_estado"] = "RECONSTRUIDO"
+            out["ava_detalle"] = (
+                "EES original era idéntico a EA y fue considerado error de captura. "
+                f"Se reconstruyó EES desde EA/AC importado: EA {fmt(eav)} / AC {fmt(ratio_importado)} = EES {fmt(out.get('ees'))}."
+            )
+            out["ava_alerta"] = out["ava_detalle"]
+        else:
+            out["ees"] = None
+            out["ava"] = None
+            out["ava_estado"] = "REVISAR"
+            out["ava_detalle"] = (
+                f"EA y EES fueron capturados como valores iguales ({fmt(eav)} y {fmt(eesv)}). "
+                "Esto es probablemente un error de extracción; no se informa EA/EES ni se clasifica el acoplamiento hasta corregir EA Capan y EES Capan."
+            )
+            out["ava_alerta"] = out["ava_detalle"]
+    else:
+        out["ava"] = calcular_ea_ees_derivado(out.get("ea"), out.get("ees"))
+        estado, detalle = validar_ea_ees_derivado(out.get("ea"), out.get("ees"))
+        out["ava_estado"] = estado
+        out["ava_detalle"] = detalle
+
+    return out
+
+
+_extraer_resumen_integrado_pre_v23 = extraer_resumen_integrado
+
+def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
+    r = _extraer_resumen_integrado_pre_v23(df)
+    return _corregir_acoplamiento_identico_v23(r, df)
+
+
+def calcular_ea_ees_derivado(ea: Any, ees: Any) -> Optional[float]:
+    """EA/EES = EA Capan / EES Capan, con bloqueo de EA y EES idénticas."""
+    eav = limpiar_numero(ea)
+    eesv = limpiar_numero(ees)
+    if eav is None or eesv in [None, 0]:
+        return None
+    if _ea_ees_identicos_sospechosos(eav, eesv):
+        return None
+    return eav / eesv
+
+
+def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
+    """Diagnóstico EA/EES seguro: no clasifica si EA y EES son idénticas."""
+    eav = limpiar_numero(ea)
+    eesv = limpiar_numero(ees)
+    if _ea_ees_identicos_sospechosos(eav, eesv):
+        return (
+            "Acoplamiento ventrículo-arterial no clasificable. "
+            f"EA Capan y EES Capan aparecen idénticos ({fmt(eav)} / {fmt(eesv)}), "
+            "lo que sugiere duplicación o error de extracción. Corregir EES Capan antes de interpretar EA/EES."
+        )
+    avav = calcular_ea_ees_derivado(ea, ees)
+    if avav is None:
+        return "Acoplamiento ventrículo-arterial no clasificable. Falta EA Capan o EES Capan válido para calcular EA/EES."
+    base = f"Relación EA/EES calculada automáticamente como EA Capan/EES Capan: {fmt(eav)} / {fmt(eesv)} = {fmt(avav)}. "
+    if 0 <= avav <= 1.0:
+        return base + "Acoplamiento ventrículo-arterial óptimo."
+    if 1.0 < avav <= 1.3:
+        return base + "Acoplamiento ventrículo-arterial en rango de precaución clínica."
+    if avav > 1.3:
+        return base + "Desacoplamiento ventrículo-arterial."
+    return base + "Valor fuera de rango fisiológico esperado; revisar datos fuente."
+
+
+def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
+    if _ea_ees_identicos_sospechosos(ea, ees):
+        return "ACOPLAMIENTO NO CLASIFICABLE: EA Y EES IDÉNTICAS"
+    avav = calcular_ea_ees_derivado(ea, ees)
+    if avav is None:
+        return "ACOPLAMIENTO NO CLASIFICABLE"
+    if 0 <= avav <= 1.0:
+        return "ACOPLAMIENTO ÓPTIMO"
+    if 1.0 < avav <= 1.3:
+        return "ACOPLAMIENTO EN PRECAUCIÓN CLÍNICA"
+    if avav > 1.3:
+        return "DESACOPLAMIENTO VENTRÍCULO-ARTERIAL"
+    return "ACOPLAMIENTO NO CLASIFICABLE"
+
+
 r = extraer_resumen_integrado(df_final)
 paciente_detectado = normalizar_nombre_paciente(r.get("paciente")) or ""
 if es_paciente_pdf_invalido(paciente_detectado):
