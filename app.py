@@ -2520,9 +2520,9 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
         base += "."
 
     if 0 <= avav <= 1.0:
-        return f"Acoplamiento ventrículo-arterial óptimo. {base}"
+        return f"Acoplamiento ventrículo-arterial subóptimo. {base} Relación baja o igual a 1; interpretar junto al contexto clínico y la calidad de EA/EES."
     if 1.0 < avav <= 1.3:
-        return f"Acoplamiento ventrículo-arterial subóptimo o en rango de precaución. {base} Sugiere incremento relativo de la carga arterial o menor reserva ventricular."
+        return f"Acoplamiento ventrículo-arterial subóptimo. {base} Zona intermedia con incremento relativo de carga arterial o menor reserva ventricular."
     if avav > 1.3:
         return f"Desacoplamiento ventrículo-arterial. {base} Se asocia a mayor estrés hemodinámico y riesgo de insuficiencia cardíaca, según el contexto clínico."
 
@@ -2886,7 +2886,7 @@ def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame]
     if ava is None:
         score_acoplamiento = None
     elif 0 <= ava <= 1:
-        score_acoplamiento = 1.0
+        score_acoplamiento = 0.65
     elif 1 < ava <= 1.3:
         score_acoplamiento = 0.65
     else:
@@ -4113,7 +4113,7 @@ def sugerencia_tratamiento_no_embarazada(r: Dict[str, Any], df: Optional[pd.Data
     No reemplaza guías clínicas ni criterio médico. La lógica sigue el algoritmo
     de Ferrario/ICG: CI alto -> beta bloqueante o calcioantagonista no DHP;
     SVRI/RVS alta -> IECA/ARA-II/calcioantagonista DHP/vasodilatador;
-    CFT > 50 -> considerar diurético; CFT < 30 -> evitar intensificar diurético y revisar hipovolemia.
+    CFT > 50 -> considerar diurético. CFT 30-50 = normovolemia: no indicar diurético por volemia. CFT < 30 -> evitar intensificar diurético y revisar hipovolemia.
     """
     ic = limpiar_numero(r.get("ic"))
     rvs = limpiar_numero(r.get("irv"))
@@ -4166,7 +4166,8 @@ def sugerencia_tratamiento_no_embarazada(r: Dict[str, Any], df: Optional[pd.Data
     cft_hipovolemia = cft is not None and cft < 30
     cft_normovolemia = cft is not None and 30 <= cft <= 50
     cft_hipervolemia = cft is not None and cft > 50
-    cft_ascenso_relevante = (cft_prev is not None and cft_act is not None and (cft_act - cft_prev) > 2 and cft_act > 50)
+    # Diurético solo con hipervolemia actual por CFT > 50.
+    # El ascenso de CFT dentro de normovolemia NO habilita sugerir diurético.
 
     if cft_hipovolemia:
         fenotipos.append("Patrón hipovolémico por CFT bajo")
@@ -4174,9 +4175,9 @@ def sugerencia_tratamiento_no_embarazada(r: Dict[str, Any], df: Optional[pd.Data
     elif cft_normovolemia:
         fenotipos.append("Patrón normovolémico por CFT")
         recomendaciones.append("No hay indicación hemodinámica de modificar diuréticos por volemia; priorizar el ajuste terapéutico según IC, RVS/IRV, PA, comorbilidades y tolerancia.")
-    elif cft_hipervolemia or cft_ascenso_relevante:
+    elif cft_hipervolemia:
         fenotipos.append("Patrón hipervolémico por CFT elevado")
-        recomendaciones.append("Considerar agregar o titular diurético si el contexto clínico lo permite, con control de función renal, ionograma, ácido úrico, síntomas de hipovolemia y respuesta tensional.")
+        recomendaciones.append("Considerar agregar o titular diurético solo por hipervolemia documentada (CFT > 50), si el contexto clínico lo permite, con control de función renal, ionograma, ácido úrico, síntomas de hipovolemia y respuesta tensional.")
 
     # 5. Si no domina ningún patrón, orientar combinación racional.
     if not recomendaciones:
@@ -4225,12 +4226,7 @@ def crear_grafico_propuesta_terapeutica_bytes(r: Dict[str, Any], df: Optional[pd
     # Rama de volemia corregida: CFT > 50 = hipervolemia. CFTnr no se utiliza.
     rama_fluid  = (cft is not None and cft > 50)
 
-    try:
-        cft_prev, cft_act = _valor_previo_y_actual(df, "cft")
-        if cft_prev is not None and cft_act is not None and (cft_act - cft_prev) > 2 and cft_act > 50:
-            rama_fluid = True
-    except Exception:
-        pass
+    # Diurético solo si CFT actual > 50. No activar rama por normovolemia ni por CFT en ascenso dentro de rango normal.
 
     ninguna = not (rama_hiper or rama_hipo or rama_vaso or rama_fluid)
 
@@ -4300,9 +4296,9 @@ def crear_grafico_propuesta_terapeutica_bytes(r: Dict[str, Any], df: Optional[pd
          "Agregar / aumentar:\nIECA, ARA-II,\ncalcioantagonista DHP\no vasodilatador directo",
          f"RVS={fmt(rvs,0)}" if rvs else ""),
         (2.20, rama_fluid,
-         "CFT/TFC elevado\no en ascenso",
-         "Retención\nde fluidos",
-         "Agregar / aumentar:\ndiurético",
+         "CFT/TFC > 50",
+         "Hipervolemia",
+         "Agregar / aumentar:\ndiurético\nsolo si CFT > 50",
          f"CFT={fmt(cft,2)}" if cft else ""),
     ]
 
@@ -4399,7 +4395,7 @@ Siglas utilizadas:
 - IC/CI: índice cardíaco. GC/CO: gasto cardíaco.
 - IRV/RVS/SVR/TPVR: resistencia vascular sistémica o resistencia vascular periférica total.
 - PAM/MAP: presión arterial media.
-- CFT/TFC: contenido de fluido torácico y contenido de fluido torácico normalizado.
+- CFT/TFC: contenido de fluido torácico. La volemia se clasifica solo por CFT; CFTnr no se utiliza.
 - IV/VI: índice de velocidad.
 - IAC/ACI: índice de aceleración.
 - CTS: coeficiente de tiempos sistólicos, equivalente operativo a la relación PEP/LVET cuando el equipo lo informa así.
@@ -4413,7 +4409,7 @@ Siglas utilizadas:
 - IC/CI: índice cardíaco. GC/CO: gasto cardíaco.
 - IRV/RVS/SVR/TPVR: resistencia vascular sistémica o resistencia vascular periférica total.
 - PAM/MAP: presión arterial media.
-- CFT/TFC: contenido de fluido torácico y contenido de fluido torácico normalizado.
+- CFT/TFC: contenido de fluido torácico. La volemia se clasifica solo por CFT; CFTnr no se utiliza.
 - IV/VI: índice de velocidad.
 - IAC/ACI: índice de aceleración.
 - CTS: coeficiente de tiempos sistólicos, equivalente operativo a la relación PEP/LVET cuando el equipo lo informa así.
@@ -4762,7 +4758,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         pdf.ln(2)
         pdf_texto(pdf, limpiar_referencias_obstetricas_en_linea(sugerencia_tratamiento_no_embarazada(r, df)), 10)
         pdf.ln(2)
-        pdf_texto(pdf, "Base conceptual: Ferrario et al. describen que la cardiografia de impedancia permite individualizar el tratamiento antihipertensivo segun IC/GC, RVS/SVRI y CFT/TFC.", 9)
+        pdf_texto(pdf, "Base conceptual: Ferrario et al. describen que la cardiografia de impedancia permite individualizar el tratamiento antihipertensivo segun IC/GC, RVS/SVRI y CFT/TFC. En esta app la indicación de diurético se habilita solo con hipervolemia por CFT > 50.", 9)
 
     # Hojas siguientes: gauges semicirculares individuales por cada dominio con sus métricas propias.
     grafs_ind = crear_graficos_dominios_individuales_bytes(r)
@@ -6525,9 +6521,9 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
 
     base = f"Relación EA/EES calculada automáticamente como EA Capan/EES Capan: {fmt(eav)} / {fmt(eesv)} = {fmt(avav)}. "
     if 0 <= avav <= 1.0:
-        return base + "Acoplamiento ventrículo-arterial óptimo."
+        return base + "Acoplamiento ventrículo-arterial subóptimo."
     if 1.0 < avav <= 1.3:
-        return base + "Acoplamiento ventrículo-arterial en rango de precaución, compatible con incremento relativo de carga arterial o menor reserva ventricular."
+        return base + "Acoplamiento ventrículo-arterial subóptimo, compatible con incremento relativo de carga arterial o menor reserva ventricular."
     if avav > 1.3:
         return base + "Desacoplamiento ventrículo-arterial, con mayor estrés hemodinámico según el contexto clínico."
     return base + "Valor fuera de rango fisiológico esperado; revisar datos fuente."
@@ -6634,9 +6630,9 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
         return f"Acoplamiento ventrículo-arterial no clasificable. {detalle}"
     base = f"Relación EA/EES calculada automáticamente como EA Capan/EES Capan: {fmt(eav)} / {fmt(eesv)} = {fmt(avav)}. "
     if 0 <= avav <= 1.0:
-        return base + "Acoplamiento ventrículo-arterial óptimo."
+        return base + "Acoplamiento ventrículo-arterial subóptimo."
     if 1.0 < avav <= 1.3:
-        return base + "Acoplamiento ventrículo-arterial en zona de precaución clínica, compatible con incremento relativo de carga arterial o menor reserva ventricular."
+        return base + "Acoplamiento ventrículo-arterial subóptimo, compatible con incremento relativo de carga arterial o menor reserva ventricular."
     if avav > 1.3:
         return base + "Desacoplamiento ventrículo-arterial, con mayor estrés hemodinámico según el contexto clínico."
     return base + "Valor fuera de rango fisiológico esperado; revisar datos fuente."
@@ -6807,9 +6803,9 @@ def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
     if avav is None:
         return "ACOPLAMIENTO NO CLASIFICABLE"
     if 0 <= avav <= 1.0:
-        return "ACOPLAMIENTO ÓPTIMO"
+        return "ACOPLAMIENTO SUBÓPTIMO"
     if 1.0 < avav <= 1.3:
-        return "ACOPLAMIENTO EN PRECAUCIÓN CLÍNICA"
+        return "ACOPLAMIENTO SUBÓPTIMO"
     if avav > 1.3:
         return "DESACOPLAMIENTO VENTRÍCULO-ARTERIAL"
     return "ACOPLAMIENTO NO CLASIFICABLE"
@@ -13741,7 +13737,7 @@ def estado_volemia_simple(cft: Any, cftnr: Any = None) -> str:
 # Corrección clínica:
 # - EA Capan y EES Capan son variables diferentes.
 # - Si el parser deja EA == EES, se asume error de captura o duplicación de columna.
-# - En ese caso NO se clasifica como acoplamiento óptimo por relación 1,00.
+# - En ese caso NO se clasifica como acoplamiento subóptimo por relación 1,00.
 # - Solo se reconstruye EES desde EA y AC/EA-EES importado si ese ratio es plausible
 #   y distinto de 1,00; de lo contrario el acoplamiento queda como NO CLASIFICABLE.
 
@@ -13898,9 +13894,9 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
         return "Acoplamiento ventrículo-arterial no clasificable. Falta EA Capan o EES Capan válido para calcular EA/EES."
     base = f"Relación EA/EES calculada automáticamente como EA Capan/EES Capan: {fmt(eav)} / {fmt(eesv)} = {fmt(avav)}. "
     if 0 <= avav <= 1.0:
-        return base + "Acoplamiento ventrículo-arterial óptimo."
+        return base + "Acoplamiento ventrículo-arterial subóptimo."
     if 1.0 < avav <= 1.3:
-        return base + "Acoplamiento ventrículo-arterial en rango de precaución clínica."
+        return base + "Acoplamiento ventrículo-arterial subóptimo."
     if avav > 1.3:
         return base + "Desacoplamiento ventrículo-arterial."
     return base + "Valor fuera de rango fisiológico esperado; revisar datos fuente."
@@ -13913,9 +13909,9 @@ def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
     if avav is None:
         return "ACOPLAMIENTO NO CLASIFICABLE"
     if 0 <= avav <= 1.0:
-        return "ACOPLAMIENTO ÓPTIMO"
+        return "ACOPLAMIENTO SUBÓPTIMO"
     if 1.0 < avav <= 1.3:
-        return "ACOPLAMIENTO EN PRECAUCIÓN CLÍNICA"
+        return "ACOPLAMIENTO SUBÓPTIMO"
     if avav > 1.3:
         return "DESACOPLAMIENTO VENTRÍCULO-ARTERIAL"
     return "ACOPLAMIENTO NO CLASIFICABLE"
