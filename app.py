@@ -581,7 +581,7 @@ VARIABLES_CGI: Dict[str, List[str]] = {
     "irv": ["indice de resistencia vascular", "indice resistencia vascular", "irv", "svri", "systemic vascular resistance index"],
     # RVS = Resistencia Vascular Sistémica (no indexada, dyn.seg.cm-5) — usar solo si no hay IRV
     "rvs": ["resistencia vascular sistemica", "resistencia vascular sistémica", "resistencia vascular", "rvs", "svr", "systemic vascular resistance"],
-    "ca": ["complacencia arterial", "compliance arterial", "ca ml", " ca "],
+    "ca": ["indice de compliance arterial", "índice de compliance arterial", "ica", "ica/ca", "complacencia arterial", "compliance arterial", "ca ml", " ca "],
     "cftnr": ["cftnr", "cft nr", "cft n.r", "cft n r", "cft normalizado", "cft index", "cft indice", "cft índice", "tfc index", "tfc indice", "tfc índice", "tfi", "contenido de fluidos toracicos normalizado", "contenido de fluidos torácicos normalizado", "contenido fluidos toracicos normalizado", "contenido fluidos torácicos normalizado", "thoracic fluid content index", "thoracic fluid index"],
     "cft": ["contenido de fluidos toracicos", "contenido de fluidos torácicos", "thoracic fluid", "cft", "tfc"],
 
@@ -982,7 +982,7 @@ PATRONES_CLAVE = {
     # IRV = indexado (con "índice"); RVS = no indexado. Patrones separados para distinguirlos.
     "irv": r"(?:[ií]ndice\s+(?:de\s+)?resistencia\s+vascular|\birv\b|\bsvri\b)",
     "rvs": r"(?:resistencia\s+vascular\s+sist[eé]mica|\brvs\b|\bsvr\b)",
-    "ca": r"(?:complacencia\s+arterial|arterial\s+compliance|\bca\b)",
+    "ca": r"(?:[ií]ndice\s+(?:de\s+)?compliance\s+arterial|\bICA\b|ICA\s*/\s*CA|complacencia\s+arterial|arterial\s+compliance|\bCA\b)",
     "ih": r"(?:[ií]ndice\s+de\s+heather|heather|\bih\b)",
     "iv": r"(?:[ií]ndice\s+de\s+velocidad|velocity\s+index|\bvi\b|\biv\b)",
     "ea": r"(?:elastancia\s+arterial|arterial\s+elastance|\bea\b)",
@@ -2885,9 +2885,9 @@ def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame]
 
     if ava is None:
         score_acoplamiento = None
-    elif 0 <= ava <= 1:
-        score_acoplamiento = 0.65
-    elif 1 < ava <= 1.3:
+    elif ava < 1.0:
+        score_acoplamiento = 1.00
+    elif 1.0 <= ava <= 1.3:
         score_acoplamiento = 0.65
     else:
         score_acoplamiento = 0.25
@@ -2988,7 +2988,7 @@ def referencia_metrica(nombre: str) -> Optional[Tuple[float, float, str]]:
         "ic": (2.5, 4.0, "L/min/m²"),
         "irv": (1200, 2000, "dyn.s.cm-5"),
         "rvs": (1200, 2000, "dyn.s.cm-5"),
-        "ca": (1.0, 3.0, "mL/mmHg"),
+        "ca": (1.0, 3.0, "mL/mmHg"),  # ICA/CA: bajo <1, normal 1-3, elevado >3
         "cft": (25, 35, "1/kΩ"),
         "cftnr": (25, 35, "1/kΩ/m²"),
         "ih": (10, 30, "Ω/s²"),
@@ -2997,8 +2997,8 @@ def referencia_metrica(nombre: str) -> Optional[Tuple[float, float, str]]:
         "cts": (0.30, 0.45, "relación"),
         "ea": (0.5, 2.2, "mmHg/mL"),
         "ees": (1.0, 4.0, "mmHg/mL"),
-        "ea/ees": (0.0, 1.0, "relación"),
-        "ava": (0.0, 1.0, "relación"),
+        "ea/ees": (0.0, 0.999, "relación"),  # óptimo <1; subóptimo 1-1,3; desacoplamiento >1,3
+        "ava": (0.0, 0.999, "relación"),
         "ds": (50, 100, "mL/lat"),
         "ids": (30, 55, "mL/lat/m²"),
         "z0": (20, 35, "Ω"),
@@ -3020,6 +3020,24 @@ def estado_semaforo_metrica(nombre: str, valor: Any) -> Tuple[str, str, str]:
         return "No disponible", "#64748B", "sin dato"
     bajo, alto, _unidad = ref
     n = normalizar_txt(nombre).replace(" ", "").replace("_", "")
+
+    # Clasificación clínica específica del acoplamiento ventrículo-arterial (EA/EES).
+    if n in {"ea/ees", "ava", "acoplamiento", "acoplamientoventriculoarterial", "acoplamientoventrículoarterial"}:
+        if v < 1.0:
+            return "ÓPTIMO", "#10B981", "óptimo"
+        if 1.0 <= v <= 1.3:
+            return "SUBÓPTIMO", "#F59E0B", "subóptimo"
+        if v > 1.3:
+            return "DESACOPLAMIENTO", "#EF4444", "desacoplamiento"
+
+    # Clasificación clínica específica del índice de compliance arterial (ICA/CA).
+    if n in {"ca", "ica", "ica/ca", "complacenciaarterial", "compliancearterial", "indicedecompliancearterial"}:
+        if v < 1.0:
+            return "ICA BAJO", "#EF4444", "bajo"
+        if 1.0 <= v <= 3.0:
+            return "ICA NORMAL", "#10B981", "normal"
+        if v > 3.0:
+            return "ICA ELEVADO", "#F59E0B", "elevado"
 
     # Métricas donde estar por debajo también es patológico relevante.
     bajo_rojo = {"ic", "ca", "ih", "iv", "iac", "ds", "ids", "ees"}
@@ -6520,9 +6538,9 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
         return f"Acoplamiento ventrículo-arterial no clasificable. {detalle}"
 
     base = f"Relación EA/EES calculada automáticamente como EA Capan/EES Capan: {fmt(eav)} / {fmt(eesv)} = {fmt(avav)}. "
-    if 0 <= avav <= 1.0:
-        return base + "Acoplamiento ventrículo-arterial subóptimo."
-    if 1.0 < avav <= 1.3:
+    if avav < 1.0:
+        return base + "Acoplamiento ventrículo-arterial óptimo."
+    if 1.0 <= avav <= 1.3:
         return base + "Acoplamiento ventrículo-arterial subóptimo, compatible con incremento relativo de carga arterial o menor reserva ventricular."
     if avav > 1.3:
         return base + "Desacoplamiento ventrículo-arterial, con mayor estrés hemodinámico según el contexto clínico."
@@ -6629,9 +6647,9 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
         estado, detalle = validar_ea_ees_derivado(ea, ees)
         return f"Acoplamiento ventrículo-arterial no clasificable. {detalle}"
     base = f"Relación EA/EES calculada automáticamente como EA Capan/EES Capan: {fmt(eav)} / {fmt(eesv)} = {fmt(avav)}. "
-    if 0 <= avav <= 1.0:
-        return base + "Acoplamiento ventrículo-arterial subóptimo."
-    if 1.0 < avav <= 1.3:
+    if avav < 1.0:
+        return base + "Acoplamiento ventrículo-arterial óptimo."
+    if 1.0 <= avav <= 1.3:
         return base + "Acoplamiento ventrículo-arterial subóptimo, compatible con incremento relativo de carga arterial o menor reserva ventricular."
     if avav > 1.3:
         return base + "Desacoplamiento ventrículo-arterial, con mayor estrés hemodinámico según el contexto clínico."
@@ -6802,9 +6820,9 @@ def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
         avav = limpiar_numero(ava)
     if avav is None:
         return "ACOPLAMIENTO NO CLASIFICABLE"
-    if 0 <= avav <= 1.0:
-        return "ACOPLAMIENTO SUBÓPTIMO"
-    if 1.0 < avav <= 1.3:
+    if avav < 1.0:
+        return "ACOPLAMIENTO ÓPTIMO"
+    if 1.0 <= avav <= 1.3:
         return "ACOPLAMIENTO SUBÓPTIMO"
     if avav > 1.3:
         return "DESACOPLAMIENTO VENTRÍCULO-ARTERIAL"
@@ -6829,6 +6847,8 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
     volemia_estado = estado_volemia_simple(rb.get("cft"))
     contract_estado = estado_contractilidad_simple(rb.get("iv") or r.get("iv"), rb.get("iac") or r.get("iac"), rb.get("cts") or r.get("cts"))
     acop_estado = estado_acoplamiento_simple(rb.get("ea") or r.get("ea"), rb.get("ees") or r.get("ees"), rb.get("ava") or r.get("ava"))
+    ica_valor = rb.get("ca") or r.get("ca")
+    ica_estado = clasificar_ica(ica_valor)
     orto_estado = estado_ortostatico_simple(df)
     rows = [
         ["Dominio", "Resultado", "Interpretación resumida"],
@@ -6850,7 +6870,12 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
         [
             "Acoplamiento ventrículo-arterial",
             acop_estado,
-            f"Dominio complementario por EA/EES. EA {fmt((rb.get('ea') or r.get('ea')), 2)}; EES {fmt((rb.get('ees') or r.get('ees')), 2)}; EA/EES {fmt((rb.get('ava') or r.get('ava')), 2)}.",
+            f"Dominio complementario por EA/EES. EA {fmt((rb.get('ea') or r.get('ea')), 2)}; EES {fmt((rb.get('ees') or r.get('ees')), 2)}; EA/EES {fmt((rb.get('ava') or r.get('ava')), 2)}. Clasificación: óptimo si EA/EES es menor a 1; subóptimo entre 1 y 1,3; desacoplamiento si es mayor a 1,3.",
+        ],
+        [
+            "Índice de compliance arterial",
+            ica_estado,
+            f"ICA/CA basal {fmt(ica_valor, 2, ' mL/mmHg')}. Clasificación operativa: bajo si es menor a 1; normal entre 1 y 3; elevado si es mayor a 3.",
         ],
         [
             "Comportamiento ortostático",
@@ -9152,7 +9177,7 @@ PATRONES_EXACTOS_VARIABLES_CRITICAS = {
     "IC": r"(?:\bIC\b|\bCI\b|[ií]ndice\s+card[ií]aco|indice\s+cardiaco|cardiac\s+index)",
     "IRV": r"(?:\bIRV\b|[ií]ndice\s+(?:de\s+)?resistencia\s+vascular|\bSVRI\b|systemic\s+vascular\s+resistance\s+index)",
     "RVS": r"(?:\bRVS\b|resistencia\s+vascular\s+sist[eé]mica|\bSVR\b|systemic\s+vascular\s+resistance)(?!\s+index)",
-    "CA": r"(?:\bCA\b|complacencia\s+arterial|arterial\s+compliance)",
+    "CA": r"(?:[ií]ndice\s+(?:de\s+)?compliance\s+arterial|\bICA\b|ICA\s*/\s*CA|\bCA\b|complacencia\s+arterial|arterial\s+compliance)",
     "CFTnr": r"(?:\bCFT\s*[-_/ ]?\s*(?:nr|n\.r\.|n/r|normalizad[oa]|indexad[oa]|index|indice|índice)\b|\bCFTnr\b|\bTFC\s*[-_/ ]?\s*(?:i|index|indice|índice)\b|\bTFCI\b|\bTFI\b|contenido\s+(?:de\s+)?fluidos?\s+tor[aá]cicos?\s+(?:normalizad[oa]|indexad[oa]|index|indice|índice)|thoracic\s+fluid\s+(?:content\s+)?(?:index|indexed|normalized))",
     "CFT": r"(?:\bCFT\b(?!\s*[-_/ ]?\s*(?:nr|n\.r\.|n/r|normalizad[oa]|indexad[oa]|index|indice|índice))|\bTFC\b(?!\s*[-_/ ]?\s*(?:i|index|indice|índice))|contenido\s+(?:de\s+)?fluidos?\s+tor[aá]cicos?(?!\s+(?:normalizad[oa]|indexad[oa]|index|indice|índice))|thoracic\s+fluid(?:\s+content)?(?!\s+(?:index|indexed|normalized)))",
     "IV": r"(?:\bIV\b|[ií]ndice\s+(?:de\s+)?velocidad|velocity\s+index|\bVI\b)",
@@ -10479,7 +10504,7 @@ def _patron_var_def(variable: str) -> str:
         "FC": r"(?:\bFC\b|frecuencia\s+card[ií]aca|frecuencia\s+cardiaca|heart\s+rate|\bHR\b)",
         "IRV": r"(?:\bIRV\b|\bSVRI\b|[ií]ndice\s+(?:de\s+)?resistencia\s+vascular|systemic\s+vascular\s+resistance\s+index)",
         "RVS": r"(?:\bRVS\b|\bSVR\b|resistencia\s+vascular\s+sist[eé]mica|systemic\s+vascular\s+resistance)",
-        "CA": r"(?:\bCA\b|complacencia\s+arterial|arterial\s+compliance)",
+        "CA": r"(?:[ií]ndice\s+(?:de\s+)?compliance\s+arterial|\bICA\b|ICA\s*/\s*CA|\bCA\b|complacencia\s+arterial|arterial\s+compliance)",
         "CFT": r"(?:\bCFT\b|\bTFC\b|contenido\s+(?:de\s+)?fluidos\s+tor[aá]cicos|thoracic\s+fluid\s+content)",
         "CFTnr": r"(?:\bCFT\s*(?:nr|n\.r)\b|CFT\s+normalizado|TFC\s+index|thoracic\s+fluid\s+content\s+index)",
         "IV": r"(?:\bIV\b|\bVI\b|[ií]ndice\s+de\s+velocidad|velocity\s+index)",
@@ -13893,9 +13918,9 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
     if avav is None:
         return "Acoplamiento ventrículo-arterial no clasificable. Falta EA Capan o EES Capan válido para calcular EA/EES."
     base = f"Relación EA/EES calculada automáticamente como EA Capan/EES Capan: {fmt(eav)} / {fmt(eesv)} = {fmt(avav)}. "
-    if 0 <= avav <= 1.0:
-        return base + "Acoplamiento ventrículo-arterial subóptimo."
-    if 1.0 < avav <= 1.3:
+    if avav < 1.0:
+        return base + "Acoplamiento ventrículo-arterial óptimo."
+    if 1.0 <= avav <= 1.3:
         return base + "Acoplamiento ventrículo-arterial subóptimo."
     if avav > 1.3:
         return base + "Desacoplamiento ventrículo-arterial."
@@ -13908,13 +13933,48 @@ def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
     avav = calcular_ea_ees_derivado(ea, ees)
     if avav is None:
         return "ACOPLAMIENTO NO CLASIFICABLE"
-    if 0 <= avav <= 1.0:
-        return "ACOPLAMIENTO SUBÓPTIMO"
-    if 1.0 < avav <= 1.3:
+    if avav < 1.0:
+        return "ACOPLAMIENTO ÓPTIMO"
+    if 1.0 <= avav <= 1.3:
         return "ACOPLAMIENTO SUBÓPTIMO"
     if avav > 1.3:
         return "DESACOPLAMIENTO VENTRÍCULO-ARTERIAL"
     return "ACOPLAMIENTO NO CLASIFICABLE"
+
+
+# =========================================================
+# CLASIFICACIÓN ICA/CA - ÍNDICE DE COMPLIANCE ARTERIAL
+# =========================================================
+
+def clasificar_ica(valor: Any) -> str:
+    """Clasifica el índice de compliance arterial (ICA/CA).
+
+    Punto de corte operativo usado por la app:
+    - ICA bajo: < 1,00 mL/mmHg
+    - ICA normal: 1,00 a 3,00 mL/mmHg
+    - ICA elevado: > 3,00 mL/mmHg
+    """
+    v = limpiar_numero(valor)
+    if v is None:
+        return "ICA NO CLASIFICABLE"
+    if v < 1.0:
+        return "ICA BAJO"
+    if 1.0 <= v <= 3.0:
+        return "ICA NORMAL"
+    return "ICA ELEVADO"
+
+def diagnostico_ica(valor: Any) -> str:
+    v = limpiar_numero(valor)
+    if v is None:
+        return "Índice de compliance arterial no clasificable. Falta ICA/CA válido."
+    estado = clasificar_ica(v)
+    if estado == "ICA BAJO":
+        significado = "compatible con menor complacencia arterial y mayor rigidez/poscarga pulsátil según el contexto clínico."
+    elif estado == "ICA NORMAL":
+        significado = "compatible con complacencia arterial conservada."
+    else:
+        significado = "compatible con complacencia arterial elevada; interpretar junto con presión arterial, resistencia vascular y estado volémico."
+    return f"Índice de compliance arterial (ICA/CA): {fmt(v, 2, ' mL/mmHg')}. Clasificación: {estado}. Interpretación: {significado}"
 
 
 r = extraer_resumen_integrado(df_final)
@@ -13987,7 +14047,7 @@ if not contexto_embarazo.get("embarazada"):
     with c3:
         st.markdown(f"<div class='metric-card'><b>CFT - ACOSTADO/CINTA/SPOT/ESTUDIO BASAL</b><br>{fmt(r_panel.get('cft'))}<br><span class='muted'>{diagnostico_volemia(r_panel.get('cft')).split('.')[0]}</span></div>", unsafe_allow_html=True)
     with c4:
-        st.markdown(f"<div class='metric-card'><b>CA - ACOSTADO/CINTA/SPOT/ESTUDIO BASAL</b><br>{fmt(r_panel.get('ca'))}<br><span class='muted'>Complacencia arterial basal</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><b>CA - ACOSTADO/CINTA/SPOT/ESTUDIO BASAL</b><br>{fmt(r_panel.get('ca'))}<br><span class='muted'>{clasificar_ica(r_panel.get('ca'))}</span></div>", unsafe_allow_html=True)
 
 
 
@@ -14073,14 +14133,16 @@ def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFra
     volemia = rows[1][1]
     contractilidad = rows[2][1]
     acoplamiento = rows[3][1]
-    orto = rows[4][1]
+    ica = rows[4][1]
+    orto = rows[5][1]
     lineas = [
         f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL:** {patron}. {rows[0][2]}",
         f"**Volemia:** {volemia}. {rows[1][2]}",
         f"**Contractilidad:** {contractilidad}. {rows[2][2]}",
         f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {rows[3][2]}",
+        f"**Índice de compliance arterial:** {ica}. {rows[4][2]}",
         f"**Respuesta ortostática:** {orto}. El registro PARADO describe adaptación postural y no cambia el diagnóstico basal.",
-        f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; respuesta ortostática {orto}.",
+        f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; ICA {ica}; respuesta ortostática {orto}.",
     ]
     txt = "<br>".join(lineas) if html else "\n".join(lineas)
     return limpiar_patrones_prohibidos(txt)
@@ -14114,6 +14176,7 @@ if not _es_embarazo_ui:
     st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr'))}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Contractilidad:</b><br>{diagnostico_contractilidad(r.get('iv'), r.get('iac'), r.get('cts'))}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Acoplamiento ventrículo-arterial:</b><br>{diagnostico_acoplamiento(r.get('ea'), r.get('ees'), r.get('ava'))}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Índice de compliance arterial (ICA):</b><br>{diagnostico_ica(r_panel.get('ca') or r.get('ca'))}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Análisis ortostático automático:</b><br>{interpretar_ortostatismo(df_final)}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Informe de dominios integrados resumido y didáctico:</b><br>{perfil_hemodinamico_integrado(r_panel, df_final)}</div>", unsafe_allow_html=True)
     st.subheader("Gráficos avanzados")
@@ -14521,14 +14584,16 @@ def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFra
     volemia = rows[1][1]
     contractilidad = rows[2][1]
     acoplamiento = rows[3][1]
-    orto = rows[4][1]
+    ica = rows[4][1]
+    orto = rows[5][1]
     lineas = [
         f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL:** {patron}. {rows[0][2]}",
         f"**Volemia:** {volemia}. {rows[1][2]}",
         f"**Contractilidad:** {contractilidad}. {rows[2][2]}",
         f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {rows[3][2]}",
+        f"**Índice de compliance arterial:** {ica}. {rows[4][2]}",
         f"**Respuesta ortostática:** {orto}. El registro PARADO describe adaptación postural y no cambia el diagnóstico basal.",
-        f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; respuesta ortostática {orto}.",
+        f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; ICA {ica}; respuesta ortostática {orto}.",
     ]
     txt = "<br>".join(lineas) if html else "\n".join(lineas)
     return limpiar_patrones_prohibidos(txt)
