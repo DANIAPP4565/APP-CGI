@@ -6887,25 +6887,39 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
 
 
 def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFrame] = None, html: bool = True) -> str:
-    """Informe integrado breve, didáctico y con un único patrón basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL."""
-    rows = tabla_dominios_integrados_sin_ambiguedad(r, df)[1:]
-    patron = rows[0][1]
-    volemia = rows[1][1]
-    contractilidad = rows[2][1]
-    acoplamiento = rows[3][1]
-    orto = rows[4][1]
+    """Informe didáctico sin IndexError aunque falte alguna fila.
+
+    La tabla de dominios puede cambiar de longitud si se agregan o retiran dominios.
+    Por eso se accede por nombre de dominio y no por posición fija rows[5].
+    """
+    tabla = tabla_dominios_integrados_sin_ambiguedad(r or {}, df)
+    rows = tabla[1:] if len(tabla) > 1 else []
+
+    def _buscar(nombre: str, resultado_default: str = "NO DISPONIBLE", interpretacion_default: str = "Dominio no disponible.") -> Tuple[str, str]:
+        objetivo = normalizar_txt(nombre)
+        for row in rows:
+            if len(row) >= 3 and objetivo in normalizar_txt(row[0]):
+                return str(row[1]), str(row[2])
+        return resultado_default, interpretacion_default
+
+    patron, patron_txt = _buscar("Patrón hemodinámico")
+    volemia, volemia_txt = _buscar("Volemia")
+    contractilidad, contractilidad_txt = _buscar("Contractilidad")
+    acoplamiento, acoplamiento_txt = _buscar("Acoplamiento")
+    ica, ica_txt = _buscar("compliance arterial")
+    orto, orto_txt = _buscar("ortostático")
 
     lineas = [
-        f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL:** {patron}. {rows[0][2]}",
-        f"**Volemia:** {volemia}. {rows[1][2]}",
-        f"**Contractilidad:** {contractilidad}. {rows[2][2]}",
-        f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {rows[3][2]}",
-        f"**Respuesta ortostática:** {orto}. El registro PARADO describe adaptación postural y no cambia el diagnóstico basal.",
-        f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; respuesta ortostática {orto}.",
+        f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL:** {patron}. {patron_txt}",
+        f"**Volemia:** {volemia}. {volemia_txt}",
+        f"**Contractilidad:** {contractilidad}. {contractilidad_txt}",
+        f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {acoplamiento_txt}",
+        f"**Índice de compliance arterial:** {ica}. {ica_txt}",
+        f"**Respuesta ortostática:** {orto}. {orto_txt}",
+        f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; ICA {ica}; respuesta ortostática {orto}.",
     ]
-    txt = "<br>".join(lineas) if html else "\n".join(lineas)
+    txt = "<br>".join(lineas) if html else chr(10).join(lineas)
     return limpiar_patrones_prohibidos(txt)
-
 
 def _paper_dominios_integrados_table(r: Dict[str, Any], df: Optional[pd.DataFrame], ancho_total: float):
     """Sección E del PDF: tabla resumida sin columna de interpretación.
@@ -14119,6 +14133,11 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
             f"Dominio complementario por EA/EES. EA {fmt((rb.get('ea') or (r or {}).get('ea')), 2)}; EES {fmt((rb.get('ees') or (r or {}).get('ees')), 2)}; EA/EES {fmt((rb.get('ava') or (r or {}).get('ava')), 2)}.",
         ],
         [
+            "Índice de compliance arterial",
+            clasificar_ica((rb.get("ca") if isinstance(rb, dict) else None) or ((r or {}).get("ca"))),
+            f"Dominio complementario por CA/ICA basal. CA/ICA {fmt(((rb.get('ca') if isinstance(rb, dict) else None) or ((r or {}).get('ca'))), 2, ' mL/mmHg')}. Se interpreta como marcador de complacencia arterial y poscarga pulsátil en contexto clínico.",
+        ],
+        [
             "Comportamiento ortostático",
             orto_estado,
             "Describe la respuesta al ponerse parado. No modifica ni reemplaza el patrón hemodinámico ACOSTADO/CINTA/SPOT/ESTUDIO BASAL.",
@@ -14128,25 +14147,39 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
 
 
 def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFrame] = None, html: bool = True) -> str:
-    rows = tabla_dominios_integrados_sin_ambiguedad(r or {}, df)[1:]
-    patron = rows[0][1]
-    volemia = rows[1][1]
-    contractilidad = rows[2][1]
-    acoplamiento = rows[3][1]
-    ica = rows[4][1]
-    orto = rows[5][1]
+    """Informe didáctico sin IndexError aunque falte alguna fila.
+
+    La tabla de dominios puede cambiar de longitud si se agregan o retiran dominios.
+    Por eso se accede por nombre de dominio y no por posición fija rows[5].
+    """
+    tabla = tabla_dominios_integrados_sin_ambiguedad(r or {}, df)
+    rows = tabla[1:] if len(tabla) > 1 else []
+
+    def _buscar(nombre: str, resultado_default: str = "NO DISPONIBLE", interpretacion_default: str = "Dominio no disponible.") -> Tuple[str, str]:
+        objetivo = normalizar_txt(nombre)
+        for row in rows:
+            if len(row) >= 3 and objetivo in normalizar_txt(row[0]):
+                return str(row[1]), str(row[2])
+        return resultado_default, interpretacion_default
+
+    patron, patron_txt = _buscar("Patrón hemodinámico")
+    volemia, volemia_txt = _buscar("Volemia")
+    contractilidad, contractilidad_txt = _buscar("Contractilidad")
+    acoplamiento, acoplamiento_txt = _buscar("Acoplamiento")
+    ica, ica_txt = _buscar("compliance arterial")
+    orto, orto_txt = _buscar("ortostático")
+
     lineas = [
-        f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL:** {patron}. {rows[0][2]}",
-        f"**Volemia:** {volemia}. {rows[1][2]}",
-        f"**Contractilidad:** {contractilidad}. {rows[2][2]}",
-        f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {rows[3][2]}",
-        f"**Índice de compliance arterial:** {ica}. {rows[4][2]}",
-        f"**Respuesta ortostática:** {orto}. El registro PARADO describe adaptación postural y no cambia el diagnóstico basal.",
+        f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL:** {patron}. {patron_txt}",
+        f"**Volemia:** {volemia}. {volemia_txt}",
+        f"**Contractilidad:** {contractilidad}. {contractilidad_txt}",
+        f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {acoplamiento_txt}",
+        f"**Índice de compliance arterial:** {ica}. {ica_txt}",
+        f"**Respuesta ortostática:** {orto}. {orto_txt}",
         f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; ICA {ica}; respuesta ortostática {orto}.",
     ]
-    txt = "<br>".join(lineas) if html else "\n".join(lineas)
+    txt = "<br>".join(lineas) if html else chr(10).join(lineas)
     return limpiar_patrones_prohibidos(txt)
-
 
 def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
     return informe_dominios_integrados_texto(r or {}, df, html=True)
@@ -14569,6 +14602,11 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
             f"Dominio complementario por EA/EES. EA {fmt((rb.get('ea') or r.get('ea')), 2)}; EES {fmt((rb.get('ees') or r.get('ees')), 2)}; EA/EES {fmt((rb.get('ava') or r.get('ava')), 2)}.",
         ],
         [
+            "Índice de compliance arterial",
+            clasificar_ica((rb.get("ca") if isinstance(rb, dict) else None) or ((r or {}).get("ca"))),
+            f"Dominio complementario por CA/ICA basal. CA/ICA {fmt(((rb.get('ca') if isinstance(rb, dict) else None) or ((r or {}).get('ca'))), 2, ' mL/mmHg')}. Se interpreta como marcador de complacencia arterial y poscarga pulsátil en contexto clínico.",
+        ],
+        [
             "Comportamiento ortostático",
             orto_estado,
             "Describe la respuesta al ponerse parado. No modifica ni reemplaza el patrón hemodinámico ACOSTADO/CINTA/SPOT/ESTUDIO BASAL.",
@@ -14578,26 +14616,39 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
 
 
 def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFrame] = None, html: bool = True) -> str:
-    """Informe integrado breve con patrón basal idéntico al fenotipo hemodinámico oficial."""
-    rows = tabla_dominios_integrados_sin_ambiguedad(r or {}, df)[1:]
-    patron = rows[0][1]
-    volemia = rows[1][1]
-    contractilidad = rows[2][1]
-    acoplamiento = rows[3][1]
-    ica = rows[4][1]
-    orto = rows[5][1]
+    """Informe didáctico sin IndexError aunque falte alguna fila.
+
+    La tabla de dominios puede cambiar de longitud si se agregan o retiran dominios.
+    Por eso se accede por nombre de dominio y no por posición fija rows[5].
+    """
+    tabla = tabla_dominios_integrados_sin_ambiguedad(r or {}, df)
+    rows = tabla[1:] if len(tabla) > 1 else []
+
+    def _buscar(nombre: str, resultado_default: str = "NO DISPONIBLE", interpretacion_default: str = "Dominio no disponible.") -> Tuple[str, str]:
+        objetivo = normalizar_txt(nombre)
+        for row in rows:
+            if len(row) >= 3 and objetivo in normalizar_txt(row[0]):
+                return str(row[1]), str(row[2])
+        return resultado_default, interpretacion_default
+
+    patron, patron_txt = _buscar("Patrón hemodinámico")
+    volemia, volemia_txt = _buscar("Volemia")
+    contractilidad, contractilidad_txt = _buscar("Contractilidad")
+    acoplamiento, acoplamiento_txt = _buscar("Acoplamiento")
+    ica, ica_txt = _buscar("compliance arterial")
+    orto, orto_txt = _buscar("ortostático")
+
     lineas = [
-        f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL:** {patron}. {rows[0][2]}",
-        f"**Volemia:** {volemia}. {rows[1][2]}",
-        f"**Contractilidad:** {contractilidad}. {rows[2][2]}",
-        f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {rows[3][2]}",
-        f"**Índice de compliance arterial:** {ica}. {rows[4][2]}",
-        f"**Respuesta ortostática:** {orto}. El registro PARADO describe adaptación postural y no cambia el diagnóstico basal.",
+        f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL:** {patron}. {patron_txt}",
+        f"**Volemia:** {volemia}. {volemia_txt}",
+        f"**Contractilidad:** {contractilidad}. {contractilidad_txt}",
+        f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {acoplamiento_txt}",
+        f"**Índice de compliance arterial:** {ica}. {ica_txt}",
+        f"**Respuesta ortostática:** {orto}. {orto_txt}",
         f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; ICA {ica}; respuesta ortostática {orto}.",
     ]
-    txt = "<br>".join(lineas) if html else "\n".join(lineas)
+    txt = "<br>".join(lineas) if html else chr(10).join(lineas)
     return limpiar_patrones_prohibidos(txt)
-
 
 def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
     """Función usada por el panel y por el PDF: no puede contradecir el patrón hemodinámico."""
