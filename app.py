@@ -14316,6 +14316,7 @@ if mostrar_historial:
                 )
 
 def nombre_archivo_pdf_paciente(r: Dict[str, Any], prefijo: str = "") -> str:
+    """Nombre genérico para PDFs secundarios de la app."""
     import re
     paciente = _paper_safe_text(normalizar_nombre_paciente(r.get("paciente")) or "Paciente_SD")
     fecha = _paper_safe_text(r.get("fecha") or "Fecha_SD")
@@ -14325,6 +14326,47 @@ def nombre_archivo_pdf_paciente(r: Dict[str, Any], prefijo: str = "") -> str:
     base = re.sub(r"\s+", " ", base).strip(" ._-")
     if prefijo:
         base = f"{base} - {prefijo}"
+    return base + ".pdf"
+
+
+def nombre_archivo_pdf_medico_integrado(r: Dict[str, Any]) -> str:
+    """
+    Nombre exacto solicitado para el PDF médico integrado:
+    APELLIDO, NOMBRE, FECHA DEL ESTUDIO, CGI, OBRA SOCIAL.pdf
+
+    El apellido y nombre se toman del campo clínico existente "Apellido y nombre"
+    sin intentar dividirlo automáticamente, para no alterar apellidos compuestos.
+    """
+    import re
+
+    paciente_raw = _paper_safe_text(
+        normalizar_nombre_paciente(r.get("paciente")) or "Paciente_SD"
+    )
+
+    # El campo de la app se ingresa como "Apellido y nombre".
+    # Si ya contiene coma, se respeta. Si no, se toma el primer término como
+    # apellido y el resto como nombre/s, evitando alterar nombres ya formateados.
+    if "," in paciente_raw:
+        partes = [p.strip() for p in paciente_raw.split(",", 1)]
+        paciente = f"{partes[0]}, {partes[1]}" if len(partes) == 2 and partes[1] else partes[0]
+    else:
+        partes = paciente_raw.split()
+        paciente = f"{partes[0]}, {' '.join(partes[1:])}" if len(partes) >= 2 else paciente_raw
+
+    fecha = _paper_safe_text(
+        formatear_fecha_ddmmyyyy(r.get("fecha")) or r.get("fecha") or "Fecha_SD"
+    )
+    obra = _paper_safe_text(
+        normalizar_obra_social(r.get("obra_social")) or r.get("obra_social") or "ObraSocial_SD"
+    )
+
+    # Formato: APELLIDO, NOMBRE, FECHA DEL ESTUDIO, CGI, OBRA SOCIAL
+    base = f"{paciente}, {fecha}, CGI, {obra}"
+
+    # Windows no admite estos caracteres; las comas se conservan porque forman
+    # parte del formato solicitado. La fecha 04/07/2026 queda 04-07-2026.
+    base = re.sub(r'[\\/:*?"<>|]+', "-", base)
+    base = re.sub(r"\s+", " ", base).strip(" ._-")
     return base + ".pdf"
 
 nombre = re.sub(r'[\\/:*?"<>|\s]+', "_", str(r.get("paciente") or "paciente").strip())
@@ -14342,7 +14384,7 @@ with col_pdf1:
     if st.button("🧾 Generar PDF informe integrado", key="btn_generar_pdf_integrado"):
         try:
             st.session_state["pdf_integrado_bytes"] = generar_pdf_integrado(df_final, contexto_embarazo)
-            st.session_state["pdf_integrado_nombre"] = nombre_archivo_pdf_paciente(r, "Informe CGI integrado")
+            st.session_state["pdf_integrado_nombre"] = nombre_archivo_pdf_medico_integrado(r)
             st.success("PDF integrado generado correctamente.")
         except Exception as e:
             st.session_state.pop("pdf_integrado_bytes", None)
@@ -14352,7 +14394,7 @@ with col_pdf1:
         st.download_button(
             "📄 Descargar PDF informe integrado",
             data=st.session_state["pdf_integrado_bytes"],
-            file_name=st.session_state.get("pdf_integrado_nombre", nombre_archivo_pdf_paciente(r, "Informe CGI integrado")),
+            file_name=st.session_state.get("pdf_integrado_nombre", nombre_archivo_pdf_medico_integrado(r)),
             mime="application/pdf",
             key="download_pdf_integrado",
         )
