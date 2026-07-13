@@ -13969,93 +13969,376 @@ def guardar_historial_lote_cgi(filas: List[Dict[str, Any]]) -> Tuple[int, int]:
     return (len(filas) if ok_global or guardados_usuario else 0, len(filas))
 
 
+
+
+# =========================================================
+# AGRUPACIÓN DE PDF COMPLEMENTARIOS CGI
+# Un mismo estudio se compone de dos PDF:
+#   - archivo terminado en "1": formato completo
+#   - archivo sin "1": formato de 4 hojas
+# Ambos se integran ANTES de validar métricas y generar el informe.
+# =========================================================
+
+def _normalizar_stem_pareja_cgi(nombre_archivo: str) -> str:
+    """Normaliza un nombre para comparar archivos sin depender de mayúsculas o separadores."""
+    stem = Path(str(nombre_archivo or "")).stem
+    stem = normalizar_txt(stem)
+    stem = re.sub(r"[\[\]{}()]+", " ", stem)
+    stem = re.sub(r"[._\-]+", " ", stem)
+    stem = re.sub(r"\s+", " ", stem).strip()
+    return stem
+
+
+def _stem_sin_sufijo_complementario_cgi(nombre_archivo: str) -> Optional[str]:
+    """Devuelve el stem sin el sufijo final 1/(1), solo como candidato de pareja.
+
+    El sufijo se elimina únicamente para buscar un archivo base realmente presente
+    en el mismo lote. De ese modo no se altera un nombre legítimo terminado en 1.
+    """
+    stem = Path(str(nombre_archivo or "")).stem.strip()
+    patrones = [
+        r"^(.*?)[\s._\-]*\(\s*1\s*\)\s*$",
+        r"^(.*?)[\s._\-]+1\s*$",
+        r"^(.*?)1\s*$",
+    ]
+    for pat in patrones:
+        m = re.match(pat, stem, flags=re.IGNORECASE)
+        if m and m.group(1).strip():
+            return m.group(1).strip(" ._-()")
+    return None
+
+
+def _tiene_sufijo_complementario_cgi(nombre_archivo: str) -> bool:
+    return bool(_stem_sin_sufijo_complementario_cgi(nombre_archivo))
+
+
+def _agrupar_archivos_complementarios_cgi(archivos: List[Any]) -> List[Dict[str, Any]]:
+    """Agrupa automáticamente archivo base + archivo terminado en 1.
+
+    Ejemplos reconocidos:
+      PACIENTE.pdf + PACIENTE1.pdf
+      PACIENTE.pdf + PACIENTE 1.pdf
+      PACIENTE.pdf + PACIENTE_1.pdf
+      PACIENTE.pdf + PACIENTE (1).pdf
+
+    Los archivos sin pareja permanecen como grupos individuales para no perderlos;
+    se intentan procesar y quedan claramente señalados en el resumen.
+    """
+    entradas: List[Dict[str, Any]] = []
+    for idx, archivo in enumerate(list(archivos or [])):
+        nombre = str(getattr(archivo, "name", f"estudio_{idx+1}.pdf") or f"estudio_{idx+1}.pdf")
+        entradas.append({
+            "indice": idx,
+            "archivo": archivo,
+            "nombre": nombre,
+            "norm": _normalizar_stem_pareja_cgi(nombre),
+            "base_sufijo": _stem_sin_sufijo_complementario_cgi(nombre),
+        })
+
+    por_norm: Dict[str, List[int]] = {}
+    for i, e in enumerate(entradas):
+        por_norm.setdefault(e["norm"], []).append(i)
+
+    usados: set = set()
+    grupos: List[Dict[str, Any]] = []
+
+    # Primero formar parejas inequívocas: el archivo con sufijo debe tener su base exacta.
+    for i, e in enumerate(entradas):
+        if i in usados or not e.get("base_sufijo"):
+            continue
+        base_norm = _normalizar_stem_pareja_cgi(str(e["base_sufijo"]) + ".pdf")
+        candidatos = [j for j in por_norm.get(base_norm, []) if j not in usados and j != i]
+        if not candidatos:
+            continue
+        j = candidatos[0]
+        base = entradas[j]
+        usados.update({i, j})
+        grupos.append({
+            "indice_orden": min(e["indice"], base["indice"]),
+            "clave": base_norm or e["norm"],
+            "nombre_logico": Path(base["nombre"]).stem,
+            "archivos": [e, base],  # convención solicitada: terminado en 1 primero
+            "pareado": True,
+            "archivo_terminado_1": e["nombre"],
+            "archivo_sin_1": base["nombre"],
+        })
+
+    # Mantener archivos huérfanos como estudios individuales en vez de descartarlos.
+    for i, e in enumerate(entradas):
+        if i in usados:
+            continue
+        grupos.append({
+            "indice_orden": e["indice"],
+            "clave": e["norm"],
+            "nombre_logico": Path(e["nombre"]).stem,
+            "archivos": [e],
+            "pareado": False,
+            "archivo_terminado_1": e["nombre"] if e.get("base_sufijo") else "",
+            "archivo_sin_1": "" if e.get("base_sufijo") else e["nombre"],
+        })
+
+    grupos.sort(key=lambda g: g.get("indice_orden", 0))
+    for n, g in enumerate(grupos, start=1):
+        g["numero_estudio"] = n
+    return grupos
+
+
+def _contar_paginas_pdf_cgi(pdf_bytes: bytes) -> Optional[int]:
+    if not pdf_bytes:
+        return None
+    try:
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        n = len(doc)
+        doc.close()
+        return int(n)
+    except Exception:
+        try:
+            from pypdf import PdfReader
+            return len(PdfReader(io.BytesIO(pdf_bytes)).pages)
+        except Exception:
+            return None
+
+
+def _preparar_componentes_grupo_cgi(grupo: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Lee bytes, cuenta páginas y asigna rol completo/4 hojas sin depender solo del nombre."""
+    componentes: List[Dict[str, Any]] = []
+    for entrada in grupo.get("archivos", []) or []:
+        archivo = entrada.get("archivo")
+        nombre = entrada.get("nombre") or getattr(archivo, "name", "estudio.pdf")
+        pdf_bytes = _obtener_bytes_upload_cgi(archivo)
+        componentes.append({
+            **entrada,
+            "nombre": nombre,
+            "bytes": pdf_bytes,
+            "paginas": _contar_paginas_pdf_cgi(pdf_bytes),
+            "rol": "complementario",
+        })
+
+    if len(componentes) == 2:
+        exactos_4 = [c for c in componentes if c.get("paginas") == 4]
+        if len(exactos_4) == 1:
+            cuatro = exactos_4[0]
+            completo = componentes[0] if componentes[1] is cuatro else componentes[1]
+        else:
+            # Convención informada por el usuario: terminado en 1 = completo;
+            # sin 1 = formato de 4 hojas. Si el número de páginas es concluyente,
+            # la regla anterior tiene prioridad.
+            completo = next((c for c in componentes if _tiene_sufijo_complementario_cgi(c.get("nombre", ""))), componentes[0])
+            cuatro = componentes[0] if componentes[1] is completo else componentes[1]
+        completo["rol"] = "formato_completo"
+        cuatro["rol"] = "formato_4_hojas"
+        return [completo, cuatro]
+
+    if componentes:
+        componentes[0]["rol"] = "archivo_unico_sin_pareja"
+    return componentes
+
+
+def _integrar_dataframes_grupo_cgi(dataframes: List[pd.DataFrame]) -> pd.DataFrame:
+    validos = [d for d in dataframes if isinstance(d, pd.DataFrame) and not d.empty]
+    if not validos:
+        return pd.DataFrame()
+    integrado = validos[0]
+    for siguiente in validos[1:]:
+        integrado = integrar_datos(integrado, siguiente)
+    integrado.attrs = {}
+    return integrado.reset_index(drop=True)
+
+
+def _seleccionar_mejor_curva_grupo_cgi(curvas: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    validas = [c for c in curvas if isinstance(c, dict) and c.get("ok")]
+    if not validas:
+        return None
+    return max(validas, key=lambda c: float((c.get("metadata") or {}).get("score") or 0.0))
+
+
 def procesar_lote_cgi(
     archivos: List[Any], usuario_info: Dict[str, Any], lectura_rapida: bool = True,
     guardar_historial: bool = True, incluir_originales: bool = False,
     exigir_curva: bool = False,
 ) -> Dict[str, Any]:
+    """Procesa por ESTUDIO/PACIENTE, integrando primero sus dos PDF complementarios."""
     import zipfile
+
     archivos = list(archivos or [])[:100]
-    reportes = []
-    resumen_rows = []
-    errores_rows = []
-    filas_historial = []
-    usados = set()
+    grupos = _agrupar_archivos_complementarios_cgi(archivos)
+    reportes: List[Dict[str, Any]] = []
+    resumen_rows: List[Dict[str, Any]] = []
+    errores_rows: List[Dict[str, Any]] = []
+    filas_historial: List[Dict[str, Any]] = []
+    usados: set = set()
     zip_buffer = io.BytesIO()
     previo_originales = st.session_state.get("pdfs_originales_cgi")
     previa_curva = st.session_state.get("curva_real_cgi_actual")
 
-    barra = st.progress(0.0, text="Preparando procesamiento por lotes...")
+    barra = st.progress(0.0, text="Agrupando PDF complementarios por paciente...")
     try:
         with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            total = max(len(archivos), 1)
-            for idx, archivo in enumerate(archivos, start=1):
-                nombre_origen = getattr(archivo, "name", f"estudio_{idx}.pdf")
-                barra.progress((idx - 1) / total, text=f"Procesando {idx}/{len(archivos)}: {nombre_origen}")
+            total_grupos = max(len(grupos), 1)
+            for gidx, grupo in enumerate(grupos, start=1):
+                nombres_grupo = [str(x.get("nombre") or "") for x in grupo.get("archivos", [])]
+                origen_compuesto = " + ".join(nombres_grupo)
+                barra.progress(
+                    (gidx - 1) / total_grupos,
+                    text=f"Integrando estudio {gidx}/{len(grupos)}: {origen_compuesto}",
+                )
                 try:
-                    pdf_bytes = _obtener_bytes_upload_cgi(archivo)
-                    if not pdf_bytes:
-                        raise ValueError("El archivo está vacío o no pudo leerse.")
-                    if not str(nombre_origen).lower().endswith(".pdf"):
-                        raise ValueError("El lote CGI admite únicamente archivos PDF.")
+                    componentes = _preparar_componentes_grupo_cgi(grupo)
+                    if not componentes:
+                        raise ValueError("No se encontraron archivos para este estudio.")
+                    for comp in componentes:
+                        if not comp.get("bytes"):
+                            raise ValueError(f"El archivo {comp.get('nombre')} está vacío o no pudo leerse.")
+                        if not str(comp.get("nombre", "")).lower().endswith(".pdf"):
+                            raise ValueError("El lote CGI admite únicamente archivos PDF.")
 
-                    # Aislamiento total por paciente: PDF fuente y curva propios.
-                    st.session_state["pdfs_originales_cgi"] = [{"nombre": nombre_origen, "bytes": pdf_bytes}]
-                    curva = digitalizar_curva_real_cgi_pdf(pdf_bytes)
-                    st.session_state["curva_real_cgi_actual"] = curva if curva.get("ok") else None
-                    if exigir_curva and not curva.get("ok"):
-                        raise ValueError("No se pudo digitalizar la curva real: " + str(curva.get("error") or "sin detalle"))
+                    # Los dos PDF del mismo paciente se mantienen juntos para trazabilidad
+                    # y para que el informe pueda incorporar capturas de ambas fuentes.
+                    st.session_state["pdfs_originales_cgi"] = [
+                        {"nombre": c["nombre"], "bytes": c["bytes"]} for c in componentes
+                    ]
 
-                    df = _leer_pdf_lote_cgi(nombre_origen, pdf_bytes, lectura_rapida=lectura_rapida)
-                    if df is None or df.empty:
-                        raise ValueError("No se extrajeron datos clínicos del PDF.")
+                    # Digitalizar cada PDF de forma independiente y elegir la curva de mayor
+                    # calidad para el cuerpo del informe. Se exportan todas las curvas válidas.
+                    curvas: List[Dict[str, Any]] = []
+                    for comp in componentes:
+                        curva_i = digitalizar_curva_real_cgi_pdf(comp["bytes"])
+                        curva_i = dict(curva_i or {})
+                        curva_i["archivo_origen"] = comp["nombre"]
+                        curva_i["rol_pdf"] = comp.get("rol")
+                        curvas.append(curva_i)
+                    mejor_curva = _seleccionar_mejor_curva_grupo_cgi(curvas)
+                    st.session_state["curva_real_cgi_actual"] = mejor_curva
+                    if exigir_curva and mejor_curva is None:
+                        detalles = "; ".join(
+                            f"{c.get('archivo_origen')}: {c.get('error') or 'sin curva'}" for c in curvas
+                        )
+                        raise ValueError("No se pudo digitalizar una curva real válida en la pareja: " + detalles)
+
+                    # Leer ambos PDF por separado y recién después integrarlos. No se valida
+                    # la cantidad de métricas sobre cada archivo aislado porque son complementarios.
+                    dfs: List[pd.DataFrame] = []
+                    advertencias_lectura: List[str] = []
+                    for comp in componentes:
+                        try:
+                            df_i = _leer_pdf_lote_cgi(
+                                comp["nombre"], comp["bytes"], lectura_rapida=lectura_rapida
+                            )
+                            if isinstance(df_i, pd.DataFrame) and not df_i.empty:
+                                dfs.append(df_i)
+                            else:
+                                advertencias_lectura.append(f"{comp['nombre']}: sin datos estructurados")
+                        except Exception as e:
+                            advertencias_lectura.append(f"{comp['nombre']}: {e}")
+
+                    df = _integrar_dataframes_grupo_cgi(dfs)
+                    if df.empty:
+                        raise ValueError(
+                            "No se extrajeron datos clínicos de la pareja complementaria. "
+                            + (" | ".join(advertencias_lectura) if advertencias_lectura else "")
+                        )
+
                     r = extraer_resumen_integrado(df) or {}
-                    metricas_utiles = sum(limpiar_numero(r.get(k)) is not None for k in ["pas", "pad", "fc", "ic", "irv", "cft", "ca", "iv", "iac", "cts"])
+                    metricas_utiles = sum(
+                        limpiar_numero(r.get(k)) is not None
+                        for k in ["pas", "pad", "fc", "ic", "irv", "cft", "ca", "iv", "iac", "cts"]
+                    )
                     if metricas_utiles < 2:
-                        raise ValueError("Datos insuficientes: se reconocieron menos de dos métricas hemodinámicas válidas.")
+                        detalle = " | ".join(advertencias_lectura)
+                        raise ValueError(
+                            "Datos insuficientes después de integrar ambos PDF: se reconocieron "
+                            f"{metricas_utiles} métricas hemodinámicas válidas. {detalle}"
+                        )
 
                     contexto = _contexto_embarazo_automatico_lote_cgi(df)
                     informe_txt = generar_informe_texto(df, contexto)
                     pdf_informe = generar_pdf_integrado(df, contexto)
                     if not pdf_informe:
                         raise ValueError("El generador devolvió un PDF vacío.")
+
                     nombre_salida = _nombre_unico_cgi(nombre_archivo_pdf_medico_integrado(r), usados)
                     reportes.append({
-                        "nombre": nombre_salida, "bytes": pdf_informe, "paciente": r.get("paciente"),
-                        "origen": nombre_origen, "curva_ok": bool(curva.get("ok")),
+                        "nombre": nombre_salida,
+                        "bytes": pdf_informe,
+                        "paciente": r.get("paciente"),
+                        "origen": origen_compuesto,
+                        "archivos_origen": nombres_grupo,
+                        "pareja_complementaria": bool(grupo.get("pareado")),
+                        "curva_ok": mejor_curva is not None,
                     })
                     zf.writestr(f"informes_pdf/{nombre_salida}", pdf_informe)
+
                     if incluir_originales:
-                        zf.writestr(f"pdf_originales/{idx:03d}_{_sanitizar_nombre_zip_cgi(nombre_origen)}", pdf_bytes)
-                    curva_base = _sanitizar_nombre_zip_cgi(Path(nombre_salida).stem, f"curva_{idx}")
-                    if curva.get("ok"):
-                        zf.writestr(f"curvas_digitalizadas/{curva_base}.png", curva.get("png_bytes") or b"")
-                        zf.writestr(f"curvas_digitalizadas/{curva_base}.csv", curva.get("csv_bytes") or b"")
+                        for cidx, comp in enumerate(componentes, start=1):
+                            zf.writestr(
+                                f"pdf_originales/{gidx:03d}_{cidx}_{_sanitizar_nombre_zip_cgi(comp['nombre'])}",
+                                comp["bytes"],
+                            )
+
+                    curva_base = _sanitizar_nombre_zip_cgi(Path(nombre_salida).stem, f"curva_{gidx}")
+                    curvas_ok = 0
+                    for cidx, curva_i in enumerate(curvas, start=1):
+                        if not curva_i.get("ok"):
+                            continue
+                        curvas_ok += 1
+                        fuente = _sanitizar_nombre_zip_cgi(
+                            Path(str(curva_i.get("archivo_origen") or f"fuente_{cidx}")).stem,
+                            f"fuente_{cidx}",
+                        )
+                        zf.writestr(
+                            f"curvas_digitalizadas/{curva_base}__{fuente}.png",
+                            curva_i.get("png_bytes") or b"",
+                        )
+                        zf.writestr(
+                            f"curvas_digitalizadas/{curva_base}__{fuente}.csv",
+                            curva_i.get("csv_bytes") or b"",
+                        )
 
                     fila_integrada = construir_fila_paciente_integrada(df, contexto)
-                    resumen = fila_integrada.iloc[0].to_dict() if isinstance(fila_integrada, pd.DataFrame) and not fila_integrada.empty else {}
+                    resumen = (
+                        fila_integrada.iloc[0].to_dict()
+                        if isinstance(fila_integrada, pd.DataFrame) and not fila_integrada.empty
+                        else {}
+                    )
+                    completo = next((c for c in componentes if c.get("rol") == "formato_completo"), None)
+                    cuatro = next((c for c in componentes if c.get("rol") == "formato_4_hojas"), None)
                     resumen.update({
-                        "archivo_origen": nombre_origen,
+                        "archivo_origen": origen_compuesto,
+                        "pdf_formato_completo": completo.get("nombre") if completo else "",
+                        "pdf_formato_4_hojas": cuatro.get("nombre") if cuatro else "",
+                        "pdfs_integrados": len(componentes),
+                        "pareja_complementaria": "SI" if grupo.get("pareado") else "NO - archivo sin pareja",
                         "informe_generado": nombre_salida,
                         "estado": "EXITOSO",
-                        "curva_digitalizada": "SI" if curva.get("ok") else "NO",
-                        "curva_pagina": (curva.get("metadata") or {}).get("pagina"),
-                        "curva_puntos": (curva.get("metadata") or {}).get("puntos"),
-                        "curva_observacion": "" if curva.get("ok") else curva.get("error"),
+                        "curvas_digitalizadas": curvas_ok,
+                        "curva_seleccionada_archivo": mejor_curva.get("archivo_origen") if mejor_curva else "",
+                        "curva_pagina": ((mejor_curva or {}).get("metadata") or {}).get("pagina"),
+                        "curva_puntos": ((mejor_curva or {}).get("metadata") or {}).get("puntos"),
+                        "observaciones_integracion": " | ".join(advertencias_lectura),
                     })
                     resumen_rows.append(resumen)
                     if guardar_historial:
-                        filas_historial.append(construir_fila_historial_app(usuario_info, df, contexto, informe_txt))
+                        filas_historial.append(
+                            construir_fila_historial_app(usuario_info, df, contexto, informe_txt)
+                        )
+
                 except Exception as e:
                     errores_rows.append({
-                        "archivo_origen": nombre_origen,
+                        "archivo_origen": origen_compuesto,
+                        "archivos_de_la_pareja": len(nombres_grupo),
+                        "pareja_complementaria": "SI" if grupo.get("pareado") else "NO",
                         "estado": "ERROR",
                         "motivo": str(e),
                     })
-                barra.progress(idx / total, text=f"Procesados {idx}/{len(archivos)}")
+
+                barra.progress(
+                    gidx / total_grupos,
+                    text=f"Estudios procesados {gidx}/{len(grupos)}",
+                )
 
             resumen_df = pd.DataFrame(resumen_rows)
-            errores_df = pd.DataFrame(errores_rows, columns=["archivo_origen", "estado", "motivo"])
+            errores_df = pd.DataFrame(errores_rows)
             historial_guardados = 0
             historial_total = len(filas_historial)
             if guardar_historial and filas_historial:
@@ -14065,26 +14348,38 @@ def procesar_lote_cgi(
             zf.writestr("resumen_lote_cgi.xlsx", excel_lote)
             if not errores_df.empty:
                 zf.writestr("errores_lote.csv", errores_df.to_csv(index=False).encode("utf-8-sig"))
+
+            parejas = sum(1 for g in grupos if g.get("pareado"))
+            huerfanos = len(grupos) - parejas
             leeme = (
-                "PROCESAMIENTO MASIVO CGI\n"
+                "PROCESAMIENTO MASIVO CGI CON PDF COMPLEMENTARIOS\n"
                 f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
-                f"Archivos recibidos: {len(archivos)}\n"
+                f"PDF recibidos: {len(archivos)}\n"
+                f"Estudios/pacientes detectados: {len(grupos)}\n"
+                f"Parejas completas detectadas: {parejas}\n"
+                f"Archivos sin pareja: {huerfanos}\n"
                 f"Informes generados: {len(reportes)}\n"
-                f"Archivos con error: {len(errores_rows)}\n"
-                f"Curvas digitalizadas: {sum(1 for x in reportes if x.get('curva_ok'))}\n"
+                f"Estudios con error: {len(errores_rows)}\n"
                 f"Registros agregados/actualizados en historial: {historial_guardados}/{historial_total}\n\n"
-                "Cada informe fue generado de forma independiente. Un error no detiene el resto del lote.\n"
-                "Las curvas se exportan como PNG real del PDF y CSV normalizado.\n"
+                "Regla de integración: el PDF terminado en 1 y el PDF base sin 1 se procesan "
+                "como un único estudio del mismo paciente y fecha. La validación clínica se realiza "
+                "después de fusionar ambos documentos.\n"
+                "Cada PDF se digitaliza de forma independiente; el informe usa la curva válida con "
+                "mejor puntuación y el ZIP conserva todas las curvas recuperadas.\n"
             )
             zf.writestr("LEEME.txt", leeme.encode("utf-8"))
+
         return {
             "reportes": reportes,
             "resumen": pd.DataFrame(resumen_rows),
             "errores": pd.DataFrame(errores_rows),
             "zip_bytes": zip_buffer.getvalue(),
             "zip_nombre": f"Informes_CGI_lote_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-            "historial_guardados": historial_guardados if 'historial_guardados' in locals() else 0,
-            "historial_total": historial_total if 'historial_total' in locals() else 0,
+            "historial_guardados": historial_guardados if "historial_guardados" in locals() else 0,
+            "historial_total": historial_total if "historial_total" in locals() else 0,
+            "pdf_recibidos": len(archivos),
+            "estudios_detectados": len(grupos),
+            "parejas_detectadas": sum(1 for g in grupos if g.get("pareado")),
         }
     finally:
         barra.empty()
@@ -14097,29 +14392,60 @@ def procesar_lote_cgi(
         else:
             st.session_state["curva_real_cgi_actual"] = previa_curva
 
-
 def render_modulo_lotes_cgi(
     archivos_lote: List[Any], usuario_info: Dict[str, Any], lectura_rapida: bool,
     guardar_historial: bool, incluir_originales: bool, exigir_curva: bool,
 ) -> None:
     st.title("Procesamiento por lotes de informes CGI")
-    st.caption("Importe hasta 100 PDF. Cada paciente se procesa de forma independiente y el resultado se entrega como PDF individual y ZIP conjunto.")
+    st.caption(
+        "Importe hasta 100 PDF. La app detecta automáticamente cada pareja complementaria "
+        "(archivo terminado en 1 + archivo base sin 1), integra ambos documentos y genera "
+        "un único informe por paciente."
+    )
     archivos_lote = list(archivos_lote or [])
     if len(archivos_lote) > 100:
         st.warning("Se recibieron más de 100 archivos. Solo se procesarán los primeros 100.")
         archivos_lote = archivos_lote[:100]
-    if archivos_lote:
-        st.info(f"PDF seleccionados: {len(archivos_lote)}")
-        with st.expander("Ver archivos seleccionados", expanded=False):
-            st.dataframe(pd.DataFrame({"N°": range(1, len(archivos_lote)+1), "Archivo": [getattr(x, 'name', '') for x in archivos_lote]}), use_container_width=True)
-    else:
-        st.info("Seleccione los PDF CGI en el panel lateral.")
 
-    if st.button("⚙️ Procesar lote CGI y generar informes", type="primary", disabled=not bool(archivos_lote), key="btn_procesar_lote_cgi"):
-        with st.spinner("Extrayendo datos, digitalizando curvas y generando informes individuales..."):
+    grupos = _agrupar_archivos_complementarios_cgi(archivos_lote)
+    if archivos_lote:
+        parejas = sum(1 for g in grupos if g.get("pareado"))
+        huerfanos = len(grupos) - parejas
+        st.info(
+            f"PDF seleccionados: {len(archivos_lote)} · Estudios/pacientes detectados: {len(grupos)} · "
+            f"Parejas complementarias: {parejas} · Sin pareja: {huerfanos}"
+        )
+        vista = []
+        for g in grupos:
+            vista.append({
+                "Estudio": g.get("numero_estudio"),
+                "Formato completo (termina en 1)": g.get("archivo_terminado_1") or "—",
+                "Formato 4 hojas (sin 1)": g.get("archivo_sin_1") or "—",
+                "Estado de agrupación": "PAREJA COMPLETA" if g.get("pareado") else "FALTA ARCHIVO COMPLEMENTARIO",
+            })
+        with st.expander("Ver agrupación automática por paciente", expanded=True):
+            st.dataframe(pd.DataFrame(vista), use_container_width=True, hide_index=True)
+        if huerfanos:
+            st.warning(
+                "Hay archivos sin su complemento. Se intentarán procesar, pero para un informe CGI completo "
+                "debe cargarse tanto el PDF terminado en 1 como el PDF base sin 1."
+            )
+    else:
+        st.info("Seleccione en el panel lateral ambos PDF complementarios de cada paciente.")
+
+    if st.button(
+        "⚙️ Integrar parejas y generar informes CGI",
+        type="primary",
+        disabled=not bool(archivos_lote),
+        key="btn_procesar_lote_cgi",
+    ):
+        with st.spinner("Agrupando parejas, integrando datos y generando informes individuales..."):
             resultado = procesar_lote_cgi(
-                archivos_lote, usuario_info, lectura_rapida=lectura_rapida,
-                guardar_historial=guardar_historial, incluir_originales=incluir_originales,
+                archivos_lote,
+                usuario_info,
+                lectura_rapida=lectura_rapida,
+                guardar_historial=guardar_historial,
+                incluir_originales=incluir_originales,
                 exigir_curva=exigir_curva,
             )
         st.session_state["resultado_lote_cgi"] = resultado
@@ -14129,13 +14455,18 @@ def render_modulo_lotes_cgi(
         return
     reportes = resultado.get("reportes") or []
     errores = resultado.get("errores")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Informes generados", len(reportes))
-    c2.metric("Errores", 0 if errores is None else len(errores))
-    c3.metric("Historial actualizado", f"{resultado.get('historial_guardados', 0)}/{resultado.get('historial_total', 0)}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("PDF recibidos", resultado.get("pdf_recibidos", len(archivos_lote)))
+    c2.metric("Estudios integrados", resultado.get("estudios_detectados", len(reportes)))
+    c3.metric("Informes generados", len(reportes))
+    c4.metric("Errores", 0 if errores is None else len(errores))
+    st.caption(
+        f"Parejas detectadas: {resultado.get('parejas_detectadas', 0)} · "
+        f"Historial actualizado: {resultado.get('historial_guardados', 0)}/{resultado.get('historial_total', 0)}"
+    )
 
     if reportes:
-        st.success("El lote fue procesado. Puede descargar el ZIP completo o cada informe individual.")
+        st.success("Las parejas complementarias fueron integradas. Puede descargar el ZIP o cada informe individual.")
         st.download_button(
             "📦 Descargar ZIP con todos los informes CGI",
             data=resultado.get("zip_bytes") or b"",
@@ -14147,7 +14478,12 @@ def render_modulo_lotes_cgi(
         with st.expander("Descargas individuales por paciente", expanded=True):
             for i, item in enumerate(reportes, start=1):
                 col_a, col_b = st.columns([3, 1])
-                col_a.markdown(f"**{i}. {item.get('paciente') or 'Paciente'}**  \n{item.get('nombre')}")
+                fuentes = " + ".join(item.get("archivos_origen") or [])
+                col_a.markdown(
+                    f"**{i}. {item.get('paciente') or 'Paciente'}**  \n"
+                    f"{item.get('nombre')}  \n"
+                    f"Fuentes integradas: {fuentes}"
+                )
                 col_b.download_button(
                     "Descargar PDF",
                     data=item.get("bytes") or b"",
@@ -14157,7 +14493,7 @@ def render_modulo_lotes_cgi(
                     use_container_width=True,
                 )
     elif resultado.get("zip_bytes"):
-        st.warning("No se generaron informes válidos. El ZIP contiene el resumen de errores.")
+        st.warning("No se generaron informes válidos. El ZIP contiene el resumen de errores por pareja.")
         st.download_button(
             "📦 Descargar ZIP de control del lote",
             data=resultado.get("zip_bytes") or b"",
@@ -14168,7 +14504,7 @@ def render_modulo_lotes_cgi(
 
     resumen = resultado.get("resumen")
     if isinstance(resumen, pd.DataFrame) and not resumen.empty:
-        st.subheader("Resumen de estudios exitosos")
+        st.subheader("Resumen de estudios integrados exitosamente")
         st.dataframe(resumen, use_container_width=True)
     if isinstance(errores, pd.DataFrame) and not errores.empty:
         st.subheader("Estudios con errores")
@@ -14255,7 +14591,7 @@ with st.sidebar:
             type=["pdf"],
             accept_multiple_files=True,
             key="archivos_lote_cgi",
-            help="Cada PDF se procesa como un paciente independiente. Un error no interrumpe el resto del lote.",
+            help="Cargue los dos PDF complementarios de cada paciente: el terminado en 1 y el archivo base sin 1. La app los agrupa automáticamente antes de generar el informe.",
         )
         lote_guardar_historial = st.checkbox(
             "Agregar estudios exitosos al historial Excel",
@@ -14269,9 +14605,9 @@ with st.sidebar:
             key="lote_incluir_originales_cgi",
         )
         lote_exigir_curva = st.checkbox(
-            "Exigir digitalización de curva para considerar exitoso el estudio",
+            "Exigir al menos una curva válida por pareja para considerar exitoso el estudio",
             value=False,
-            help="Si está desactivado, el informe se genera aunque la curva no pueda segmentarse; el estado queda registrado en el Excel del lote.",
+            help="Cada PDF se intenta digitalizar por separado. Si está activado, se exige al menos una curva válida entre los dos documentos complementarios.",
             key="lote_exigir_curva_cgi",
         )
     st.info("Dependencias recomendadas: pdfplumber, pypdf, pymupdf, Pillow, matplotlib, reportlab y openpyxl.")
