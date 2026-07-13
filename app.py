@@ -8898,6 +8898,25 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     for i, ref in enumerate(REFERENCIAS_BIBLIOGRAFICAS, start=1):
         story.append(_paper_paragraph(f"{i}. {ref}", stl["PaperSmall"]))
 
+    # Curva real digitalizada del PDF actual (modo individual o por lotes).
+    try:
+        curva_real = curva_real_cgi_desde_sesion() if "curva_real_cgi_desde_sesion" in globals() else None
+        if curva_real and curva_real.get("png_bytes"):
+            story.append(Spacer(1, 8))
+            story.append(_paper_paragraph("Curva real digitalizada del estudio CGI", stl["PaperH"]))
+            meta_curva = curva_real.get("metadata") or {}
+            descripcion_curva = (
+                f"Digitalización independiente desde el PDF original. Página {meta_curva.get('pagina', 'N/D')}; "
+                f"método: {meta_curva.get('metodo', 'segmentación de trazo')}; "
+                f"puntos recuperados: {meta_curva.get('puntos', 0)}. "
+                "El trazado se conserva como imagen real y como serie normalizada para auditoría del lote."
+            )
+            story.append(_paper_paragraph(descripcion_curva, stl["PaperBody"]))
+            curva_io = io.BytesIO(curva_real.get("png_bytes"))
+            story.append(Image(curva_io, width=ancho, height=ancho*0.42, kind="proportional"))
+    except Exception as e:
+        story.append(_paper_paragraph(f"No se pudo insertar la curva real digitalizada: {e}", stl["PaperSmall"]))
+
     capturas_originales = capturas_pdfs_originales_desde_sesion()
     if capturas_originales:
         story.append(Spacer(1, 8))
@@ -13549,6 +13568,613 @@ def _aplicar_cache_a_funciones_pesadas() -> None:
 
 _aplicar_cache_a_funciones_pesadas()
 
+
+# =========================================================
+# PROCESAMIENTO MASIVO CGI: HASTA 100 PDF POR LOTE
+# =========================================================
+
+def _obtener_bytes_upload_cgi(uploaded_file: Any) -> bytes:
+    if uploaded_file is None:
+        return b""
+    try:
+        return bytes(uploaded_file.getvalue())
+    except Exception:
+        try:
+            pos = uploaded_file.tell()
+            data = uploaded_file.read()
+            uploaded_file.seek(pos)
+            return bytes(data or b"")
+        except Exception:
+            return b""
+
+
+def _sanitizar_nombre_zip_cgi(valor: Any, fallback: str = "archivo") -> str:
+    s = str(valor or "").strip() or fallback
+    s = re.sub(r'[\\/:*?"<>|]+', "-", s)
+    s = re.sub(r"\s+", " ", s).strip(" ._-")
+    return s[:180] or fallback
+
+
+def _nombre_unico_cgi(nombre: str, usados: set) -> str:
+    nombre = _sanitizar_nombre_zip_cgi(nombre, "Informe_CGI.pdf")
+    p = Path(nombre)
+    stem = p.stem or "Informe_CGI"
+    ext = p.suffix or ".pdf"
+    candidato = f"{stem}{ext}"
+    n = 2
+    while candidato.casefold() in usados:
+        candidato = f"{stem} ({n}){ext}"
+        n += 1
+    usados.add(candidato.casefold())
+    return candidato
+
+
+def _paciente_desde_nombre_archivo_cgi(nombre_archivo: str) -> str:
+    base = Path(str(nombre_archivo or "")).stem
+    base = re.sub(r"[_-]+", " ", base)
+    base = re.sub(r"\b(?:CGI|ICG|ZLOGIC|Z-LOGIC|INFORME|REPORTE|ESTUDIO|BASAL|PARADO|CINTA|SPOT|PDF|COPIA|FINAL)\b", " ", base, flags=re.I)
+    base = re.sub(r"\b\d{1,4}\b", " ", base)
+    base = re.sub(r"\s+", " ", base).strip(" ,.;:_-")
+    return base.title() if len(base) >= 3 else "Paciente SD"
+
+
+def _completitud_df_cgi(df: pd.DataFrame) -> int:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return 0
+    try:
+        r = extraer_resumen_integrado(df) or {}
+    except Exception:
+        return 0
+    claves = ["paciente", "edad", "fecha", "pas", "pad", "fc", "ic", "irv", "cft", "ca", "iv", "iac", "cts", "ea", "ees"]
+    return sum(1 for k in claves if es_valor_util(r.get(k)))
+
+
+def _asegurar_paciente_lote_cgi(df: pd.DataFrame, nombre_archivo: str) -> pd.DataFrame:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    out = df.copy()
+    try:
+        r = extraer_resumen_integrado(out) or {}
+        paciente = normalizar_nombre_paciente(r.get("paciente"))
+    except Exception:
+        paciente = None
+    if not paciente:
+        paciente = _paciente_desde_nombre_archivo_cgi(nombre_archivo)
+        if "Paciente" not in out.columns:
+            out["Paciente"] = paciente
+        else:
+            out["Paciente"] = out["Paciente"].where(out["Paciente"].map(es_valor_util), paciente)
+            if out["Paciente"].isna().all() or not any(normalizar_nombre_paciente(x) for x in out["Paciente"].tolist()):
+                out["Paciente"] = paciente
+    out.attrs = {}
+    return out
+
+
+def _leer_pdf_lote_cgi(nombre_archivo: str, pdf_bytes: bytes, lectura_rapida: bool = True) -> pd.DataFrame:
+    """Lee cada PDF aisladamente y reintenta con parser robusto si el modo rápido queda incompleto."""
+    df_rapido = _leer_archivo_cacheado_por_bytes(nombre_archivo, pdf_bytes, bool(lectura_rapida)).copy()
+    mejor = df_rapido
+    score_rapido = _completitud_df_cgi(df_rapido)
+    if (not lectura_rapida) or score_rapido < 5:
+        try:
+            df_robusto = _leer_archivo_cacheado_por_bytes(nombre_archivo, pdf_bytes, False).copy()
+            if _completitud_df_cgi(df_robusto) > score_rapido:
+                mejor = df_robusto
+        except Exception:
+            pass
+    return _asegurar_paciente_lote_cgi(mejor, nombre_archivo)
+
+
+def _contexto_embarazo_automatico_lote_cgi(df: pd.DataFrame) -> Dict[str, Any]:
+    detectado = detectar_contexto_embarazo_desde_texto(texto_total_dataframe(df)) or {}
+    return construir_contexto_embarazo(
+        embarazada=bool(detectado.get("embarazada")),
+        edad_gestacional=detectado.get("edad_gestacional"),
+        hdp=bool(detectado.get("hdp")),
+        crecimiento_fetal=detectado.get("crecimiento_fetal") or "No informado",
+        doppler_uterino=detectado.get("doppler_uterino") or "No informado",
+        diagnostico_textual=detectado.get("diagnostico_textual"),
+    )
+
+
+def digitalizar_curva_real_cgi_pdf(pdf_bytes: bytes, max_paginas: int = 4) -> Dict[str, Any]:
+    """Digitaliza un trazado real desde el PDF sin generar una curva sintética.
+
+    Devuelve un recorte PNG del panel detectado y una serie CSV normalizada x/y.
+    La detección prioriza trazos coloreados y, como respaldo, trazos oscuros continuos.
+    """
+    resultado = {"ok": False, "png_bytes": None, "csv_bytes": None, "metadata": {}, "error": ""}
+    if not pdf_bytes:
+        resultado["error"] = "PDF vacío."
+        return resultado
+    try:
+        import fitz
+        import numpy as _np
+        from PIL import Image as _PILImage, ImageDraw as _ImageDraw
+    except Exception as e:
+        resultado["error"] = f"Faltan PyMuPDF/Pillow/Numpy para digitalizar la curva: {e}"
+        return resultado
+
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as e:
+        resultado["error"] = f"PDF no válido: {e}"
+        return resultado
+
+    mejor = None
+    try:
+        for pagina_idx in range(min(len(doc), max_paginas)):
+            page = doc[pagina_idx]
+            pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+            arr = _np.frombuffer(pix.samples, dtype=_np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+            h, w = arr.shape[:2]
+            mx = arr.max(axis=2).astype(int)
+            mn = arr.min(axis=2).astype(int)
+            sat = mx - mn
+            masks = [
+                ("trazo_coloreado", (sat > 42) & (mx < 245) & (mn < 225)),
+                ("trazo_oscuro", mx < 92),
+            ]
+            x0, x1 = int(w * 0.035), int(w * 0.965)
+            y_min, y_max = int(h * 0.07), int(h * 0.90)
+            for metodo, mask in masks:
+                mask = mask.copy()
+                mask[:y_min, :] = False
+                mask[y_max:, :] = False
+                mask[:, :x0] = False
+                mask[:, x1:] = False
+                for frac in (0.14, 0.19, 0.25, 0.32):
+                    bh = max(90, int(h * frac))
+                    paso = max(35, bh // 4)
+                    for y0 in range(y_min, max(y_min + 1, y_max - bh + 1), paso):
+                        y1 = min(y_max, y0 + bh)
+                        sub = mask[y0:y1, x0:x1]
+                        pixeles = int(sub.sum())
+                        if pixeles < 140:
+                            continue
+                        active_cols = float(_np.mean(_np.any(sub, axis=0)))
+                        active_rows = float(_np.mean(_np.any(sub, axis=1)))
+                        density = float(_np.mean(sub))
+                        # El trazado real ocupa muchas columnas pero una fracción moderada de filas.
+                        if active_cols < 0.30:
+                            continue
+                        row_counts = sub.sum(axis=1)
+                        continuity = float(_np.percentile(row_counts, 90) / max(sub.shape[1], 1))
+                        score = active_cols * 7.0 + min(active_rows, 0.75) * 1.5 + density * 18.0 + continuity * 2.0
+                        if metodo == "trazo_coloreado":
+                            score += 1.5
+                        if active_rows > 0.90:
+                            score -= 2.0
+                        cand = {
+                            "score": score, "pagina": pagina_idx + 1, "arr": arr,
+                            "mask": mask, "bbox": (x0, y0, x1, y1), "metodo": metodo,
+                        }
+                        if mejor is None or cand["score"] > mejor["score"]:
+                            mejor = cand
+        if mejor is None:
+            resultado["error"] = "No se detectó un trazado continuo compatible con curva CGI."
+            return resultado
+
+        arr = mejor["arr"]
+        mask = mejor["mask"]
+        x0, y0, x1, y1 = mejor["bbox"]
+        sub = mask[y0:y1, x0:x1]
+        # Seleccionar la banda dominante para evitar mezclar texto y varias curvas.
+        row_counts = sub.sum(axis=1).astype(float)
+        win = max(20, int(sub.shape[0] * 0.22))
+        rolling = _np.convolve(row_counts, _np.ones(win), mode="same")
+        centro = int(_np.argmax(rolling))
+        band0 = max(0, centro - win // 2)
+        band1 = min(sub.shape[0], centro + win // 2)
+        serie_x, serie_y = [], []
+        previo = None
+        for x in range(sub.shape[1]):
+            ys = _np.where(sub[band0:band1, x])[0]
+            if len(ys) == 0:
+                continue
+            ys = ys + band0
+            if previo is None:
+                elegido = float(_np.median(ys))
+            else:
+                elegido = float(ys[_np.argmin(_np.abs(ys - previo))])
+            previo = elegido
+            serie_x.append(float(x))
+            serie_y.append(elegido)
+        if len(serie_x) < max(40, int(sub.shape[1] * 0.12)):
+            resultado["error"] = "El panel fue localizado, pero el trazado no tuvo continuidad suficiente."
+            return resultado
+
+        sx = _np.asarray(serie_x, dtype=float)
+        sy = _np.asarray(serie_y, dtype=float)
+        grid = _np.linspace(sx.min(), sx.max(), min(700, max(180, int(sx.max() - sx.min()) + 1)))
+        yi = _np.interp(grid, sx, sy)
+        yi = pd.Series(yi).rolling(9, center=True, min_periods=1).median().rolling(7, center=True, min_periods=1).mean().to_numpy()
+        x_norm = (grid - grid.min()) / max(grid.max() - grid.min(), 1e-9)
+        y_norm = 1.0 - (yi - yi.min()) / max(yi.max() - yi.min(), 1e-9)
+
+        crop = _PILImage.fromarray(arr[y0:y1, x0:x1].astype(_np.uint8), mode="RGB")
+        draw = _ImageDraw.Draw(crop)
+        puntos = []
+        for xx, yy in zip(grid[::max(1, len(grid)//500)], yi[::max(1, len(yi)//500)]):
+            puntos.append((float(xx), float(yy)))
+        if len(puntos) >= 2:
+            draw.line(puntos, fill=(220, 20, 60), width=2)
+        png_buf = io.BytesIO()
+        crop.save(png_buf, format="PNG")
+        csv_df = pd.DataFrame({"x_normalizado": x_norm, "y_normalizado": y_norm})
+        csv_bytes = csv_df.to_csv(index=False).encode("utf-8-sig")
+        resultado.update({
+            "ok": True,
+            "png_bytes": png_buf.getvalue(),
+            "csv_bytes": csv_bytes,
+            "metadata": {
+                "pagina": mejor["pagina"], "metodo": mejor["metodo"],
+                "puntos": int(len(csv_df)), "score": round(float(mejor["score"]), 3),
+            },
+        })
+        return resultado
+    except Exception as e:
+        resultado["error"] = f"Error durante la digitalización: {e}"
+        return resultado
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+
+def curva_real_cgi_desde_sesion() -> Optional[Dict[str, Any]]:
+    item = st.session_state.get("curva_real_cgi_actual")
+    return item if isinstance(item, dict) and item.get("png_bytes") else None
+
+
+# ------------------------- Logo institucional común -------------------------
+def _ruta_logo_institucional_cgi(usuario_info: Optional[Dict[str, Any]] = None, extension: str = ".png") -> Path:
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    usuario = _slug_archivo_usuario(info.get("usuario", "usuario_local")) if "_slug_archivo_usuario" in globals() else "usuario_local"
+    ext = extension.lower() if extension.lower() in [".png", ".jpg", ".jpeg", ".webp"] else ".png"
+    _asegurar_directorio_app()
+    return APP_DATA_DIR / f"logo_institucional_{usuario}{ext}"
+
+
+def obtener_logo_institucional_cgi(usuario_info: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    usuario = _slug_archivo_usuario(info.get("usuario", "usuario_local")) if "_slug_archivo_usuario" in globals() else "usuario_local"
+    for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+        p = APP_DATA_DIR / f"logo_institucional_{usuario}{ext}"
+        if p.exists() and p.is_file():
+            return str(p)
+    return None
+
+
+def guardar_logo_institucional_cgi(usuario_info: Dict[str, Any], uploaded_file: Any) -> Tuple[bool, str]:
+    if uploaded_file is None:
+        return False, "Seleccione una imagen para el logo."
+    try:
+        data = _obtener_bytes_upload_cgi(uploaded_file)
+        if not data:
+            return False, "El archivo de logo está vacío."
+        ext = Path(str(getattr(uploaded_file, "name", "logo.png"))).suffix.lower() or ".png"
+        for old_ext in [".png", ".jpg", ".jpeg", ".webp"]:
+            old = _ruta_logo_institucional_cgi(usuario_info, old_ext)
+            if old.exists():
+                old.unlink()
+        ruta = _ruta_logo_institucional_cgi(usuario_info, ext)
+        ruta.write_bytes(data)
+        return True, "Logo institucional guardado. Se aplicará a todos los informes individuales y por lotes."
+    except Exception as e:
+        return False, f"No se pudo guardar el logo: {e}"
+
+
+def eliminar_logo_institucional_cgi(usuario_info: Dict[str, Any]) -> Tuple[bool, str]:
+    eliminado = False
+    for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+        p = _ruta_logo_institucional_cgi(usuario_info, ext)
+        if p.exists():
+            try:
+                p.unlink(); eliminado = True
+            except Exception:
+                pass
+    return True, "Logo institucional eliminado." if eliminado else "No había un logo institucional guardado."
+
+
+# Override del encabezado: agrega el logo común sin alterar el contenido clínico.
+_paper_header_story_sin_logo_cgi = _paper_header_story
+
+def _paper_header_story(titulo: str, subtitulo: str):
+    logo_path = obtener_logo_institucional_cgi(st.session_state.get("usuario_actual", {}))
+    if not logo_path:
+        return _paper_header_story_sin_logo_cgi(titulo, subtitulo)
+    try:
+        from reportlab.platypus import Spacer, Image as RLImage, Table, TableStyle
+        from reportlab.lib import colors
+        stl = _paper_styles()
+        logo = RLImage(logo_path, width=78, height=42, kind="proportional")
+        texto = Table(
+            [[_paper_paragraph(titulo, stl["PaperTitle"])], [_paper_paragraph(subtitulo, stl["PaperSubTitle"])]],
+            colWidths=[430],
+        )
+        texto.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("LEFTPADDING", (0,0), (-1,-1), 0), ("RIGHTPADDING", (0,0), (-1,-1), 0)]))
+        cab = Table([[logo, texto]], colWidths=[88, 430])
+        cab.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("BOX", (0,0), (-1,-1), 0.35, colors.HexColor("#CBD5E1")),
+            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#F8FAFC")),
+            ("LEFTPADDING", (0,0), (-1,-1), 6), ("RIGHTPADDING", (0,0), (-1,-1), 6),
+            ("TOPPADDING", (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ]))
+        return [cab, Spacer(1, 4)]
+    except Exception:
+        return _paper_header_story_sin_logo_cgi(titulo, subtitulo)
+
+
+def _excel_resumen_lote_cgi(resumen: pd.DataFrame, errores: pd.DataFrame) -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        resumen.to_excel(writer, index=False, sheet_name="Estudios_exitosos")
+        errores.to_excel(writer, index=False, sheet_name="Errores")
+        for ws in writer.book.worksheets:
+            ws.freeze_panes = "A2"
+            for col in ws.columns:
+                letter = col[0].column_letter
+                max_len = max([len(str(c.value or "")) for c in col] + [10])
+                ws.column_dimensions[letter].width = min(max_len + 2, 46)
+    return output.getvalue()
+
+
+def _escribir_historial_atomico_cgi(df: pd.DataFrame, ruta: Path) -> bool:
+    try:
+        ruta.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ruta.with_name(ruta.stem + ".tmp.xlsx")
+        with pd.ExcelWriter(tmp, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Historial")
+        tmp.replace(ruta)
+        return True
+    except Exception:
+        try:
+            if tmp.exists(): tmp.unlink()
+        except Exception:
+            pass
+        return False
+
+
+def guardar_historial_lote_cgi(filas: List[Dict[str, Any]]) -> Tuple[int, int]:
+    """Agrega el lote al historial sin borrar registros previos y actualiza duplicados por UID."""
+    filas = [dict(f) for f in (filas or []) if isinstance(f, dict) and f]
+    if not filas:
+        return 0, 0
+    hist = leer_historial_app()
+    nuevos = pd.DataFrame(filas)
+    if not hist.empty and "uid_registro" in hist.columns and "uid_registro" in nuevos.columns:
+        uids = set(nuevos["uid_registro"].astype(str))
+        hist = hist[~hist["uid_registro"].astype(str).isin(uids)]
+    combinado = pd.concat([hist, nuevos], ignore_index=True, sort=False)
+    ok_global = _escribir_historial_atomico_cgi(combinado, HISTORIAL_XLSX)
+
+    guardados_usuario = 0
+    for usuario, grupo in nuevos.groupby(nuevos.get("usuario", pd.Series([""] * len(nuevos))).astype(str)):
+        if not usuario:
+            continue
+        ruta = _ruta_historial_usuario(usuario)
+        try:
+            previo = pd.read_excel(ruta, sheet_name="Historial", engine="openpyxl") if ruta.exists() else pd.DataFrame()
+        except Exception:
+            previo = pd.DataFrame()
+        if not previo.empty and "uid_registro" in previo.columns and "uid_registro" in grupo.columns:
+            uids = set(grupo["uid_registro"].astype(str))
+            previo = previo[~previo["uid_registro"].astype(str).isin(uids)]
+        combinado_u = pd.concat([previo, grupo], ignore_index=True, sort=False)
+        if _escribir_historial_atomico_cgi(combinado_u, ruta):
+            guardados_usuario += len(grupo)
+    return (len(filas) if ok_global or guardados_usuario else 0, len(filas))
+
+
+def procesar_lote_cgi(
+    archivos: List[Any], usuario_info: Dict[str, Any], lectura_rapida: bool = True,
+    guardar_historial: bool = True, incluir_originales: bool = False,
+    exigir_curva: bool = False,
+) -> Dict[str, Any]:
+    import zipfile
+    archivos = list(archivos or [])[:100]
+    reportes = []
+    resumen_rows = []
+    errores_rows = []
+    filas_historial = []
+    usados = set()
+    zip_buffer = io.BytesIO()
+    previo_originales = st.session_state.get("pdfs_originales_cgi")
+    previa_curva = st.session_state.get("curva_real_cgi_actual")
+
+    barra = st.progress(0.0, text="Preparando procesamiento por lotes...")
+    try:
+        with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            total = max(len(archivos), 1)
+            for idx, archivo in enumerate(archivos, start=1):
+                nombre_origen = getattr(archivo, "name", f"estudio_{idx}.pdf")
+                barra.progress((idx - 1) / total, text=f"Procesando {idx}/{len(archivos)}: {nombre_origen}")
+                try:
+                    pdf_bytes = _obtener_bytes_upload_cgi(archivo)
+                    if not pdf_bytes:
+                        raise ValueError("El archivo está vacío o no pudo leerse.")
+                    if not str(nombre_origen).lower().endswith(".pdf"):
+                        raise ValueError("El lote CGI admite únicamente archivos PDF.")
+
+                    # Aislamiento total por paciente: PDF fuente y curva propios.
+                    st.session_state["pdfs_originales_cgi"] = [{"nombre": nombre_origen, "bytes": pdf_bytes}]
+                    curva = digitalizar_curva_real_cgi_pdf(pdf_bytes)
+                    st.session_state["curva_real_cgi_actual"] = curva if curva.get("ok") else None
+                    if exigir_curva and not curva.get("ok"):
+                        raise ValueError("No se pudo digitalizar la curva real: " + str(curva.get("error") or "sin detalle"))
+
+                    df = _leer_pdf_lote_cgi(nombre_origen, pdf_bytes, lectura_rapida=lectura_rapida)
+                    if df is None or df.empty:
+                        raise ValueError("No se extrajeron datos clínicos del PDF.")
+                    r = extraer_resumen_integrado(df) or {}
+                    metricas_utiles = sum(limpiar_numero(r.get(k)) is not None for k in ["pas", "pad", "fc", "ic", "irv", "cft", "ca", "iv", "iac", "cts"])
+                    if metricas_utiles < 2:
+                        raise ValueError("Datos insuficientes: se reconocieron menos de dos métricas hemodinámicas válidas.")
+
+                    contexto = _contexto_embarazo_automatico_lote_cgi(df)
+                    informe_txt = generar_informe_texto(df, contexto)
+                    pdf_informe = generar_pdf_integrado(df, contexto)
+                    if not pdf_informe:
+                        raise ValueError("El generador devolvió un PDF vacío.")
+                    nombre_salida = _nombre_unico_cgi(nombre_archivo_pdf_medico_integrado(r), usados)
+                    reportes.append({
+                        "nombre": nombre_salida, "bytes": pdf_informe, "paciente": r.get("paciente"),
+                        "origen": nombre_origen, "curva_ok": bool(curva.get("ok")),
+                    })
+                    zf.writestr(f"informes_pdf/{nombre_salida}", pdf_informe)
+                    if incluir_originales:
+                        zf.writestr(f"pdf_originales/{idx:03d}_{_sanitizar_nombre_zip_cgi(nombre_origen)}", pdf_bytes)
+                    curva_base = _sanitizar_nombre_zip_cgi(Path(nombre_salida).stem, f"curva_{idx}")
+                    if curva.get("ok"):
+                        zf.writestr(f"curvas_digitalizadas/{curva_base}.png", curva.get("png_bytes") or b"")
+                        zf.writestr(f"curvas_digitalizadas/{curva_base}.csv", curva.get("csv_bytes") or b"")
+
+                    fila_integrada = construir_fila_paciente_integrada(df, contexto)
+                    resumen = fila_integrada.iloc[0].to_dict() if isinstance(fila_integrada, pd.DataFrame) and not fila_integrada.empty else {}
+                    resumen.update({
+                        "archivo_origen": nombre_origen,
+                        "informe_generado": nombre_salida,
+                        "estado": "EXITOSO",
+                        "curva_digitalizada": "SI" if curva.get("ok") else "NO",
+                        "curva_pagina": (curva.get("metadata") or {}).get("pagina"),
+                        "curva_puntos": (curva.get("metadata") or {}).get("puntos"),
+                        "curva_observacion": "" if curva.get("ok") else curva.get("error"),
+                    })
+                    resumen_rows.append(resumen)
+                    if guardar_historial:
+                        filas_historial.append(construir_fila_historial_app(usuario_info, df, contexto, informe_txt))
+                except Exception as e:
+                    errores_rows.append({
+                        "archivo_origen": nombre_origen,
+                        "estado": "ERROR",
+                        "motivo": str(e),
+                    })
+                barra.progress(idx / total, text=f"Procesados {idx}/{len(archivos)}")
+
+            resumen_df = pd.DataFrame(resumen_rows)
+            errores_df = pd.DataFrame(errores_rows, columns=["archivo_origen", "estado", "motivo"])
+            historial_guardados = 0
+            historial_total = len(filas_historial)
+            if guardar_historial and filas_historial:
+                historial_guardados, historial_total = guardar_historial_lote_cgi(filas_historial)
+
+            excel_lote = _excel_resumen_lote_cgi(resumen_df, errores_df)
+            zf.writestr("resumen_lote_cgi.xlsx", excel_lote)
+            if not errores_df.empty:
+                zf.writestr("errores_lote.csv", errores_df.to_csv(index=False).encode("utf-8-sig"))
+            leeme = (
+                "PROCESAMIENTO MASIVO CGI\n"
+                f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
+                f"Archivos recibidos: {len(archivos)}\n"
+                f"Informes generados: {len(reportes)}\n"
+                f"Archivos con error: {len(errores_rows)}\n"
+                f"Curvas digitalizadas: {sum(1 for x in reportes if x.get('curva_ok'))}\n"
+                f"Registros agregados/actualizados en historial: {historial_guardados}/{historial_total}\n\n"
+                "Cada informe fue generado de forma independiente. Un error no detiene el resto del lote.\n"
+                "Las curvas se exportan como PNG real del PDF y CSV normalizado.\n"
+            )
+            zf.writestr("LEEME.txt", leeme.encode("utf-8"))
+        return {
+            "reportes": reportes,
+            "resumen": pd.DataFrame(resumen_rows),
+            "errores": pd.DataFrame(errores_rows),
+            "zip_bytes": zip_buffer.getvalue(),
+            "zip_nombre": f"Informes_CGI_lote_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+            "historial_guardados": historial_guardados if 'historial_guardados' in locals() else 0,
+            "historial_total": historial_total if 'historial_total' in locals() else 0,
+        }
+    finally:
+        barra.empty()
+        if previo_originales is None:
+            st.session_state.pop("pdfs_originales_cgi", None)
+        else:
+            st.session_state["pdfs_originales_cgi"] = previo_originales
+        if previa_curva is None:
+            st.session_state.pop("curva_real_cgi_actual", None)
+        else:
+            st.session_state["curva_real_cgi_actual"] = previa_curva
+
+
+def render_modulo_lotes_cgi(
+    archivos_lote: List[Any], usuario_info: Dict[str, Any], lectura_rapida: bool,
+    guardar_historial: bool, incluir_originales: bool, exigir_curva: bool,
+) -> None:
+    st.title("Procesamiento por lotes de informes CGI")
+    st.caption("Importe hasta 100 PDF. Cada paciente se procesa de forma independiente y el resultado se entrega como PDF individual y ZIP conjunto.")
+    archivos_lote = list(archivos_lote or [])
+    if len(archivos_lote) > 100:
+        st.warning("Se recibieron más de 100 archivos. Solo se procesarán los primeros 100.")
+        archivos_lote = archivos_lote[:100]
+    if archivos_lote:
+        st.info(f"PDF seleccionados: {len(archivos_lote)}")
+        with st.expander("Ver archivos seleccionados", expanded=False):
+            st.dataframe(pd.DataFrame({"N°": range(1, len(archivos_lote)+1), "Archivo": [getattr(x, 'name', '') for x in archivos_lote]}), use_container_width=True)
+    else:
+        st.info("Seleccione los PDF CGI en el panel lateral.")
+
+    if st.button("⚙️ Procesar lote CGI y generar informes", type="primary", disabled=not bool(archivos_lote), key="btn_procesar_lote_cgi"):
+        with st.spinner("Extrayendo datos, digitalizando curvas y generando informes individuales..."):
+            resultado = procesar_lote_cgi(
+                archivos_lote, usuario_info, lectura_rapida=lectura_rapida,
+                guardar_historial=guardar_historial, incluir_originales=incluir_originales,
+                exigir_curva=exigir_curva,
+            )
+        st.session_state["resultado_lote_cgi"] = resultado
+
+    resultado = st.session_state.get("resultado_lote_cgi")
+    if not isinstance(resultado, dict):
+        return
+    reportes = resultado.get("reportes") or []
+    errores = resultado.get("errores")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Informes generados", len(reportes))
+    c2.metric("Errores", 0 if errores is None else len(errores))
+    c3.metric("Historial actualizado", f"{resultado.get('historial_guardados', 0)}/{resultado.get('historial_total', 0)}")
+
+    if reportes:
+        st.success("El lote fue procesado. Puede descargar el ZIP completo o cada informe individual.")
+        st.download_button(
+            "📦 Descargar ZIP con todos los informes CGI",
+            data=resultado.get("zip_bytes") or b"",
+            file_name=resultado.get("zip_nombre") or "Informes_CGI_lote.zip",
+            mime="application/zip",
+            key="download_zip_lote_cgi",
+            use_container_width=True,
+        )
+        with st.expander("Descargas individuales por paciente", expanded=True):
+            for i, item in enumerate(reportes, start=1):
+                col_a, col_b = st.columns([3, 1])
+                col_a.markdown(f"**{i}. {item.get('paciente') or 'Paciente'}**  \n{item.get('nombre')}")
+                col_b.download_button(
+                    "Descargar PDF",
+                    data=item.get("bytes") or b"",
+                    file_name=item.get("nombre") or f"Informe_CGI_{i}.pdf",
+                    mime="application/pdf",
+                    key=f"download_individual_cgi_{i}_{abs(hash(item.get('nombre','')))}",
+                    use_container_width=True,
+                )
+    elif resultado.get("zip_bytes"):
+        st.warning("No se generaron informes válidos. El ZIP contiene el resumen de errores.")
+        st.download_button(
+            "📦 Descargar ZIP de control del lote",
+            data=resultado.get("zip_bytes") or b"",
+            file_name=resultado.get("zip_nombre") or "Control_lote_CGI.zip",
+            mime="application/zip",
+            key="download_zip_control_lote_cgi",
+        )
+
+    resumen = resultado.get("resumen")
+    if isinstance(resumen, pd.DataFrame) and not resumen.empty:
+        st.subheader("Resumen de estudios exitosos")
+        st.dataframe(resumen, use_container_width=True)
+    if isinstance(errores, pd.DataFrame) and not errores.empty:
+        st.subheader("Estudios con errores")
+        st.dataframe(errores, use_container_width=True)
+
+
 with st.sidebar:
     st.success(f"Usuario: {usuario_actual.get('nombre', usuario_actual.get('usuario', ''))}")
     if usuario_actual.get("matricula"):
@@ -13561,6 +14187,19 @@ with st.sidebar:
             st.image(firma_preview, caption="Firma activa", use_container_width=True)
         if sello_preview:
             st.image(sello_preview, caption="Sello activo", use_container_width=True)
+        logo_preview = obtener_logo_institucional_cgi(usuario_actual)
+        if logo_preview:
+            st.image(logo_preview, caption="Logo institucional activo", use_container_width=True)
+        logo_upload = st.file_uploader("Cargar logo institucional común", type=["png", "jpg", "jpeg", "webp"], key="upload_logo_institucional_cgi")
+        col_logo1, col_logo2 = st.columns(2)
+        with col_logo1:
+            if st.button("Guardar logo", key="btn_guardar_logo_cgi"):
+                ok, msg = guardar_logo_institucional_cgi(usuario_actual, logo_upload)
+                st.success(msg) if ok else st.error(msg)
+        with col_logo2:
+            if st.button("Quitar logo", key="btn_quitar_logo_cgi"):
+                ok, msg = eliminar_logo_institucional_cgi(usuario_actual)
+                st.success(msg) if ok else st.error(msg)
         firma_upload = st.file_uploader("Cargar firma digital", type=["png", "jpg", "jpeg", "webp"], key="upload_firma_usuario")
         if st.button("Guardar firma", key="btn_guardar_firma_usuario"):
             ok, msg = guardar_imagen_usuario_app(usuario_actual, firma_upload, "firma")
@@ -13583,20 +14222,59 @@ with st.sidebar:
         st.rerun()
     st.divider()
     st.header("Carga de estudios")
+    modo_carga_cgi = st.radio(
+        "Modalidad de trabajo",
+        ["Informe individual", "Procesamiento por lotes"],
+        index=0,
+        key="modo_carga_cgi",
+    )
     st.session_state["lectura_pdf_rapida"] = st.checkbox(
         "Lectura rápida de PDF",
         value=True,
-        help="Recomendado. Usa extracción de texto rápida y evita tablas/OCR. Desactivar solo si faltan variables críticas."
+        help="Recomendado. Si faltan variables, el lote reintenta automáticamente con el parser robusto."
     )
-    modo_ultra_rapido = st.checkbox(
-        "Modo ultra rápido de pantalla",
-        value=True,
-        help="Omite tablas largas, validaciones extendidas, gráficos y vista previa del informe. El PDF se genera solo al presionar el botón."
-    )
-    archivo1 = st.file_uploader("Subir primer archivo CGI", type=["csv", "xlsx", "xls", "pdf"], key="archivo1")
-    archivo2 = st.file_uploader("Subir segundo archivo CGI opcional", type=["csv", "xlsx", "xls", "pdf"], key="archivo2")
-    guardar_pdfs_originales_en_sesion(archivo1, archivo2)
-    st.info("Para PDF instalar: pdfplumber y pypdf. Para gráficos: matplotlib. Para Excel: openpyxl.")
+    if modo_carga_cgi == "Informe individual":
+        modo_ultra_rapido = st.checkbox(
+            "Modo ultra rápido de pantalla",
+            value=True,
+            help="Omite tablas largas, validaciones extendidas, gráficos y vista previa del informe. El PDF se genera solo al presionar el botón."
+        )
+        archivo1 = st.file_uploader("Subir primer archivo CGI", type=["csv", "xlsx", "xls", "pdf"], key="archivo1")
+        archivo2 = st.file_uploader("Subir segundo archivo CGI opcional", type=["csv", "xlsx", "xls", "pdf"], key="archivo2")
+        archivos_lote_cgi = []
+        lote_guardar_historial = False
+        lote_incluir_originales = False
+        lote_exigir_curva = False
+        guardar_pdfs_originales_en_sesion(archivo1, archivo2)
+    else:
+        modo_ultra_rapido = True
+        archivo1 = None
+        archivo2 = None
+        archivos_lote_cgi = st.file_uploader(
+            "Seleccionar hasta 100 PDF CGI",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="archivos_lote_cgi",
+            help="Cada PDF se procesa como un paciente independiente. Un error no interrumpe el resto del lote.",
+        )
+        lote_guardar_historial = st.checkbox(
+            "Agregar estudios exitosos al historial Excel",
+            value=True,
+            help="Agrega o actualiza por UID sin borrar registros previos.",
+            key="lote_guardar_historial_cgi",
+        )
+        lote_incluir_originales = st.checkbox(
+            "Incluir PDF originales dentro del ZIP",
+            value=False,
+            key="lote_incluir_originales_cgi",
+        )
+        lote_exigir_curva = st.checkbox(
+            "Exigir digitalización de curva para considerar exitoso el estudio",
+            value=False,
+            help="Si está desactivado, el informe se genera aunque la curva no pueda segmentarse; el estado queda registrado en el Excel del lote.",
+            key="lote_exigir_curva_cgi",
+        )
+    st.info("Dependencias recomendadas: pdfplumber, pypdf, pymupdf, Pillow, matplotlib, reportlab y openpyxl.")
 
     st.divider()
     st.header(TITULO_MODULO_NO_EMBARAZADA)
@@ -13622,6 +14300,17 @@ with st.sidebar:
                 ["No informado", "Normal", "Índice de pulsatilidad aumentado", "Notching / alterado"],
                 index=0,
             )
+
+if modo_carga_cgi == "Procesamiento por lotes":
+    render_modulo_lotes_cgi(
+        archivos_lote_cgi,
+        usuario_actual,
+        lectura_rapida=bool(st.session_state.get("lectura_pdf_rapida", True)),
+        guardar_historial=bool(lote_guardar_historial),
+        incluir_originales=bool(lote_incluir_originales),
+        exigir_curva=bool(lote_exigir_curva),
+    )
+    st.stop()
 
 if archivo1 is None:
     st.warning("Subir al menos un archivo para generar el informe integrado.")
@@ -14459,6 +15148,8 @@ reportlab
 matplotlib
 pdfplumber
 pypdf
+pymupdf
+Pillow
 fpdf2
         """.strip()
     )
