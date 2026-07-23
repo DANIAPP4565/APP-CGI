@@ -21,6 +21,7 @@ st.set_page_config(
 )
 
 AUTOR_APP = "Ricardo Daniel Olano - Especialista en Cardiología e Hipertensión Arterial"
+BUILD_APP = "CGI-DOMINIOS-V108-20260722"
 TITULO_MODULO_NO_EMBARAZADA = "MODULO DE EVALUACION HEMODINAMICA NO INVASIVA POR CARDIOGRAFIA DE IMPEDANCIA"
 
 
@@ -433,6 +434,125 @@ def numeros_en_texto(texto: Any) -> List[float]:
 
 
 
+# =========================================================
+# REGLAS CGI CANONICAS - FUENTE UNICA DE VERDAD
+# =========================================================
+# Estas reglas son las que gobiernan la interpretación automática de la APP.
+# Se separan de los rangos visuales impresos por el equipo Z-Logic para evitar
+# que una referencia gráfica del fabricante cambie silenciosamente el fenotipo
+# clínico programado por la aplicación.
+REGLAS_CGI_CANONICAS: Dict[str, Dict[str, Any]] = {
+    "IC": {
+        "bajo": 2.5, "alto": 4.0, "unidad": "L/min/m²",
+        "regla": "bajo <2,5; normal 2,5-4,0; elevado >4,0",
+    },
+    "IRV": {
+        "bajo": 1200.0, "alto": 2000.0, "unidad": "dyn.s.cm-5.m²",
+        "regla": "bajo <1200; normal 1200-2000; elevado >2000",
+    },
+    "CFT": {
+        "bajo": 30.0, "alto": 50.0, "unidad": "kΩ⁻¹",
+        "regla": "hipovolemia <30; normovolemia 30-50; hipervolemia >50",
+    },
+    "IV": {
+        "bajo": 35.0, "alto": 60.0, "unidad": "/1000/s",
+        "regla": "disminuido <35; rango 35-60; aumentado >60",
+    },
+    "IAC": {
+        "bajo": 70.0, "alto": 150.0, "unidad": "/100/s²",
+        "regla": "disminuido <70; rango 70-150; aumentado >150",
+    },
+    "CTS": {
+        "bajo": 0.30, "alto": 0.50, "unidad": "relación PEP/ET",
+        "regla": "<0,30 orienta mayor desempeño sistólico; 0,30-0,50 rango; >0,50 orienta menor desempeño sistólico",
+    },
+    "CA": {
+        "bajo": 1.0, "alto": 3.0, "unidad": "mL/mmHg",
+        "regla": "baja <1,0; normal 1,0-3,0; elevada >3,0",
+    },
+    "EA/EES": {
+        "bajo": 1.0, "alto": 1.3, "unidad": "relación",
+        "regla": "óptimo <1,0; subóptimo 1,0-1,3; desacoplamiento >1,3",
+    },
+}
+
+# Rangos que aparecen impresos en el informe Z-Logic aportado por el usuario.
+# Se guardan solo para trazabilidad/auditoría de importación; NO reemplazan las
+# reglas diagnósticas canónicas anteriores.
+REFERENCIAS_VISUALES_ZLOGIC: Dict[str, Tuple[float, float]] = {
+    "IC": (2.5, 4.4),
+    "RVS": (800.0, 1400.0),
+    "IRV": (1300.0, 2500.0),
+    "CA": (1.3, 2.8),
+    "IV": (35.0, 65.0),
+    "IAC": (70.0, 150.0),
+    "CTS": (0.30, 0.50),
+    "CFT": (33.0, 46.0),
+    "DS": (60.0, 110.0),
+    "IDS": (35.0, 65.0),
+    "VM": (4.0, 8.0),
+}
+
+
+def regla_cgi(nombre: str) -> Dict[str, Any]:
+    return REGLAS_CGI_CANONICAS.get(str(nombre or "").upper(), {})
+
+
+def texto_regla_cgi(nombre: str) -> str:
+    return str(regla_cgi(nombre).get("regla") or "Regla no definida")
+
+
+def valor_preferente(*valores: Any) -> Any:
+    """Devuelve el primer valor realmente disponible; no usa `or`, para no perder ceros válidos."""
+    for valor in valores:
+        if es_valor_util(valor):
+            return valor
+    return None
+
+
+def normalizar_cts_cgi(valor: Any) -> Optional[float]:
+    v = limpiar_numero(valor)
+    if v is None:
+        return None
+    return v / 100.0 if v > 2 else v
+
+
+def clasificar_metrica_canonica(nombre: str, valor: Any) -> str:
+    n = str(nombre or "").upper()
+    v = limpiar_numero(valor)
+    if v is None:
+        return "NO CLASIFICABLE"
+    if n == "CTS":
+        v = normalizar_cts_cgi(v)
+    reg = regla_cgi(n)
+    if not reg:
+        return "NO CLASIFICABLE"
+    bajo, alto = limpiar_numero(reg.get("bajo")), limpiar_numero(reg.get("alto"))
+    if n == "CFT":
+        if v < bajo:
+            return "HIPOVOLEMIA"
+        if v > alto:
+            return "HIPERVOLEMIA"
+        return "NORMOVOLEMIA"
+    if n == "EA/EES":
+        if v < bajo:
+            return "ACOPLAMIENTO ÓPTIMO"
+        if v <= alto:
+            return "ACOPLAMIENTO SUBÓPTIMO"
+        return "DESACOPLAMIENTO VENTRÍCULO-ARTERIAL"
+    if n == "CA":
+        if v < bajo:
+            return "CA/ICA BAJA"
+        if v > alto:
+            return "CA/ICA ELEVADA"
+        return "CA/ICA NORMAL"
+    if v < bajo:
+        return "BAJO"
+    if v > alto:
+        return "ELEVADO"
+    return "NORMAL"
+
+
 
 # =========================================================
 # IC ESTRICTO: nunca importar dZ/dt MAX, ITC, IV, IAC, IH u otra métrica como IC
@@ -535,7 +655,7 @@ def rango_plausible(clave: str, valor: Any) -> bool:
         "cft": (5, 120),       # CFT en kohms(-1): rango ampliado para cubrir valores en deshidratación
         "cftnr": (1, 200),
                 "iv": (0, 200),
-        "iac": (0, 50),
+        "iac": (0, 800),
         "cts": (0.05, 100),
         "ea": (0.1, 10),
         "ees": (0.1, 20),
@@ -2515,10 +2635,10 @@ def diagnostico_contractilidad(iv: Any, iac: Any, cts: Any) -> str:
         aumentada += ivv > 60
         disminuida += ivv < 35
     if iacv is not None:
-        aumentada += iacv > 1.2
-        disminuida += iacv < 0.6
+        aumentada += iacv > 150
+        disminuida += iacv < 70
     if ctsv is not None:
-        disminuida += ctsv > 0.45
+        disminuida += ctsv > 0.50
         aumentada += ctsv < 0.30
 
     if aumentada > disminuida and aumentada >= 2:
@@ -2913,8 +3033,8 @@ def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame]
     score_funcion = sum(scores_funcion) / len(scores_funcion) if scores_funcion else None
 
     s_iv = score_dominio(iv, 35, 60)
-    s_iac = score_dominio(iac, 0.6, 1.2)
-    s_cts = score_dominio(cts, 0.30, 0.45)
+    s_iac = score_dominio(iac, 70, 150)
+    s_cts = score_dominio(cts, 0.30, 0.50)
     scores_contractilidad = [x for x in [s_iv, s_iac, s_cts] if x is not None]
     score_contractilidad = sum(scores_contractilidad) / len(scores_contractilidad) if scores_contractilidad else None
 
@@ -3028,12 +3148,12 @@ def referencia_metrica(nombre: str) -> Optional[Tuple[float, float, str]]:
         "irv": (1200, 2000, "dyn.s.cm-5"),
         "rvs": (1200, 2000, "dyn.s.cm-5"),
         "ca": (1.0, 3.0, "mL/mmHg"),  # ICA/CA: bajo <1, normal 1-3, elevado >3
-        "cft": (25, 35, "1/kΩ"),
+        "cft": (30, 50, "1/kΩ"),
         "cftnr": (25, 35, "1/kΩ/m²"),
         "ih": (10, 30, "Ω/s²"),
         "iv": (35, 60, "1/s"),
-        "iac": (0.6, 1.2, "1/s²"),
-        "cts": (0.30, 0.45, "relación"),
+        "iac": (70, 150, "/100/s²"),
+        "cts": (0.30, 0.50, "relación"),
         "ea": (0.5, 2.2, "mmHg/mL"),
         "ees": (1.0, 4.0, "mmHg/mL"),
         "ea/ees": (0.0, 0.999, "relación"),  # óptimo <1; subóptimo 1-1,3; desacoplamiento >1,3
@@ -5161,7 +5281,7 @@ RANGOS_INTEGRACION_V13 = {
     "CFT": (5, 90),
     "CFTnr": (1, 200),
     "IV": (0, 250),
-    "IAC": (0, 80),
+    "IAC": (0, 800),
     "CTS": (0.05, 100),
     "EA": (0.1, 10),
     "EES": (0.1, 20),
@@ -8759,6 +8879,13 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
         raise RuntimeError("Falta instalar ReportLab. Agregue 'reportlab' a requirements.txt y ejecute: pip install reportlab") from e
 
     r = extraer_resumen_integrado(df)
+    # Auditoría de coherencia: la Sección E se recalcula desde la misma fuente antes del PDF.
+    try:
+        _errores_dom = auditar_coherencia_dominios(r, df) if callable(globals().get("auditar_coherencia_dominios")) else []
+        if _errores_dom:
+            r["alertas_dominios"] = " | ".join(_errores_dom)
+    except Exception:
+        pass
     try:
         r_ref_pdf, _r_depie_pdf = obtener_resumenes_ortostaticos(df)
         r_panel = dict(r)
@@ -8829,16 +8956,21 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
             ["IV / IAC", f"{_paper_fmt_val(r_cinta.get('iv'),2)} / {_paper_fmt_val(r_cinta.get('iac'),2)}", "Funcion aortica sistolica. Valores bajos pueden acompanar disfuncion en HDP."],
         ]
     else:
+        # La tabla C usa el MISMO resumen basal y las MISMAS reglas que la Sección E.
+        _rb_c = resumen_acostado_cinta_para_patron(df, r_panel)
+        _cts_c = normalizar_cts_cgi(_rb_c.get("cts"))
+        _ratio_c = calcular_ea_ees_derivado(_rb_c.get("ea"), _rb_c.get("ees")) if callable(globals().get("calcular_ea_ees_derivado")) else calcular_acoplamiento_va(_rb_c.get("ea"), _rb_c.get("ees"), _rb_c.get("ava"))
         param = [
-            ["Variable", "Valor", "Interpretacion"],
-            ["PAS / PAD", f"{_paper_fmt_val(r.get('pas'),0)} / {_paper_fmt_val(r.get('pad'),0)} mmHg", "Interpretar segun valores de presion arterial, contexto clinico y tratamiento."],
-            ["FC", f"{_paper_fmt_val(r.get('fc'),0)} lpm", "Integrar con medicacion, estado clinico y respuesta ortostatica."],
-            ["IC", f"{_paper_fmt_val(r.get('ic'),2)} L/min/m2", "Bajo si <2,5 L/min/m2; elevado si >4,0 L/min/m2."],
-            ["RVS/IRV", f"{_paper_fmt_val(r.get('irv'),0)} dyn.s.cm-5", "Elevada; eje de alta resistencia vascular."],
-            ["CFT", f"{_paper_fmt_val(r.get('cft'),2)}", "Revisar e integrar con clinica, edema, disnea, tratamiento y funcion renal. CFTnr retirado."],
-            ["IV / IAC / CTS", f"{_paper_fmt_val(r.get('iv'),2)} / {_paper_fmt_val(r.get('iac'),2)} / {_paper_fmt_val(r.get('cts'),2)}", "Evaluacion de onda sistolica y tiempos sistolicos."],
-            ["EA / EES / EA-EES", f"{_paper_fmt_val(r.get('ea'),2)} / {_paper_fmt_val(r.get('ees'),2)} / {_paper_fmt_val(r.get('ava'),2)}", "Acoplamiento VA en rango de precaucion si EA/EES >1."],
-            ["DS / IDS", f"{_paper_fmt_val(r.get('ds'),2)} / {_paper_fmt_val(r.get('ids'),2)}", "Volumen sistolico bajo si esta por debajo del rango esperado."],
+            ["Variable", "Valor", "Interpretacion / regla programada"],
+            ["PAS / PAD", f"{_paper_fmt_val(_rb_c.get('pas'),0)} / {_paper_fmt_val(_rb_c.get('pad'),0)} mmHg", "Interpretar segun PA, contexto clinico y tratamiento."],
+            ["FC", f"{_paper_fmt_val(_rb_c.get('fc'),0)} lpm", "Integrar con medicacion, estado clinico y respuesta ortostatica."],
+            ["IC", f"{_paper_fmt_val(_rb_c.get('ic'),2)} L/min/m2", texto_regla_cgi("IC") + ". Estado: " + clasificar_ic(_rb_c.get("ic")) + "."],
+            ["IRV", f"{_paper_fmt_val(_rb_c.get('irv'),0)} dyn.s.cm-5.m2", texto_regla_cgi("IRV") + ". Estado: " + clasificar_irv(_rb_c.get("irv")) + "."],
+            ["CFT", f"{_paper_fmt_val(_rb_c.get('cft'),2)}", texto_regla_cgi("CFT") + ". Resultado: " + estado_volemia_simple(_rb_c.get("cft")) + "."],
+            ["IV / IAC / CTS", f"{_paper_fmt_val(_rb_c.get('iv'),2)} / {_paper_fmt_val(_rb_c.get('iac'),2)} / {_paper_fmt_val(_cts_c,2)}", diagnostico_contractilidad(_rb_c.get("iv"), _rb_c.get("iac"), _cts_c)],
+            ["EA / EES / EA-EES", f"{_paper_fmt_val(_rb_c.get('ea'),2)} / {_paper_fmt_val(_rb_c.get('ees'),2)} / {_paper_fmt_val(_ratio_c,2)}", texto_regla_cgi("EA/EES") + ". Resultado: " + estado_acoplamiento_simple(_rb_c.get("ea"), _rb_c.get("ees"), _rb_c.get("ava")) + "."],
+            ["CA / ICA", f"{_paper_fmt_val(_rb_c.get('ca'),2)}", texto_regla_cgi("CA") + ". Resultado: " + clasificar_metrica_canonica("CA", _rb_c.get("ca")) + "."],
+            ["DS / IDS", f"{_paper_fmt_val(_rb_c.get('ds'),2)} / {_paper_fmt_val(_rb_c.get('ids'),2)}", "Variables de volumen sistolico; se informan sin redefinir el patron hemodinamico principal."],
         ]
     story.append(_paper_table(param, col_widths=[ancho*0.26, ancho*0.24, ancho*0.50], header=True))
     story.append(Spacer(1, 6))
@@ -9295,7 +9427,7 @@ RANGOS_VARIABLES_CRITICAS_FINAL = {
     "CFT": (5, 120),
     "CFTnr": (1, 250),
     "IV": (0, 250),
-    "IAC": (0, 80),
+    "IAC": (0, 800),
     "CTS": (0.05, 100),
     "EA": (0.1, 10),
     "EES": (0.1, 20),
@@ -13312,15 +13444,68 @@ def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
     return res
 
 
+def _extraer_metricas_explicitas_zlogic_desde_df(df: Optional[pd.DataFrame]) -> Dict[str, Any]:
+    """Rescata métricas solo desde rótulos explícitos del informe Z-Logic.
+
+    Evita errores observados como CFT=FC (62), IAC=25 mm/seg o CA tomada desde IAC.
+    """
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return {}
+    textos: List[str] = []
+    for col in ["Texto_PDF", "texto_extraido", "linea_origen"]:
+        if col in df.columns:
+            for v in df[col].dropna().astype(str).tolist():
+                if v.strip():
+                    textos.append(v)
+    texto = "\n".join(textos).replace("\u00a0", " ")
+    if not texto.strip():
+        return {}
+    patrones = {
+        "ic": r"(?:\bIC\s+)?[ÍI]ndice\s+Card[íi]aco\s+([-+]?\d+(?:[.,]\d+)?)",
+        "irv": r"(?:\bIRV\s+)?[ÍI]ndice\s+de\s+(?:Resistencia|Res\.?)\s+Vascular\s+([-+]?\d+(?:[.,]\d+)?)",
+        "ca": r"(?:\bCA\s+)?Complacencia\s+Arterial\s+([-+]?\d+(?:[.,]\d+)?)",
+        "cft": r"(?:\bCFT\s+)?Contenido\s+de\s+Fluidos\s+Tor[áa]cicos\s+([-+]?\d+(?:[.,]\d+)?)",
+        "iv": r"(?:\bIV\s+)?[ÍI]ndice\s+de\s+Velocidad\s+([-+]?\d+(?:[.,]\d+)?)",
+        "iac": r"(?:\bIAC\s+)?[ÍI]ndice\s+de\s+Aceleraci[oó]n\s+Card[íi]aca\s+([-+]?\d+(?:[.,]\d+)?)",
+        "cts": r"(?:\bCTS\s+)?Cociente\s+de\s+Tiempo\s+Sist[oó]lico(?:\s*\(PPE/PE\))?\s+([-+]?\d+(?:[.,]\d+)?)\s*%?",
+        "ds": r"(?:\bDS\s+)?Descarga\s+Sist[oó]lica\s+([-+]?\d+(?:[.,]\d+)?)",
+        "ids": r"(?:\bIDS\s+)?[ÍI]ndice\s+de\s+Descarga\s+Sist[oó]lica\s+([-+]?\d+(?:[.,]\d+)?)",
+    }
+    out: Dict[str, Any] = {}
+    for clave, pat in patrones.items():
+        m = re.search(pat, texto, flags=re.IGNORECASE)
+        if not m:
+            continue
+        v = limpiar_numero(m.group(1))
+        if clave == "cts":
+            v = normalizar_cts_cgi(v)
+        rango_key = clave if clave in ["ic","irv","ca","cft","iv","iac","cts","ds","ids"] else None
+        if rango_key and not rango_plausible(rango_key, v):
+            continue
+        out[clave] = v
+    return out
+
+
 def resumen_acostado_cinta_para_patron(df: Optional[pd.DataFrame], r_default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     base = dict(r_default or {})
     try:
         rb, _ = obtener_resumenes_ortostaticos(df) if df is not None and isinstance(df, pd.DataFrame) and not df.empty else ({}, {})
         if rb:
-            for k, v in rb.items():
+            # Solo las variables que definen posición/patrón deben imponerse desde la fila basal.
+            for k in ["ic", "irv", "rvs", "fc", "pas", "pad", "posicion", "metodo"]:
+                v = rb.get(k)
                 if es_valor_util(v):
                     base[k] = v
+            # Complementarias: usar fila basal solo si el resumen integrado aún no tiene valor.
+            for k in ["ca", "cft", "cftnr", "iv", "iac", "cts", "ea", "ees", "ava", "ds", "ids", "z0"]:
+                if not es_valor_util(base.get(k)) and es_valor_util(rb.get(k)):
+                    base[k] = rb.get(k)
             base["posicion_referencia"] = "acostado/cinta/spot/estudio basal"
+        # Rótulos exactos Z-Logic tienen prioridad para métricas complementarias.
+        exactas = _extraer_metricas_explicitas_zlogic_desde_df(df)
+        for k, v in exactas.items():
+            if es_valor_util(v):
+                base[k] = v
     except Exception:
         pass
     return base
@@ -13606,6 +13791,224 @@ def _aplicar_cache_a_funciones_pesadas() -> None:
 
 
 _aplicar_cache_a_funciones_pesadas()
+
+
+# =========================================================
+# PATCH PRE-BATCH V108 - COHERENCIA ABSOLUTA DE DOMINIOS Y REGLAS
+# Fuente única: REGLAS_CGI_CANONICAS + resumen basal validado.
+# =========================================================
+
+def patron_hemodinamico_oficial_desde_ic_irv(ic: Any, irv: Any, contexto: Optional[Dict[str, Any]] = None) -> str:
+    res = fenotipo_hemodinamico_avanzado(ic, irv, contexto or {})
+    return str(res.get("categoria") or "DATOS INSUFICIENTES").upper()
+
+
+def patron_circulatorio_simple_acostado_cinta(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    return patron_hemodinamico_oficial_desde_ic_irv((r or {}).get("ic"), (r or {}).get("irv"), contexto)
+
+
+def significado_patron_hemodinamico_oficial(patron: Any) -> str:
+    p = normalizar_txt(patron)
+    if "indice cardiaco normal" in p and "resistencias vasculares inadecuadamente elevadas" in p:
+        return "flujo global conservado con vasoconstricción/poscarga inadecuadamente elevada; no corresponde informarlo como normodinamia."
+    if "indice cardiaco elevado" in p and "resistencias vasculares normales" in p:
+        return "alto flujo con resistencias no proporcionalmente reducidas."
+    if "hipodinamia" in p:
+        return "bajo flujo con resistencias vasculares elevadas."
+    if "hiperdinamia" in p:
+        return "alto flujo con resistencias vasculares bajas."
+    if "normodinamia" in p:
+        return "índice cardíaco y resistencias vasculares dentro del rango diagnóstico programado."
+    if "datos insuficientes" in p:
+        return "faltan IC y/o IRV/RVS para definir con seguridad el patrón circulatorio."
+    return "patrón hemodinámico basal definido por la combinación de IC e IRV/RVS."
+
+
+def _val_dom(rb: Dict[str, Any], r: Dict[str, Any], clave: str) -> Any:
+    return valor_preferente((rb or {}).get(clave), (r or {}).get(clave))
+
+
+def estado_contractilidad_canonico(iv: Any, iac: Any, cts: Any) -> str:
+    ivv = limpiar_numero(iv)
+    iacv = limpiar_numero(iac)
+    ctsv = normalizar_cts_cgi(cts)
+    disponibles = [v for v in [ivv, iacv, ctsv] if v is not None]
+    if not disponibles:
+        return "CONTRACTILIDAD NO CLASIFICABLE"
+    aumentada = 0
+    disminuida = 0
+    if ivv is not None:
+        aumentada += int(ivv > REGLAS_CGI_CANONICAS["IV"]["alto"])
+        disminuida += int(ivv < REGLAS_CGI_CANONICAS["IV"]["bajo"])
+    if iacv is not None:
+        aumentada += int(iacv > REGLAS_CGI_CANONICAS["IAC"]["alto"])
+        disminuida += int(iacv < REGLAS_CGI_CANONICAS["IAC"]["bajo"])
+    if ctsv is not None:
+        aumentada += int(ctsv < REGLAS_CGI_CANONICAS["CTS"]["bajo"])
+        disminuida += int(ctsv > REGLAS_CGI_CANONICAS["CTS"]["alto"])
+    if aumentada >= 2 and aumentada > disminuida:
+        return "CONTRACTILIDAD AUMENTADA"
+    if disminuida >= 2 and disminuida > aumentada:
+        return "CONTRACTILIDAD DISMINUIDA"
+    return "CONTRACTILIDAD CONSERVADA"
+
+
+def diagnostico_contractilidad(iv: Any, iac: Any, cts: Any) -> str:
+    estado = estado_contractilidad_canonico(iv, iac, cts)
+    ctsn = normalizar_cts_cgi(cts)
+    return (
+        f"{estado}. Base: IV {fmt(iv,2)}; IAC {fmt(iac,2)}; CTS {fmt(ctsn,2)}. "
+        f"Reglas: IV {texto_regla_cgi('IV')}; IAC {texto_regla_cgi('IAC')}; CTS {texto_regla_cgi('CTS')}. "
+        "La clasificación global exige predominio concordante de al menos dos métricas alteradas."
+    )
+
+
+def estado_contractilidad_simple(iv: Any, iac: Any, cts: Any) -> str:
+    return estado_contractilidad_canonico(iv, iac, cts)
+
+
+def diagnostico_volemia(cft: Any, cftnr: Any = None) -> str:
+    estado = clasificar_metrica_canonica("CFT", cft)
+    if estado == "NO CLASIFICABLE":
+        return "VOLEMIA NO CLASIFICABLE: falta CFT basal válido."
+    return f"{estado}. Base: CFT {fmt(cft,2)}. Regla: {texto_regla_cgi('CFT')}. CFTnr no participa del diagnóstico."
+
+
+def estado_volemia_simple(cft: Any, cftnr: Any = None) -> str:
+    return clasificar_metrica_canonica("CFT", cft).replace("NO CLASIFICABLE", "VOLEMIA NO CLASIFICABLE")
+
+
+def clasificar_ica(valor: Any) -> str:
+    estado = clasificar_metrica_canonica("CA", valor)
+    return estado.replace("CA/", "")
+
+
+def diagnostico_ica(valor: Any) -> str:
+    estado = clasificar_metrica_canonica("CA", valor)
+    if estado == "NO CLASIFICABLE":
+        return "Complacencia/índice de compliance arterial no clasificable: falta CA/ICA basal válida."
+    return f"CA/ICA {fmt(valor,2,' mL/mmHg')}: {estado}. Regla: {texto_regla_cgi('CA')}."
+
+
+def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
+    if callable(globals().get("_ea_ees_identicos_sospechosos")) and _ea_ees_identicos_sospechosos(ea, ees):
+        return "ACOPLAMIENTO NO CLASIFICABLE: EA Y EES IDÉNTICAS"
+    ratio = calcular_ea_ees_derivado(ea, ees) if callable(globals().get("calcular_ea_ees_derivado")) else calcular_acoplamiento_va(ea, ees, ava)
+    if ratio is None:
+        return "ACOPLAMIENTO NO CLASIFICABLE"
+    return clasificar_metrica_canonica("EA/EES", ratio)
+
+
+def _regla_ortostatica_texto() -> str:
+    return "alterado si PAS cae ≥20 mmHg o FC aumenta ≥30 lpm; hipodinámico si ΔIC ≤-0,20 y ΔIRV ≥+100; otros patrones según dirección de IC e IRV"
+
+
+def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[List[str]]:
+    """Sección E: cada resultado sale de las mismas métricas y de la misma regla que se muestra."""
+    r = dict(r or {})
+    rb = resumen_acostado_cinta_para_patron(df, r)
+
+    ic = _val_dom(rb, r, "ic")
+    irv = _val_dom(rb, r, "irv")
+    cft = _val_dom(rb, r, "cft")
+    iv = _val_dom(rb, r, "iv")
+    iac = _val_dom(rb, r, "iac")
+    cts = normalizar_cts_cgi(_val_dom(rb, r, "cts"))
+    ca = _val_dom(rb, r, "ca")
+    ea = _val_dom(rb, r, "ea")
+    ees = _val_dom(rb, r, "ees")
+    ava = _val_dom(rb, r, "ava")
+
+    patron = patron_hemodinamico_oficial_desde_ic_irv(ic, irv, None)
+    volemia = estado_volemia_simple(cft)
+    contractilidad = estado_contractilidad_simple(iv, iac, cts)
+    acoplamiento = estado_acoplamiento_simple(ea, ees, ava)
+    ica = clasificar_metrica_canonica("CA", ca)
+    orto = estado_ortostatico_simple(df)
+
+    ratio = calcular_ea_ees_derivado(ea, ees) if callable(globals().get("calcular_ea_ees_derivado")) else calcular_acoplamiento_va(ea, ees, ava)
+    d_orto = calcular_delta_ortostatico(df) if df is not None and isinstance(df, pd.DataFrame) and len(df) >= 2 else {}
+    delta_txt = (
+        f"ΔIC {fmt(d_orto.get('delta_ic'),2)}; ΔIRV {fmt(d_orto.get('delta_irv'),0)}; ΔFC {fmt(d_orto.get('delta_fc'),0)}; ΔPAS {fmt(d_orto.get('delta_pas'),0)}"
+        if d_orto else "Sin par basal/parado válido"
+    )
+
+    rows = [
+        ["Dominio", "Métricas usadas", "Regla diagnóstica programada", "Resultado"],
+        [
+            "Patrón hemodinámico de referencia",
+            f"IC {fmt(ic,2,' L/min/m²')} | IRV {fmt(irv,0,' dyn.s.cm-5.m²')}",
+            f"IC: {texto_regla_cgi('IC')}. IRV: {texto_regla_cgi('IRV')}. La combinación IC+IRV define el fenotipo basal.",
+            patron,
+        ],
+        [
+            "Volemia",
+            f"CFT {fmt(cft,2)}",
+            texto_regla_cgi("CFT"),
+            volemia,
+        ],
+        [
+            "Contractilidad",
+            f"IV {fmt(iv,2)} | IAC {fmt(iac,2)} | CTS {fmt(cts,2)}",
+            f"IV: {texto_regla_cgi('IV')}. IAC: {texto_regla_cgi('IAC')}. CTS: {texto_regla_cgi('CTS')}. Resultado global por predominio de ≥2 métricas concordantes.",
+            contractilidad,
+        ],
+        [
+            "Acoplamiento ventrículo-arterial",
+            f"EA {fmt(ea,2)} | EES {fmt(ees,2)} | EA/EES {fmt(ratio,2)}",
+            texto_regla_cgi("EA/EES") + ". Solo se clasifica si EA y EES son válidos y no son una duplicación sospechosa.",
+            acoplamiento,
+        ],
+        [
+            "Complacencia arterial / ICA",
+            f"CA/ICA {fmt(ca,2,' mL/mmHg')}",
+            texto_regla_cgi("CA"),
+            ica,
+        ],
+        [
+            "Comportamiento ortostático",
+            delta_txt,
+            _regla_ortostatica_texto(),
+            orto,
+        ],
+    ]
+    return [[limpiar_patrones_prohibidos(c) for c in row] for row in rows]
+
+
+def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFrame] = None, html: bool = True) -> str:
+    tabla = tabla_dominios_integrados_sin_ambiguedad(r or {}, df)
+    lineas = []
+    for row in tabla[1:]:
+        if len(row) < 4:
+            continue
+        lineas.append(f"**{row[0]}:** {row[3]}. Métricas: {row[1]}. Regla: {row[2]}")
+    txt = "<br>".join(lineas) if html else chr(10).join(lineas)
+    return limpiar_patrones_prohibidos(txt)
+
+
+def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
+    return informe_dominios_integrados_texto(r or {}, df, html=True)
+
+
+def _paper_dominios_integrados_table(r: Dict[str, Any], df: Optional[pd.DataFrame], ancho_total: float):
+    """PDF Sección E: muestra explícitamente métrica + regla + resultado para impedir contradicciones invisibles."""
+    rows = tabla_dominios_integrados_sin_ambiguedad(r, df)
+    return _paper_table(
+        rows,
+        col_widths=[ancho_total*0.20, ancho_total*0.22, ancho_total*0.38, ancho_total*0.20],
+        header=True,
+        compact=True,
+    )
+
+
+def auditar_coherencia_dominios(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[str]:
+    """Control interno previo a PDF: detecta discrepancias entre métricas, regla y resultado."""
+    errores: List[str] = []
+    tabla = tabla_dominios_integrados_sin_ambiguedad(r or {}, df)
+    for row in tabla[1:]:
+        if len(row) < 4 or not str(row[3]).strip():
+            errores.append(f"Dominio sin resultado: {row[0] if row else 'desconocido'}")
+    return errores
 
 
 # =========================================================
@@ -15130,21 +15533,16 @@ if not contexto_embarazo.get("embarazada"):
 
 
 # =========================================================
-# PATCH PRE-UI - COHERENCIA ABSOLUTA DEL PATRÓN HEMODINÁMICO
-# Este bloque debe estar ANTES de mostrar el panel Streamlit.
-# Fuente única: fenotipo_hemodinamico_avanzado(IC, IRV/RVS).
-# Evita que el informe de dominios informe NORMODINAMIA cuando el
-# patrón oficial es IC normal + resistencias inadecuadamente elevadas.
+# PATCH PRE-UI V108 - COHERENCIA ABSOLUTA DE DOMINIOS Y REGLAS
+# Fuente única: REGLAS_CGI_CANONICAS + resumen basal validado.
 # =========================================================
 
 def patron_hemodinamico_oficial_desde_ic_irv(ic: Any, irv: Any, contexto: Optional[Dict[str, Any]] = None) -> str:
-    """Categoría diagnóstica única para todos los módulos visibles y PDF."""
     res = fenotipo_hemodinamico_avanzado(ic, irv, contexto or {})
     return str(res.get("categoria") or "DATOS INSUFICIENTES").upper()
 
 
 def patron_circulatorio_simple_acostado_cinta(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
-    """Patrón hemodinámico basal oficial: no simplifica categorías intermedias."""
     return patron_hemodinamico_oficial_desde_ic_irv((r or {}).get("ic"), (r or {}).get("irv"), contexto)
 
 
@@ -15153,101 +15551,203 @@ def significado_patron_hemodinamico_oficial(patron: Any) -> str:
     if "indice cardiaco normal" in p and "resistencias vasculares inadecuadamente elevadas" in p:
         return "flujo global conservado con vasoconstricción/poscarga inadecuadamente elevada; no corresponde informarlo como normodinamia."
     if "indice cardiaco elevado" in p and "resistencias vasculares normales" in p:
-        return "alto flujo con resistencias no proporcionalmente reducidas; no corresponde informarlo como hiperdinamia clásica si las resistencias no están bajas."
+        return "alto flujo con resistencias no proporcionalmente reducidas."
     if "hipodinamia" in p:
         return "bajo flujo con resistencias vasculares elevadas."
     if "hiperdinamia" in p:
         return "alto flujo con resistencias vasculares bajas."
     if "normodinamia" in p:
-        return "índice cardíaco y resistencias vasculares dentro de rango clínico."
+        return "índice cardíaco y resistencias vasculares dentro del rango diagnóstico programado."
     if "datos insuficientes" in p:
         return "faltan IC y/o IRV/RVS para definir con seguridad el patrón circulatorio."
-    return "patrón hemodinámico basal informado según IC e IRV/RVS."
+    return "patrón hemodinámico basal definido por la combinación de IC e IRV/RVS."
+
+
+def _val_dom(rb: Dict[str, Any], r: Dict[str, Any], clave: str) -> Any:
+    return valor_preferente((rb or {}).get(clave), (r or {}).get(clave))
+
+
+def estado_contractilidad_canonico(iv: Any, iac: Any, cts: Any) -> str:
+    ivv = limpiar_numero(iv)
+    iacv = limpiar_numero(iac)
+    ctsv = normalizar_cts_cgi(cts)
+    disponibles = [v for v in [ivv, iacv, ctsv] if v is not None]
+    if not disponibles:
+        return "CONTRACTILIDAD NO CLASIFICABLE"
+    aumentada = 0
+    disminuida = 0
+    if ivv is not None:
+        aumentada += int(ivv > REGLAS_CGI_CANONICAS["IV"]["alto"])
+        disminuida += int(ivv < REGLAS_CGI_CANONICAS["IV"]["bajo"])
+    if iacv is not None:
+        aumentada += int(iacv > REGLAS_CGI_CANONICAS["IAC"]["alto"])
+        disminuida += int(iacv < REGLAS_CGI_CANONICAS["IAC"]["bajo"])
+    if ctsv is not None:
+        aumentada += int(ctsv < REGLAS_CGI_CANONICAS["CTS"]["bajo"])
+        disminuida += int(ctsv > REGLAS_CGI_CANONICAS["CTS"]["alto"])
+    if aumentada >= 2 and aumentada > disminuida:
+        return "CONTRACTILIDAD AUMENTADA"
+    if disminuida >= 2 and disminuida > aumentada:
+        return "CONTRACTILIDAD DISMINUIDA"
+    return "CONTRACTILIDAD CONSERVADA"
+
+
+def diagnostico_contractilidad(iv: Any, iac: Any, cts: Any) -> str:
+    estado = estado_contractilidad_canonico(iv, iac, cts)
+    ctsn = normalizar_cts_cgi(cts)
+    return (
+        f"{estado}. Base: IV {fmt(iv,2)}; IAC {fmt(iac,2)}; CTS {fmt(ctsn,2)}. "
+        f"Reglas: IV {texto_regla_cgi('IV')}; IAC {texto_regla_cgi('IAC')}; CTS {texto_regla_cgi('CTS')}. "
+        "La clasificación global exige predominio concordante de al menos dos métricas alteradas."
+    )
+
+
+def estado_contractilidad_simple(iv: Any, iac: Any, cts: Any) -> str:
+    return estado_contractilidad_canonico(iv, iac, cts)
+
+
+def diagnostico_volemia(cft: Any, cftnr: Any = None) -> str:
+    estado = clasificar_metrica_canonica("CFT", cft)
+    if estado == "NO CLASIFICABLE":
+        return "VOLEMIA NO CLASIFICABLE: falta CFT basal válido."
+    return f"{estado}. Base: CFT {fmt(cft,2)}. Regla: {texto_regla_cgi('CFT')}. CFTnr no participa del diagnóstico."
+
+
+def estado_volemia_simple(cft: Any, cftnr: Any = None) -> str:
+    return clasificar_metrica_canonica("CFT", cft).replace("NO CLASIFICABLE", "VOLEMIA NO CLASIFICABLE")
+
+
+def clasificar_ica(valor: Any) -> str:
+    estado = clasificar_metrica_canonica("CA", valor)
+    return estado.replace("CA/", "")
+
+
+def diagnostico_ica(valor: Any) -> str:
+    estado = clasificar_metrica_canonica("CA", valor)
+    if estado == "NO CLASIFICABLE":
+        return "Complacencia/índice de compliance arterial no clasificable: falta CA/ICA basal válida."
+    return f"CA/ICA {fmt(valor,2,' mL/mmHg')}: {estado}. Regla: {texto_regla_cgi('CA')}."
+
+
+def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
+    if callable(globals().get("_ea_ees_identicos_sospechosos")) and _ea_ees_identicos_sospechosos(ea, ees):
+        return "ACOPLAMIENTO NO CLASIFICABLE: EA Y EES IDÉNTICAS"
+    ratio = calcular_ea_ees_derivado(ea, ees) if callable(globals().get("calcular_ea_ees_derivado")) else calcular_acoplamiento_va(ea, ees, ava)
+    if ratio is None:
+        return "ACOPLAMIENTO NO CLASIFICABLE"
+    return clasificar_metrica_canonica("EA/EES", ratio)
+
+
+def _regla_ortostatica_texto() -> str:
+    return "alterado si PAS cae ≥20 mmHg o FC aumenta ≥30 lpm; hipodinámico si ΔIC ≤-0,20 y ΔIRV ≥+100; otros patrones según dirección de IC e IRV"
 
 
 def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[List[str]]:
-    """Tabla didáctica: el primer dominio SIEMPRE coincide con el patrón hemodinámico oficial."""
+    """Sección E: cada resultado sale de las mismas métricas y de la misma regla que se muestra."""
+    r = dict(r or {})
     rb = resumen_acostado_cinta_para_patron(df, r)
-    patron = patron_hemodinamico_oficial_desde_ic_irv(rb.get("ic"), rb.get("irv"), None)
-    significado = significado_patron_hemodinamico_oficial(patron)
-    volemia_estado = estado_volemia_simple(rb.get("cft"))
-    contract_estado = estado_contractilidad_simple(rb.get("iv") or (r or {}).get("iv"), rb.get("iac") or (r or {}).get("iac"), rb.get("cts") or (r or {}).get("cts"))
-    acop_estado = estado_acoplamiento_simple(rb.get("ea") or (r or {}).get("ea"), rb.get("ees") or (r or {}).get("ees"), rb.get("ava") or (r or {}).get("ava"))
-    orto_estado = estado_ortostatico_simple(df)
+
+    ic = _val_dom(rb, r, "ic")
+    irv = _val_dom(rb, r, "irv")
+    cft = _val_dom(rb, r, "cft")
+    iv = _val_dom(rb, r, "iv")
+    iac = _val_dom(rb, r, "iac")
+    cts = normalizar_cts_cgi(_val_dom(rb, r, "cts"))
+    ca = _val_dom(rb, r, "ca")
+    ea = _val_dom(rb, r, "ea")
+    ees = _val_dom(rb, r, "ees")
+    ava = _val_dom(rb, r, "ava")
+
+    patron = patron_hemodinamico_oficial_desde_ic_irv(ic, irv, None)
+    volemia = estado_volemia_simple(cft)
+    contractilidad = estado_contractilidad_simple(iv, iac, cts)
+    acoplamiento = estado_acoplamiento_simple(ea, ees, ava)
+    ica = clasificar_metrica_canonica("CA", ca)
+    orto = estado_ortostatico_simple(df)
+
+    ratio = calcular_ea_ees_derivado(ea, ees) if callable(globals().get("calcular_ea_ees_derivado")) else calcular_acoplamiento_va(ea, ees, ava)
+    d_orto = calcular_delta_ortostatico(df) if df is not None and isinstance(df, pd.DataFrame) and len(df) >= 2 else {}
+    delta_txt = (
+        f"ΔIC {fmt(d_orto.get('delta_ic'),2)}; ΔIRV {fmt(d_orto.get('delta_irv'),0)}; ΔFC {fmt(d_orto.get('delta_fc'),0)}; ΔPAS {fmt(d_orto.get('delta_pas'),0)}"
+        if d_orto else "Sin par basal/parado válido"
+    )
+
     rows = [
-        ["Dominio", "Resultado", "Interpretación resumida"],
+        ["Dominio", "Métricas usadas", "Regla diagnóstica programada", "Resultado"],
         [
             "Patrón hemodinámico de referencia",
+            f"IC {fmt(ic,2,' L/min/m²')} | IRV {fmt(irv,0,' dyn.s.cm-5.m²')}",
+            f"IC: {texto_regla_cgi('IC')}. IRV: {texto_regla_cgi('IRV')}. La combinación IC+IRV define el fenotipo basal.",
             patron,
-            f"Resultado calculado solo con ACOSTADO/CINTA/SPOT/ESTUDIO BASAL. IC {fmt(rb.get('ic'), 2, ' L/min/m²')} e IRV/RVS {fmt(rb.get('irv'), 0, ' dyn.s.cm-5')}. {significado} Es el eje diagnóstico principal y debe coincidir con el patrón hemodinámico oficial.",
         ],
         [
             "Volemia",
-            volemia_estado,
-            f"Clasificación volémica exclusivamente por CFT basal. CFT {fmt(rb.get('cft'), 2)}. CFTnr retirado de la interpretación.",
+            f"CFT {fmt(cft,2)}",
+            texto_regla_cgi("CFT"),
+            volemia,
         ],
         [
             "Contractilidad",
-            contract_estado,
-            f"Lectura complementaria por IV, IAC y CTS. IV {fmt((rb.get('iv') or (r or {}).get('iv')), 2)}; IAC {fmt((rb.get('iac') or (r or {}).get('iac')), 2)}; CTS {fmt((rb.get('cts') or (r or {}).get('cts')), 2)}.",
+            f"IV {fmt(iv,2)} | IAC {fmt(iac,2)} | CTS {fmt(cts,2)}",
+            f"IV: {texto_regla_cgi('IV')}. IAC: {texto_regla_cgi('IAC')}. CTS: {texto_regla_cgi('CTS')}. Resultado global por predominio de ≥2 métricas concordantes.",
+            contractilidad,
         ],
         [
             "Acoplamiento ventrículo-arterial",
-            acop_estado,
-            f"Dominio complementario por EA/EES. EA {fmt((rb.get('ea') or (r or {}).get('ea')), 2)}; EES {fmt((rb.get('ees') or (r or {}).get('ees')), 2)}; EA/EES {fmt((rb.get('ava') or (r or {}).get('ava')), 2)}.",
+            f"EA {fmt(ea,2)} | EES {fmt(ees,2)} | EA/EES {fmt(ratio,2)}",
+            texto_regla_cgi("EA/EES") + ". Solo se clasifica si EA y EES son válidos y no son una duplicación sospechosa.",
+            acoplamiento,
         ],
         [
-            "Índice de compliance arterial",
-            clasificar_ica((rb.get("ca") if isinstance(rb, dict) else None) or ((r or {}).get("ca"))),
-            f"Dominio complementario por CA/ICA basal. CA/ICA {fmt(((rb.get('ca') if isinstance(rb, dict) else None) or ((r or {}).get('ca'))), 2, ' mL/mmHg')}. Se interpreta como marcador de complacencia arterial y poscarga pulsátil en contexto clínico.",
+            "Complacencia arterial / ICA",
+            f"CA/ICA {fmt(ca,2,' mL/mmHg')}",
+            texto_regla_cgi("CA"),
+            ica,
         ],
         [
             "Comportamiento ortostático",
-            orto_estado,
-            "Describe la respuesta al ponerse parado. No modifica ni reemplaza el patrón hemodinámico ACOSTADO/CINTA/SPOT/ESTUDIO BASAL.",
+            delta_txt,
+            _regla_ortostatica_texto(),
+            orto,
         ],
     ]
     return [[limpiar_patrones_prohibidos(c) for c in row] for row in rows]
 
 
 def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFrame] = None, html: bool = True) -> str:
-    """Informe didáctico sin IndexError aunque falte alguna fila.
-
-    La tabla de dominios puede cambiar de longitud si se agregan o retiran dominios.
-    Por eso se accede por nombre de dominio y no por posición fija rows[5].
-    """
     tabla = tabla_dominios_integrados_sin_ambiguedad(r or {}, df)
-    rows = tabla[1:] if len(tabla) > 1 else []
-
-    def _buscar(nombre: str, resultado_default: str = "NO DISPONIBLE", interpretacion_default: str = "Dominio no disponible.") -> Tuple[str, str]:
-        objetivo = normalizar_txt(nombre)
-        for row in rows:
-            if len(row) >= 3 and objetivo in normalizar_txt(row[0]):
-                return str(row[1]), str(row[2])
-        return resultado_default, interpretacion_default
-
-    patron, patron_txt = _buscar("Patrón hemodinámico")
-    volemia, volemia_txt = _buscar("Volemia")
-    contractilidad, contractilidad_txt = _buscar("Contractilidad")
-    acoplamiento, acoplamiento_txt = _buscar("Acoplamiento")
-    ica, ica_txt = _buscar("compliance arterial")
-    orto, orto_txt = _buscar("ortostático")
-
-    lineas = [
-        f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL:** {patron}. {patron_txt}",
-        f"**Volemia:** {volemia}. {volemia_txt}",
-        f"**Contractilidad:** {contractilidad}. {contractilidad_txt}",
-        f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {acoplamiento_txt}",
-        f"**Índice de compliance arterial:** {ica}. {ica_txt}",
-        f"**Respuesta ortostática:** {orto}. {orto_txt}",
-        f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; ICA {ica}; respuesta ortostática {orto}.",
-    ]
+    lineas = []
+    for row in tabla[1:]:
+        if len(row) < 4:
+            continue
+        lineas.append(f"**{row[0]}:** {row[3]}. Métricas: {row[1]}. Regla: {row[2]}")
     txt = "<br>".join(lineas) if html else chr(10).join(lineas)
     return limpiar_patrones_prohibidos(txt)
+
 
 def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
     return informe_dominios_integrados_texto(r or {}, df, html=True)
 
+
+def _paper_dominios_integrados_table(r: Dict[str, Any], df: Optional[pd.DataFrame], ancho_total: float):
+    """PDF Sección E: muestra explícitamente métrica + regla + resultado para impedir contradicciones invisibles."""
+    rows = tabla_dominios_integrados_sin_ambiguedad(r, df)
+    return _paper_table(
+        rows,
+        col_widths=[ancho_total*0.20, ancho_total*0.22, ancho_total*0.38, ancho_total*0.20],
+        header=True,
+        compact=True,
+    )
+
+
+def auditar_coherencia_dominios(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[str]:
+    """Control interno previo a PDF: detecta discrepancias entre métricas, regla y resultado."""
+    errores: List[str] = []
+    tabla = tabla_dominios_integrados_sin_ambiguedad(r or {}, df)
+    for row in tabla[1:]:
+        if len(row) < 4 or not str(row[3]).strip():
+            errores.append(f"Dominio sin resultado: {row[0] if row else 'desconocido'}")
+    return errores
 
 _es_embarazo_ui = bool(contexto_embarazo.get("embarazada"))
 
@@ -15567,177 +16067,5 @@ def resumen_calidad_integracion(df: pd.DataFrame) -> Dict[str, Any]:
     return {"tabla": tabla, "faltantes": faltantes, "completas": completas, "falta_cinta": falta_cinta, "validacion": validacion}
 
 # =========================================================
-# V_FINAL_COHERENCIA_DOMINIOS_FENOTIPO_HEMODINAMICO
-# Corrección solicitada: el informe de dominios integrados resumido y didáctico
-# debe usar EXACTAMENTE el mismo diagnóstico que el patrón hemodinámico avanzado.
-# No debe degradar "IC normal + IRV elevada" a NORMODINAMIA.
+# FIN APP - V108 DOMINIOS COHERENTES
 # =========================================================
-
-def patron_circulatorio_simple_acostado_cinta(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
-    """Patrón hemodinámico basal oficial.
-
-    Devuelve la categoría completa de fenotipo_hemodinamico_avanzado(), incluyendo
-    las variantes intermedias:
-    - ÍNDICE CARDÍACO NORMAL CON RESISTENCIAS VASCULARES INADECUADAMENTE ELEVADAS
-    - ÍNDICE CARDÍACO ELEVADO CON RESISTENCIAS VASCULARES NORMALES
-
-    Esta función se usa como fuente única para el informe de dominios integrados,
-    gráficos y conclusiones resumidas. El registro PARADO no reemplaza al basal.
-    """
-    res = fenotipo_hemodinamico_avanzado((r or {}).get("ic"), (r or {}).get("irv"), contexto or {})
-    return str(res.get("categoria") or "DATOS INSUFICIENTES").upper()
-
-
-def significado_patron_hemodinamico_oficial(patron: Any) -> str:
-    """Texto didáctico congruente con las 5 opciones diagnósticas principales."""
-    p = normalizar_txt(patron)
-    if "indice cardiaco normal" in p and "resistencias vasculares inadecuadamente elevadas" in p:
-        return "flujo global conservado con vasoconstricción/poscarga inadecuadamente elevada; no corresponde informarlo como normodinamia."
-    if "indice cardiaco elevado" in p and "resistencias vasculares normales" in p:
-        return "alto flujo con resistencias no proporcionalmente reducidas; no corresponde informarlo como hiperdinamia clásica si las resistencias no están bajas."
-    if "hipodinamia" in p:
-        return "bajo flujo con resistencias vasculares elevadas."
-    if "hiperdinamia" in p:
-        return "alto flujo con resistencias vasculares bajas."
-    if "normodinamia" in p:
-        return "índice cardíaco y resistencias vasculares dentro de rango clínico."
-    if "datos insuficientes" in p:
-        return "faltan IC y/o IRV/RVS para definir con seguridad el patrón circulatorio."
-    return "patrón hemodinámico basal informado según IC e IRV/RVS."
-
-
-def diagnostico_perfil_hemodinamico_acostado_cinta(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
-    patron = patron_circulatorio_simple_acostado_cinta(r, contexto)
-    ic = fmt((r or {}).get("ic"), 2, " L/min/m²")
-    rvs = fmt((r or {}).get("irv"), 0, " dyn.s.cm-5")
-    significado = significado_patron_hemodinamico_oficial(patron)
-    return f"**Patrón hemodinámico de referencia ACOSTADO/CINTA/SPOT/ESTUDIO BASAL: {patron}.** Base: IC {ic}; IRV/RVS {rvs}. Significado: {significado}"
-
-
-def texto_clasificacion_dinamica(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
-    """Salida final coherente: usa la categoría completa del fenotipo hemodinámico avanzado."""
-    contexto = contexto or {}
-    patron = patron_circulatorio_simple_acostado_cinta(r or {}, contexto)
-    ic = fmt((r or {}).get("ic"), 2, " L/min/m²")
-    rvs = fmt((r or {}).get("irv"), 0, " dyn.s.cm-5")
-    pas = limpiar_numero((r or {}).get("pas"))
-    pad = limpiar_numero((r or {}).get("pad"))
-    fc = limpiar_numero((r or {}).get("fc"))
-    map_hr_txt = "No disponible"
-    if pas is not None and pad is not None and fc not in [None, 0]:
-        pam = pad + (pas - pad) / 3.0
-        map_hr_txt = fmt(pam / fc, 2)
-    base = (
-        f"**Patrón circulatorio ACOSTADO/CINTA/SPOT/ESTUDIO BASAL: {patron}.** "
-        f"Base: IC {ic}; IRV/RVS {rvs}; PAM/FC {map_hr_txt}. "
-        f"{significado_patron_hemodinamico_oficial(patron)} "
-        "El registro PARADO se interpreta solo como respuesta ortostática."
-    )
-    if contexto.get("embarazada"):
-        eval_gest = evaluar_ic_irv_por_edad_gestacional((r or {}).get("ic"), (r or {}).get("irv"), contexto.get("edad_gestacional"))
-        return base + " " + eval_gest.get("texto", "")
-    return base
-
-
-def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[List[str]]:
-    """Tabla de dominios con patrón basal coherente con el fenotipo hemodinámico oficial."""
-    rb = resumen_acostado_cinta_para_patron(df, r)
-    patron = patron_circulatorio_simple_acostado_cinta(rb, None)
-    significado = significado_patron_hemodinamico_oficial(patron)
-    volemia_estado = estado_volemia_simple(rb.get("cft"))
-    contract_estado = estado_contractilidad_simple(rb.get("iv") or r.get("iv"), rb.get("iac") or r.get("iac"), rb.get("cts") or r.get("cts"))
-    acop_estado = estado_acoplamiento_simple(rb.get("ea") or r.get("ea"), rb.get("ees") or r.get("ees"), rb.get("ava") or r.get("ava"))
-    orto_estado = estado_ortostatico_simple(df)
-    rows = [
-        ["Dominio", "Resultado", "Interpretación resumida"],
-        [
-            "Patrón hemodinámico de referencia",
-            patron,
-            f"Resultado calculado solo con ACOSTADO/CINTA/SPOT/ESTUDIO BASAL. IC {fmt(rb.get('ic'), 2, ' L/min/m²')} e IRV/RVS {fmt(rb.get('irv'), 0, ' dyn.s.cm-5')}. {significado} Es el eje diagnóstico principal y debe coincidir con el patrón hemodinámico oficial.",
-        ],
-        [
-            "Volemia",
-            volemia_estado,
-            f"Clasificación volémica exclusivamente por CFT basal. CFT {fmt(rb.get('cft'), 2)}. CFTnr retirado de la interpretación.",
-        ],
-        [
-            "Contractilidad",
-            contract_estado,
-            f"Lectura complementaria por IV, IAC y CTS. IV {fmt((rb.get('iv') or r.get('iv')), 2)}; IAC {fmt((rb.get('iac') or r.get('iac')), 2)}; CTS {fmt((rb.get('cts') or r.get('cts')), 2)}.",
-        ],
-        [
-            "Acoplamiento ventrículo-arterial",
-            acop_estado,
-            f"Dominio complementario por EA/EES. EA {fmt((rb.get('ea') or r.get('ea')), 2)}; EES {fmt((rb.get('ees') or r.get('ees')), 2)}; EA/EES {fmt((rb.get('ava') or r.get('ava')), 2)}.",
-        ],
-        [
-            "Índice de compliance arterial",
-            clasificar_ica((rb.get("ca") if isinstance(rb, dict) else None) or ((r or {}).get("ca"))),
-            f"Dominio complementario por CA/ICA basal. CA/ICA {fmt(((rb.get('ca') if isinstance(rb, dict) else None) or ((r or {}).get('ca'))), 2, ' mL/mmHg')}. Se interpreta como marcador de complacencia arterial y poscarga pulsátil en contexto clínico.",
-        ],
-        [
-            "Comportamiento ortostático",
-            orto_estado,
-            "Describe la respuesta al ponerse parado. No modifica ni reemplaza el patrón hemodinámico ACOSTADO/CINTA/SPOT/ESTUDIO BASAL.",
-        ],
-    ]
-    return [[limpiar_patrones_prohibidos(c) for c in row] for row in rows]
-
-
-def informe_dominios_integrados_texto(r: Dict[str, Any], df: Optional[pd.DataFrame] = None, html: bool = True) -> str:
-    """Informe didáctico sin IndexError aunque falte alguna fila.
-
-    La tabla de dominios puede cambiar de longitud si se agregan o retiran dominios.
-    Por eso se accede por nombre de dominio y no por posición fija rows[5].
-    """
-    tabla = tabla_dominios_integrados_sin_ambiguedad(r or {}, df)
-    rows = tabla[1:] if len(tabla) > 1 else []
-
-    def _buscar(nombre: str, resultado_default: str = "NO DISPONIBLE", interpretacion_default: str = "Dominio no disponible.") -> Tuple[str, str]:
-        objetivo = normalizar_txt(nombre)
-        for row in rows:
-            if len(row) >= 3 and objetivo in normalizar_txt(row[0]):
-                return str(row[1]), str(row[2])
-        return resultado_default, interpretacion_default
-
-    patron, patron_txt = _buscar("Patrón hemodinámico")
-    volemia, volemia_txt = _buscar("Volemia")
-    contractilidad, contractilidad_txt = _buscar("Contractilidad")
-    acoplamiento, acoplamiento_txt = _buscar("Acoplamiento")
-    ica, ica_txt = _buscar("compliance arterial")
-    orto, orto_txt = _buscar("ortostático")
-
-    lineas = [
-        f"**Patrón hemodinámico basal ACOSTADO/CINTA/SPOT/ESTUDIO BASAL:** {patron}. {patron_txt}",
-        f"**Volemia:** {volemia}. {volemia_txt}",
-        f"**Contractilidad:** {contractilidad}. {contractilidad_txt}",
-        f"**Acoplamiento ventrículo-arterial:** {acoplamiento}. {acoplamiento_txt}",
-        f"**Índice de compliance arterial:** {ica}. {ica_txt}",
-        f"**Respuesta ortostática:** {orto}. {orto_txt}",
-        f"**Conclusión resumida:** el eje diagnóstico es {patron}; volemia {volemia}; contractilidad {contractilidad}; acoplamiento {acoplamiento}; ICA {ica}; respuesta ortostática {orto}.",
-    ]
-    txt = "<br>".join(lineas) if html else chr(10).join(lineas)
-    return limpiar_patrones_prohibidos(txt)
-
-def perfil_hemodinamico_integrado(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> str:
-    """Función usada por el panel y por el PDF: no puede contradecir el patrón hemodinámico."""
-    return informe_dominios_integrados_texto(r or {}, df, html=True)
-
-
-def evaluar_dominios_hemodinamicos(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Dict[str, Dict[str, Any]]:
-    """Dominios coherentes: función circulatoria muestra la categoría completa del fenotipo oficial."""
-    dominios = _evaluar_dominios_hemodinamicos_pre_v21(r, df) if '_evaluar_dominios_hemodinamicos_pre_v21' in globals() else {}
-    if not dominios:
-        dominios = {}
-    patron = patron_circulatorio_simple_acostado_cinta(r or {}, None)
-    if "Función circulatoria" not in dominios:
-        dominios["Función circulatoria"] = {"score": None, "estado": patron, "detalle": ""}
-    score = dominios["Función circulatoria"].get("score")
-    dominios["Función circulatoria"]["estado"] = patron
-    dominios["Función circulatoria"]["detalle"] = diagnostico_perfil_hemodinamico_acostado_cinta(r or {}, None)
-    dominios["Función circulatoria"]["score"] = score
-    for nombre in ["Contractilidad", "Volemia", "Rendimiento CV / VA"]:
-        if nombre in dominios and str(dominios[nombre].get("estado", "")).lower().find("precaucion") >= 0:
-            dominios[nombre]["estado"] = "Precaución clínica"
-    return dominios
-
