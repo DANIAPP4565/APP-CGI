@@ -9067,24 +9067,7 @@ def generar_pdf_integrado(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str
     for i, ref in enumerate(REFERENCIAS_BIBLIOGRAFICAS, start=1):
         story.append(_paper_paragraph(f"{i}. {ref}", stl["PaperSmall"]))
 
-    # Curva real digitalizada del PDF actual (modo individual o por lotes).
-    try:
-        curva_real = curva_real_cgi_desde_sesion() if "curva_real_cgi_desde_sesion" in globals() else None
-        if curva_real and curva_real.get("png_bytes"):
-            story.append(Spacer(1, 8))
-            story.append(_paper_paragraph("Curva real digitalizada del estudio CGI", stl["PaperH"]))
-            meta_curva = curva_real.get("metadata") or {}
-            descripcion_curva = (
-                f"Digitalización independiente desde el PDF original. Página {meta_curva.get('pagina', 'N/D')}; "
-                f"método: {meta_curva.get('metodo', 'segmentación de trazo')}; "
-                f"puntos recuperados: {meta_curva.get('puntos', 0)}. "
-                "El trazado se conserva como imagen real y como serie normalizada para auditoría del lote."
-            )
-            story.append(_paper_paragraph(descripcion_curva, stl["PaperBody"]))
-            curva_io = io.BytesIO(curva_real.get("png_bytes"))
-            story.append(Image(curva_io, width=ancho, height=ancho*0.42, kind="proportional"))
-    except Exception as e:
-        story.append(_paper_paragraph(f"No se pudo insertar la curva real digitalizada: {e}", stl["PaperSmall"]))
+    # Curva real digitalizada retirada del informe por solicitud del usuario.
 
     capturas_originales = capturas_pdfs_originales_desde_sesion()
     if capturas_originales:
