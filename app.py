@@ -8717,10 +8717,11 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     """PDF ejecutivo de una hoja con motor ReportLab tipo paper.
 
     Corrección solicitada:
-    - Retira las antiguas secciones 2 y 3.
-    - Conserva la sección 1: Panel de lectura rápida.
-    - Agrega gráfico de cuadrantes hemodinámicos.
-    - Agrega gráfico de recomendación terapéutica / propuesta terapéutica ICG individualizada.
+    - Retira por completo la sección "1. Panel de lectura rápida".
+    - La reemplaza por "E. Informe de dominios integrados resumido y didáctico".
+    - Conserva el gráfico de cuadrantes hemodinámicos.
+    - Conserva el gráfico de recomendación terapéutica / propuesta terapéutica ICG individualizada.
+    - La sección E se muestra una sola vez y usa el mismo motor diagnóstico canónico del informe completo.
     """
     try:
         from reportlab.platypus import SimpleDocTemplate, Spacer, Image, Table, TableStyle
@@ -8751,18 +8752,38 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     titulo = "MODELO DE INFORME CGI - HEMODINAMIA MATERNA" if es_embarazo else TITULO_MODULO_NO_EMBARAZADA
     story += _paper_header_story(
         titulo,
-        ("Versión ejecutiva de una hoja - panel rápido, cuadrantes y hemodinamia materna" if es_embarazo else "Versión ejecutiva de una hoja - panel rápido, cuadrantes y recomendación terapéutica")
+        ("Versión ejecutiva de una hoja - dominios integrados, cuadrantes y hemodinamia materna" if es_embarazo else "Versión ejecutiva de una hoja - dominios integrados, cuadrantes y recomendación terapéutica")
     )
     story.append(_paper_datos_paciente_table(r, contexto_embarazo, ancho))
     story.append(Spacer(1, 4))
 
-    # 1. Panel de lectura rápida: se conserva.
-    story.append(_paper_paragraph("1. Panel de lectura rápida", stl["PaperH"]))
-    story.append(_paper_metricas_panel(r_panel, ancho))
+    # E. Informe de dominios integrados resumido y didáctico.
+    # Reemplaza por completo al antiguo "1. Panel de lectura rápida".
+    # Usa las mismas métricas basales, reglas diagnósticas y clasificación canónica
+    # que el informe completo para evitar discrepancias entre ambas versiones.
+    story.append(_paper_paragraph("E. Informe de dominios integrados resumido y didactico", stl["PaperH"]))
+    try:
+        if es_embarazo:
+            _c2 = clasificacion_hemodinamica_materna_gestacional(r_panel, contexto_embarazo)
+            _pe = calcular_riesgo_preeclampsia(r_panel, contexto_embarazo)
+            _vol_txt = diagnostico_volemia(r_panel.get("cft")).split(".")[0]
+            dominios_1h = [
+                ["Dominio", "Resultado"],
+                ["Patron hemodinamico gestacional", _c2.get("diagnostico", "N/D")],
+                ["Fenotipo materno sugerido", _c2.get("subtipo", "N/D")],
+                ["Volemia / fluidos toracicos", _vol_txt],
+                ["Score riesgo PE", f"{_pe.get('puntaje','N/D')}/10 - {_pe.get('categoria','')}"]
+            ]
+            story.append(_paper_table(dominios_1h, col_widths=[ancho*0.38, ancho*0.62], header=True, compact=True))
+        else:
+            story.append(_paper_dominios_integrados_table(r_panel, df, ancho))
+    except Exception as e:
+        story.append(_paper_paragraph(f"No se pudo insertar el informe de dominios integrados: {e}", stl["PaperSmall"]))
     story.append(Spacer(1, 4))
 
-    # Las antiguas secciones 2 y 3 fueron retiradas.
-    story.append(_paper_paragraph("2. Gráficos integrados", stl["PaperH"]))
+    # Gráficos integrados. Se elimina la numeración antigua para no dejar una
+    # secuencia 1/2 inconsistente después de reemplazar el Panel de lectura rápida.
+    story.append(_paper_paragraph("Graficos integrados", stl["PaperH"]))
 
     # 2.a conserva el gráfico de cuadrantes hemodinámicos.
     # En embarazo, 2.b deja de ser terapéutico y pasa a ser gráfico de hemodinamia materna
@@ -8774,12 +8795,12 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         graf_cuadrantes = None
 
     graf_2b = None
-    titulo_2b = "2.b Grafico de recomendacion terapeutica"
+    titulo_2b = "Grafico de recomendacion terapeutica"
     fallback_2b = "No hay IC, IRV/RVS o CFT suficientes para generar el gráfico de recomendación terapéutica."
     try:
         if es_embarazo:
             graf_2b = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
-            titulo_2b = "2.b Grafico de hemodinamia materna por edad gestacional"
+            titulo_2b = "Grafico de hemodinamia materna por edad gestacional"
             fallback_2b = "No hay edad gestacional, IC e IRV/RVS suficientes para generar el gráfico de hemodinamia materna."
         else:
             graf_2b = crear_grafico_propuesta_terapeutica_bytes(r_panel, df)
@@ -8793,7 +8814,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     img_w_2b = ancho
     img_h_2b = ancho * (0.55 if es_embarazo else 0.38)
 
-    story.append(_paper_paragraph("2.a Grafico de cuadrantes hemodinamicos", stl["PaperH"]))
+    story.append(_paper_paragraph("Grafico de cuadrantes hemodinamicos", stl["PaperH"]))
     if graf_cuadrantes is not None:
         try:
             graf_cuadrantes.seek(0)
@@ -8813,29 +8834,6 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         story.append(Image(graf_2b, width=img_w_2b, height=img_h_2b, kind="proportional"))
     else:
         story.append(_paper_paragraph(fallback_2b, stl["PaperSmall"]))
-    story.append(Spacer(1, 3))
-
-    # E. Informe de dominios integrados resumido y didáctico: agregado al PDF de una hoja.
-    # Mantiene la coherencia obligatoria con el patrón hemodinámico basal y evita
-    # volver a informar "normodinamia" si el fenotipo real es IC normal con IRV/RVS elevada.
-    story.append(_paper_paragraph("E. Informe de dominios integrados resumido y didactico", stl["PaperH"]))
-    try:
-        if es_embarazo:
-            _c2 = clasificacion_hemodinamica_materna_gestacional(r_panel, contexto_embarazo)
-            _pe = calcular_riesgo_preeclampsia(r_panel, contexto_embarazo)
-            _vol_txt = diagnostico_volemia(r_panel.get("cft")).split(".")[0]
-            dominios_1h = [
-                ["Dominio", "Resultado"],
-                ["Patron hemodinamico gestacional", _c2.get("diagnostico", "N/D")],
-                ["Fenotipo materno sugerido", _c2.get("subtipo", "N/D")],
-                ["Volemia / fluidos toracicos", _vol_txt],
-                ["Score riesgo PE", f"{_pe.get('puntaje','N/D')}/10 - {_pe.get('categoria','')}"]
-            ]
-            story.append(_paper_table(dominios_1h, col_widths=[ancho*0.38, ancho*0.62], header=True, compact=True))
-        else:
-            story.append(_paper_dominios_integrados_table(r_panel, df, ancho))
-    except Exception as e:
-        story.append(_paper_paragraph(f"No se pudo insertar el informe de dominios integrados: {e}", stl["PaperSmall"]))
     story.append(Spacer(1, 3))
 
     nota = (
