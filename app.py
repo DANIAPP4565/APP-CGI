@@ -11,6 +11,7 @@ import streamlit as st
 # =========================================================
 # APP CGI - INFORME HEMODINÁMICO INTEGRADO
 # Corrección: importación real de PDF Z-Logic/CGI
+# V111: descarga dual individual y por lotes (integrado + una hoja)
 # Autor: Ricardo Daniel Olano
 # =========================================================
 
@@ -14435,6 +14436,17 @@ def nombre_archivo_pdf_medico_integrado(r: Dict[str, Any]) -> str:
     return base + ".pdf"
 
 
+def nombre_archivo_pdf_una_hoja_lote(r: Dict[str, Any]) -> str:
+    """Nombre del informe ejecutivo de una hoja para uso individual y por lotes.
+
+    Mantiene la misma identificación clínica del informe integrado y agrega un
+    sufijo inequívoco para que ambos archivos puedan coexistir en la descarga.
+    """
+    nombre_integrado = nombre_archivo_pdf_medico_integrado(r)
+    p = Path(nombre_integrado)
+    return f"{p.stem}, INFORME UNA HOJA.pdf"
+
+
 def _normalizar_stem_pareja_cgi(nombre_archivo: str) -> str:
     """Normaliza un nombre para comparar archivos sin depender de mayúsculas o separadores."""
     stem = Path(str(nombre_archivo or "")).stem
@@ -14709,21 +14721,36 @@ def procesar_lote_cgi(
 
                     contexto = _contexto_embarazo_automatico_lote_cgi(df)
                     informe_txt = generar_informe_texto(df, contexto)
-                    pdf_informe = generar_pdf_integrado(df, contexto)
-                    if not pdf_informe:
-                        raise ValueError("El generador devolvió un PDF vacío.")
 
-                    nombre_salida = _nombre_unico_cgi(nombre_archivo_pdf_medico_integrado(r), usados)
+                    # Generar SIEMPRE las dos alternativas de informe para cada paciente:
+                    # 1) informe médico integrado completo; 2) informe ejecutivo de una hoja.
+                    pdf_integrado = generar_pdf_integrado(df, contexto)
+                    pdf_una_hoja = generar_pdf_resumido_una_hoja(df, contexto)
+                    if not pdf_integrado:
+                        raise ValueError("El generador del informe médico integrado devolvió un PDF vacío.")
+                    if not pdf_una_hoja:
+                        raise ValueError("El generador del informe de una hoja devolvió un PDF vacío.")
+
+                    nombre_integrado = _nombre_unico_cgi(nombre_archivo_pdf_medico_integrado(r), usados)
+                    nombre_una_hoja = _nombre_unico_cgi(nombre_archivo_pdf_una_hoja_lote(r), usados)
                     reportes.append({
-                        "nombre": nombre_salida,
-                        "bytes": pdf_informe,
+                        # Campos legacy para compatibilidad con código previo.
+                        "nombre": nombre_integrado,
+                        "bytes": pdf_integrado,
+                        # Nuevos campos explícitos por formato.
+                        "nombre_integrado": nombre_integrado,
+                        "bytes_integrado": pdf_integrado,
+                        "nombre_una_hoja": nombre_una_hoja,
+                        "bytes_una_hoja": pdf_una_hoja,
                         "paciente": r.get("paciente"),
                         "origen": origen_compuesto,
                         "archivos_origen": nombres_grupo,
                         "pareja_complementaria": bool(grupo.get("pareado")),
                         "curva_ok": mejor_curva is not None,
                     })
-                    zf.writestr(f"informes_pdf/{nombre_salida}", pdf_informe)
+                    # ZIP combinado: conserva ambas alternativas separadas en carpetas claras.
+                    zf.writestr(f"informes_medicos_integrados/{nombre_integrado}", pdf_integrado)
+                    zf.writestr(f"informes_una_hoja/{nombre_una_hoja}", pdf_una_hoja)
 
                     if incluir_originales:
                         for cidx, comp in enumerate(componentes, start=1):
@@ -14732,7 +14759,7 @@ def procesar_lote_cgi(
                                 comp["bytes"],
                             )
 
-                    curva_base = _sanitizar_nombre_zip_cgi(Path(nombre_salida).stem, f"curva_{gidx}")
+                    curva_base = _sanitizar_nombre_zip_cgi(Path(nombre_integrado).stem, f"curva_{gidx}")
                     curvas_ok = 0
                     for cidx, curva_i in enumerate(curvas, start=1):
                         if not curva_i.get("ok"):
@@ -14765,7 +14792,9 @@ def procesar_lote_cgi(
                         "pdf_formato_4_hojas": cuatro.get("nombre") if cuatro else "",
                         "pdfs_integrados": len(componentes),
                         "pareja_complementaria": "SI" if grupo.get("pareado") else "NO - archivo sin pareja",
-                        "informe_generado": nombre_salida,
+                        "informe_medico_integrado": nombre_integrado,
+                        "informe_una_hoja": nombre_una_hoja,
+                        "informe_generado": nombre_integrado,
                         "estado": "EXITOSO",
                         "curvas_digitalizadas": curvas_ok,
                         "curva_seleccionada_archivo": mejor_curva.get("archivo_origen") if mejor_curva else "",
@@ -14814,23 +14843,53 @@ def procesar_lote_cgi(
                 f"Estudios/pacientes detectados: {len(grupos)}\n"
                 f"Parejas completas detectadas: {parejas}\n"
                 f"Archivos sin pareja: {huerfanos}\n"
-                f"Informes generados: {len(reportes)}\n"
+                f"Pacientes con ambos formatos generados: {len(reportes)}\n"
                 f"Estudios con error: {len(errores_rows)}\n"
                 f"Registros agregados/actualizados en historial: {historial_guardados}/{historial_total}\n\n"
                 "Regla de integración: el PDF terminado en 1 y el PDF base sin 1 se procesan "
                 "como un único estudio del mismo paciente y fecha. La validación clínica se realiza "
                 "después de fusionar ambos documentos.\n"
-                "Cada PDF se digitaliza de forma independiente; el informe usa la curva válida con "
-                "mejor puntuación y el ZIP conserva todas las curvas recuperadas.\n"
+                "Cada PDF puede digitalizarse de forma independiente para auditoría técnica; la sección "
+                "\"Curva real digitalizada del estudio CGI\" no se incorpora al informe médico. "
+                "El ZIP combinado puede conservar los archivos de auditoría recuperados.\n"
             )
             zf.writestr("LEEME.txt", leeme.encode("utf-8"))
+
+        # Además del ZIP combinado, construir dos ZIP independientes por tipo de informe.
+        # Esto permite descargar en un clic todos los informes médicos integrados o todos
+        # los informes de una hoja sin mezclar formatos.
+        def _zip_por_tipo_lote(tipo: str) -> bytes:
+            salida = io.BytesIO()
+            with zipfile.ZipFile(salida, "w", compression=zipfile.ZIP_DEFLATED) as ztipo:
+                for item in reportes:
+                    if tipo == "integrado":
+                        nombre_tipo = item.get("nombre_integrado") or item.get("nombre")
+                        bytes_tipo = item.get("bytes_integrado") or item.get("bytes")
+                    else:
+                        nombre_tipo = item.get("nombre_una_hoja")
+                        bytes_tipo = item.get("bytes_una_hoja")
+                    if nombre_tipo and bytes_tipo:
+                        ztipo.writestr(_sanitizar_nombre_zip_cgi(nombre_tipo), bytes_tipo)
+                if not pd.DataFrame(resumen_rows).empty:
+                    ztipo.writestr("resumen_lote_cgi.xlsx", _excel_resumen_lote_cgi(pd.DataFrame(resumen_rows), pd.DataFrame(errores_rows)))
+                if errores_rows:
+                    ztipo.writestr("errores_lote.csv", pd.DataFrame(errores_rows).to_csv(index=False).encode("utf-8-sig"))
+            return salida.getvalue()
+
+        timestamp_zip = datetime.now().strftime('%Y%m%d_%H%M%S')
+        zip_integrados = _zip_por_tipo_lote("integrado")
+        zip_una_hoja = _zip_por_tipo_lote("una_hoja")
 
         return {
             "reportes": reportes,
             "resumen": pd.DataFrame(resumen_rows),
             "errores": pd.DataFrame(errores_rows),
             "zip_bytes": zip_buffer.getvalue(),
-            "zip_nombre": f"Informes_CGI_lote_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+            "zip_nombre": f"Informes_CGI_AMBOS_FORMATOS_lote_{timestamp_zip}.zip",
+            "zip_integrados_bytes": zip_integrados,
+            "zip_integrados_nombre": f"Informes_CGI_MEDICOS_INTEGRADOS_lote_{timestamp_zip}.zip",
+            "zip_una_hoja_bytes": zip_una_hoja,
+            "zip_una_hoja_nombre": f"Informes_CGI_UNA_HOJA_lote_{timestamp_zip}.zip",
             "historial_guardados": historial_guardados if "historial_guardados" in locals() else 0,
             "historial_total": historial_total if "historial_total" in locals() else 0,
             "pdf_recibidos": len(archivos),
@@ -14856,7 +14915,7 @@ def render_modulo_lotes_cgi(
     st.caption(
         "Importe hasta 100 PDF. La app detecta automáticamente cada pareja complementaria "
         "(archivo terminado en 1 + archivo base sin 1), integra ambos documentos y genera "
-        "un único informe por paciente."
+        "dos alternativas por paciente: informe médico integrado e informe de una hoja."
     )
     archivos_lote = list(archivos_lote or [])
     if len(archivos_lote) > 100:
@@ -14890,12 +14949,12 @@ def render_modulo_lotes_cgi(
         st.info("Seleccione en el panel lateral ambos PDF complementarios de cada paciente.")
 
     if st.button(
-        "⚙️ Integrar parejas y generar informes CGI",
+        "⚙️ Integrar parejas y generar ambos formatos de informe",
         type="primary",
         disabled=not bool(archivos_lote),
         key="btn_procesar_lote_cgi",
     ):
-        with st.spinner("Agrupando parejas, integrando datos y generando informes individuales..."):
+        with st.spinner("Agrupando parejas, integrando datos y generando informe médico integrado + informe de una hoja por paciente..."):
             resultado = procesar_lote_cgi(
                 archivos_lote,
                 usuario_info,
@@ -14914,7 +14973,7 @@ def render_modulo_lotes_cgi(
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("PDF recibidos", resultado.get("pdf_recibidos", len(archivos_lote)))
     c2.metric("Estudios integrados", resultado.get("estudios_detectados", len(reportes)))
-    c3.metric("Informes generados", len(reportes))
+    c3.metric("Pacientes con 2 informes", len(reportes))
     c4.metric("Errores", 0 if errores is None else len(errores))
     st.caption(
         f"Parejas detectadas: {resultado.get('parejas_detectadas', 0)} · "
@@ -14922,32 +14981,67 @@ def render_modulo_lotes_cgi(
     )
 
     if reportes:
-        st.success("Las parejas complementarias fueron integradas. Puede descargar el ZIP o cada informe individual.")
-        st.download_button(
-            "📦 Descargar ZIP con todos los informes CGI",
-            data=resultado.get("zip_bytes") or b"",
-            file_name=resultado.get("zip_nombre") or "Informes_CGI_lote.zip",
-            mime="application/zip",
-            key="download_zip_lote_cgi",
-            use_container_width=True,
+        st.success(
+            "Las parejas complementarias fueron integradas. Para cada paciente están disponibles "
+            "el informe médico integrado y el informe de una hoja; también puede descargarlos por lotes."
         )
+        st.markdown("#### Descarga por lotes")
+        zc1, zc2, zc3 = st.columns(3)
+        with zc1:
+            st.download_button(
+                "📦 ZIP · Informes médicos integrados",
+                data=resultado.get("zip_integrados_bytes") or b"",
+                file_name=resultado.get("zip_integrados_nombre") or "Informes_CGI_MEDICOS_INTEGRADOS.zip",
+                mime="application/zip",
+                key="download_zip_integrados_lote_cgi",
+                use_container_width=True,
+            )
+        with zc2:
+            st.download_button(
+                "📄 ZIP · Informes de una hoja",
+                data=resultado.get("zip_una_hoja_bytes") or b"",
+                file_name=resultado.get("zip_una_hoja_nombre") or "Informes_CGI_UNA_HOJA.zip",
+                mime="application/zip",
+                key="download_zip_una_hoja_lote_cgi",
+                use_container_width=True,
+            )
+        with zc3:
+            st.download_button(
+                "🗂️ ZIP · Ambos formatos",
+                data=resultado.get("zip_bytes") or b"",
+                file_name=resultado.get("zip_nombre") or "Informes_CGI_AMBOS_FORMATOS.zip",
+                mime="application/zip",
+                key="download_zip_ambos_lote_cgi",
+                use_container_width=True,
+            )
+
         with st.expander("Descargas individuales por paciente", expanded=True):
             for i, item in enumerate(reportes, start=1):
-                col_a, col_b = st.columns([3, 1])
                 fuentes = " + ".join(item.get("archivos_origen") or [])
-                col_a.markdown(
+                st.markdown(
                     f"**{i}. {item.get('paciente') or 'Paciente'}**  \n"
-                    f"{item.get('nombre')}  \n"
                     f"Fuentes integradas: {fuentes}"
                 )
-                col_b.download_button(
-                    "Descargar PDF",
-                    data=item.get("bytes") or b"",
-                    file_name=item.get("nombre") or f"Informe_CGI_{i}.pdf",
-                    mime="application/pdf",
-                    key=f"download_individual_cgi_{i}_{abs(hash(item.get('nombre','')))}",
-                    use_container_width=True,
-                )
+                col_int, col_1h = st.columns(2)
+                with col_int:
+                    st.download_button(
+                        "🧾 Descargar informe médico integrado",
+                        data=item.get("bytes_integrado") or item.get("bytes") or b"",
+                        file_name=item.get("nombre_integrado") or item.get("nombre") or f"Informe_CGI_integrado_{i}.pdf",
+                        mime="application/pdf",
+                        key=f"download_integrado_cgi_{i}_{abs(hash(item.get('nombre_integrado') or item.get('nombre','')))}",
+                        use_container_width=True,
+                    )
+                with col_1h:
+                    st.download_button(
+                        "📄 Descargar informe de una hoja",
+                        data=item.get("bytes_una_hoja") or b"",
+                        file_name=item.get("nombre_una_hoja") or f"Informe_CGI_una_hoja_{i}.pdf",
+                        mime="application/pdf",
+                        key=f"download_una_hoja_cgi_{i}_{abs(hash(item.get('nombre_una_hoja','')))}",
+                        use_container_width=True,
+                    )
+                st.divider()
     elif resultado.get("zip_bytes"):
         st.warning("No se generaron informes válidos. El ZIP contiene el resumen de errores por pareja.")
         st.download_button(
@@ -15883,7 +15977,7 @@ nombre = re.sub(r'[\\/:*?"<>|\s]+', "_", str(r.get("paciente") or "paciente").st
 # Se separa la acción de generar de la acción de descargar para que el usuario
 # vea claramente ambos informes: completo integrado y resumido de una hoja.
 
-st.subheader("Generación de informes PDF")
+st.subheader("Descarga de informes PDF")
 col_pdf1, col_pdf2 = st.columns(2)
 
 with col_pdf1:
@@ -15909,7 +16003,7 @@ with col_pdf2:
     if st.button("📄 Generar PDF resumido de una hoja", key="btn_generar_pdf_resumido"):
         try:
             st.session_state["pdf_resumido_bytes"] = generar_pdf_resumido_una_hoja(df_final, contexto_embarazo)
-            st.session_state["pdf_resumido_nombre"] = nombre_archivo_pdf_paciente(r, "Informe CGI resumido 1 hoja")
+            st.session_state["pdf_resumido_nombre"] = nombre_archivo_pdf_una_hoja_lote(r)
             st.success("PDF resumido de una hoja generado correctamente.")
         except Exception as e:
             st.session_state.pop("pdf_resumido_bytes", None)
@@ -15917,9 +16011,9 @@ with col_pdf2:
 
     if st.session_state.get("pdf_resumido_bytes"):
         st.download_button(
-            "📄 Descargar PDF resumido - 1 hoja",
+            "📄 Descargar PDF informe de una hoja",
             data=st.session_state["pdf_resumido_bytes"],
-            file_name=st.session_state.get("pdf_resumido_nombre", nombre_archivo_pdf_paciente(r, "Informe CGI resumido 1 hoja")),
+            file_name=st.session_state.get("pdf_resumido_nombre", nombre_archivo_pdf_una_hoja_lote(r)),
             mime="application/pdf",
             key="download_pdf_resumido",
         )
