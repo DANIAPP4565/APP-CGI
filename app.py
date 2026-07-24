@@ -8953,7 +8953,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
             story.append(Image(graf_materno, width=ancho, height=ancho*0.34, kind="proportional"))
         else:
             story.append(_paper_paragraph(
-                "No hay edad gestacional, IC e IRV/RVS suficientes para generar el grafico de hemodinamia materna por semanas.",
+                "No hay edad gestacional, IC e IRV indexado suficientes para generar el gráfico de hemodinamia materna por semanas.",
                 stl["PaperSmall"]
             ))
         story.append(Spacer(1, 3))
@@ -8990,7 +8990,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
             story.append(Image(graf_cuadrantes, width=ancho, height=ancho*0.62, kind="proportional"))
         else:
             story.append(_paper_paragraph(
-                "No hay IC e IRV/RVS suficientes para generar el grafico de cuadrantes hemodinamicos.",
+                "No hay IC e IRV indexado suficientes para generar el gráfico de cuadrantes hemodinámicos.",
                 stl["PaperSmall"]
             ))
         story.append(Spacer(1, 3))
@@ -9009,7 +9009,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
             story.append(Image(graf_tx, width=ancho, height=ancho*0.38, kind="proportional"))
         else:
             story.append(_paper_paragraph(
-                "No hay IC, IRV/RVS o CFT suficientes para generar el grafico de recomendacion terapeutica.",
+                "No hay IC, IRV indexado o CFT suficientes para generar el gráfico de recomendación terapéutica.",
                 stl["PaperSmall"]
             ))
         story.append(Spacer(1, 3))
@@ -13992,8 +13992,8 @@ def significado_patron_hemodinamico_oficial(patron: Any) -> str:
     if "normodinamia" in p:
         return "índice cardíaco y resistencias vasculares dentro del rango diagnóstico programado."
     if "datos insuficientes" in p:
-        return "faltan IC y/o IRV/RVS para definir con seguridad el patrón circulatorio."
-    return "patrón hemodinámico basal definido por la combinación de IC e IRV/RVS."
+        return "faltan IC y/o IRV indexado para definir con seguridad el patrón circulatorio."
+    return "patrón hemodinámico basal definido por la combinación de IC e IRV indexado a superficie corporal."
 
 
 def _val_dom(rb: Dict[str, Any], r: Dict[str, Any], clave: str) -> Any:
@@ -16571,7 +16571,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
             ["Métrica", "Resultado", "Interpretación"],
             ["Edad gestacional", f"{fmt(eg,0)} semanas" if eg is not None else "No disponible", "Referencia gestacional"],
             ["Índice cardíaco (IC)", f"{fmt(rb.get('ic'),2)} L/min/m²", str(cg.get("ic_estado") or "N/E")],
-            [str(cg.get("res_tipo") or "RVS/IRV"), f"{fmt(cg.get('res_valor'),0)} {cg.get('res_unidad','')}", str(cg.get("res_estado") or "N/E")],
+            ["IRV (indexado a superficie corporal)", f"{fmt(cg.get('res_valor'),0)} {cg.get('res_unidad','dyn.s.cm-5.m²')}", str(cg.get("res_estado") or "N/E")],
             ["Patrón hemodinámico", str(cg.get("patron") or "No clasificable"), "Según edad gestacional"],
             ["AC Capan (Ea/Ees)", fmt(ac,2), clasificar_metrica_canonica("EA/EES", ac) if ac is not None else "N/E"],
             ["IV", fmt(iv,2), clasificar_metrica_canonica("IV", iv) if iv is not None else "N/E"],
@@ -16654,7 +16654,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         )
         story.append(_paper_paragraph(concl, stl["PaperSmall"]))
         story.append(_paper_paragraph(
-            "La referencia diagnóstica es ACOSTADO/CINTA/SPOT/ESTUDIO BASAL; PARADO se reserva para respuesta ortostática. IRV y RVS no se intercambian por tener distinta indexación y unidades.",
+            "La referencia diagnóstica es ACOSTADO/CINTA/SPOT/ESTUDIO BASAL; PARADO se reserva para respuesta ortostática. Se informa IRV, índice de resistencia vascular indexado a superficie corporal. RVS es no indexada y no se utiliza como sustituto clínico del IRV.",
             stl["PaperSmall"],
         ))
         usuario_info = st.session_state.get("usuario_actual", {})
@@ -17756,6 +17756,390 @@ def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
 
 
 
+
+# =========================================================
+# V118 - IRV INDEXADO COMO ÚNICA RESISTENCIA CLÍNICA INFORMADA
+# =========================================================
+# Reglas:
+# - IRV/SVRI = Índice de Resistencia Vascular indexado a superficie corporal
+#   (dyn.s.cm-5.m²). Es la métrica que se informa en pantalla y PDF.
+# - RVS/SVR = Resistencia Vascular Sistémica NO indexada (dyn.s.cm-5).
+# - RVS nunca sustituye silenciosamente a IRV.
+# - Si existe RVS y superficie corporal (SC/BSA) válida, puede derivarse IRV = RVS*SC.
+# - Si no existe IRV ni SC para indexar RVS, el informe deja IRV como no disponible.
+# - La lógica predictiva puede conservar modelos internos, pero no muestra nombres
+#   de modelos/autores en la conclusión clínica de riesgo de preeclampsia.
+
+BUILD_APP = "CGI-DOMINIOS-V118-IRV-INDEXADO-20260724"
+
+
+def _v118_valor_exacto_fila(fila: Dict[str, Any], *claves: str) -> Any:
+    """Busca solo claves equivalentes de la MISMA magnitud, sin mezclar IRV y RVS."""
+    if not fila:
+        return None
+    mapa = {normalizar_txt(k).replace(" ", "_"): v for k, v in fila.items()}
+    for clave in claves:
+        k = normalizar_txt(clave).replace(" ", "_")
+        if k in mapa and es_valor_util(mapa[k]):
+            return mapa[k]
+    return None
+
+
+def _valor_fila_case_insensitive(fila: Dict[str, Any], *claves: str) -> Any:
+    """V118: equivalencias seguras; IRV/SVRI y RVS/SVR quedan totalmente separados."""
+    if not fila:
+        return None
+    mapa = {normalizar_txt(k).replace(" ", "_"): v for k, v in fila.items()}
+    equivalencias = {
+        "ic": ["ic", "indice_cardiaco", "cardiac_index", "ci"],
+        "ci": ["ci", "ic", "indice_cardiaco", "cardiac_index"],
+        "irv": ["irv", "svri", "indice_de_resistencia_vascular", "indice_resistencia_vascular", "systemic_vascular_resistance_index"],
+        "svri": ["svri", "irv", "indice_de_resistencia_vascular", "indice_resistencia_vascular", "systemic_vascular_resistance_index"],
+        "rvs": ["rvs", "svr", "resistencia_vascular_sistemica", "systemic_vascular_resistance"],
+        "svr": ["svr", "rvs", "resistencia_vascular_sistemica", "systemic_vascular_resistance"],
+        "fc": ["fc", "frecuencia_cardiaca", "heart_rate", "hr"],
+        "pas": ["pas", "sistolica", "sbp", "sys"],
+        "pad": ["pad", "diastolica", "dbp", "dia"],
+        "ca": ["ca", "ica", "complacencia_arterial", "arterial_compliance"],
+        "cft": ["cft", "tfc", "contenido_de_fluidos_toracicos"],
+        "cftnr": ["cftnr", "cft_nr", "cft_normalizado", "thoracic_fluid_index", "tfi"],
+    }
+    for clave in claves:
+        ck = normalizar_txt(clave).replace(" ", "_")
+        candidatos = [ck] + equivalencias.get(ck, [])
+        for alt in candidatos:
+            if alt in mapa and es_valor_util(mapa[alt]):
+                # IC nunca debe confundirse con ITC u otras abreviaturas próximas.
+                if ck in {"ic", "ci"} and es_fuente_ic_prohibida(alt):
+                    continue
+                return mapa[alt]
+    return None
+
+
+def _v118_superficie_corporal_desde_fila(d: Dict[str, Any]) -> Optional[float]:
+    for clave in ["SC", "BSA", "Superficie corporal", "Superficie_Corporal", "Body Surface Area", "body_surface_area"]:
+        v = limpiar_numero(_v118_valor_exacto_fila(d, clave))
+        if v is not None and 0.8 <= v <= 3.5:
+            return v
+    return None
+
+
+def _v118_indexar_rvs_si_posible(rvs: Any, sc: Any) -> Optional[float]:
+    rv = limpiar_numero(rvs); bsa = limpiar_numero(sc)
+    if rv is None or bsa is None or not (0.8 <= bsa <= 3.5):
+        return None
+    irv = rv * bsa
+    return irv if rango_plausible("irv", irv) else None
+
+
+def extraer_resumen_ortostatico_desde_fila(fila: pd.Series) -> Dict[str, Any]:
+    """V118: IRV solo desde IRV/SVRI o derivado con SC; RVS se conserva por separado."""
+    d = fila.to_dict()
+    irv = limpiar_numero(_valor_fila_case_insensitive(d, "IRV", "SVRI"))
+    rvs = limpiar_numero(_valor_fila_case_insensitive(d, "RVS", "SVR"))
+    sc = _v118_superficie_corporal_desde_fila(d)
+    origen_irv = "importado"
+    if irv is None:
+        irv = _v118_indexar_rvs_si_posible(rvs, sc)
+        origen_irv = "calculado_desde_RVS_x_SC" if irv is not None else "no_disponible"
+    return {
+        "paciente": _valor_fila_case_insensitive(d, "Paciente", "paciente"),
+        "posicion": detectar_posicion_fila(d),
+        "metodo": detectar_metodo_fila(d),
+        "ic": limpiar_numero(_valor_fila_case_insensitive(d, "IC", "CI", "indice cardiaco", "cardiac index")),
+        "irv": irv,
+        "irv_origen": origen_irv,
+        "rvs": rvs,
+        "superficie_corporal": sc,
+        "fc": limpiar_numero(_valor_fila_case_insensitive(d, "FC", "frecuencia cardiaca", "heart rate", "HR")),
+        "pas": limpiar_numero(_valor_fila_case_insensitive(d, "PAS", "SBP")),
+        "pad": limpiar_numero(_valor_fila_case_insensitive(d, "PAD", "DBP")),
+        "ca": limpiar_numero(_valor_fila_case_insensitive(d, "CA", "ICA")),
+        "cft": limpiar_numero(_valor_fila_case_insensitive(d, "CFT", "TFC")),
+        "cftnr": limpiar_numero(_valor_fila_case_insensitive(d, "CFTnr", "TFCI")),
+    }
+
+
+_extraer_resumen_integrado_pre_v118 = extraer_resumen_integrado
+
+def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
+    """V118: elimina cualquier fallback histórico RVS→IRV y preserva trazabilidad."""
+    out = dict(_extraer_resumen_integrado_pre_v118(df) or {})
+    irv_real = None; rvs_real = None; sc = None
+    try:
+        dfx = estandarizar_columnas_clinicas(df).copy() if df is not None else pd.DataFrame()
+        diag = seleccionar_df_diagnostico(dfx) if not dfx.empty else dfx
+        if diag is None or diag.empty:
+            diag = dfx
+        if diag is not None and not diag.empty:
+            # Preferir la última fila diagnóstica con valor explícito real.
+            for _, fila in diag.iloc[::-1].iterrows():
+                d = fila.to_dict()
+                if irv_real is None:
+                    irv_real = limpiar_numero(_valor_fila_case_insensitive(d, "IRV", "SVRI"))
+                if rvs_real is None:
+                    rvs_real = limpiar_numero(_valor_fila_case_insensitive(d, "RVS", "SVR"))
+                if sc is None:
+                    sc = _v118_superficie_corporal_desde_fila(d)
+                if irv_real is not None and rvs_real is not None and sc is not None:
+                    break
+        # Respaldo por rótulo explícito Z-Logic para IRV, nunca desde RVS.
+        if irv_real is None:
+            try:
+                irv_real = limpiar_numero((_extraer_metricas_explicitas_zlogic_desde_df(df) or {}).get("irv"))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    if irv_real is None:
+        irv_real = _v118_indexar_rvs_si_posible(rvs_real, sc)
+        out["irv_origen"] = "calculado_desde_RVS_x_SC" if irv_real is not None else "no_disponible"
+    else:
+        out["irv_origen"] = "importado_indexado"
+    out["irv"] = irv_real
+    out["rvs"] = rvs_real
+    out["superficie_corporal"] = sc
+    return out
+
+
+_resumen_acostado_cinta_pre_v118 = resumen_acostado_cinta_para_patron
+
+def resumen_acostado_cinta_para_patron(df: Optional[pd.DataFrame], r_default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    out = dict(_resumen_acostado_cinta_pre_v118(df, r_default) or {})
+    try:
+        rb, _ = obtener_resumenes_ortostaticos(df) if df is not None and isinstance(df, pd.DataFrame) and not df.empty else ({}, {})
+    except Exception:
+        rb = {}
+    irv = limpiar_numero((rb or {}).get("irv"))
+    rvs = limpiar_numero((rb or {}).get("rvs"))
+    sc = limpiar_numero((rb or {}).get("superficie_corporal"))
+    if irv is None:
+        # Intentar rescatar IRV explícito del resumen ya normalizado, pero solo si su origen no fue un fallback histórico.
+        origen = str(out.get("irv_origen") or "")
+        if origen in {"importado_indexado", "calculado_desde_RVS_x_SC"}:
+            irv = limpiar_numero(out.get("irv"))
+    if irv is None:
+        irv = _v118_indexar_rvs_si_posible(rvs, sc)
+    out["irv"] = irv
+    out["rvs"] = rvs if rvs is not None else limpiar_numero(out.get("rvs"))
+    out["superficie_corporal"] = sc if sc is not None else out.get("superficie_corporal")
+    out["irv_origen"] = ("importado_indexado" if irv is not None and not (rvs is not None and sc is not None and abs(irv-rvs*sc)<1e-6) else
+                         "calculado_desde_RVS_x_SC" if irv is not None else "no_disponible")
+    return out
+
+
+def seleccionar_resistencia_clinica(r: Optional[Dict[str, Any]]) -> Tuple[str, Optional[float], float, float, str]:
+    """V118: la salida clínica usa siempre IRV indexado. RVS nunca es sustituto."""
+    r = r or {}
+    irv = limpiar_numero(r.get("irv"))
+    return "IRV", irv, 1200.0, 2000.0, "dyn.s.cm-5.m²"
+
+
+def clasificacion_hemodinamica_materna_gestacional(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """V118: clasificación materna exclusivamente con IC + IRV indexado a SC."""
+    contexto = contexto or {}; r = r or {}
+    eg = limpiar_numero(contexto.get("edad_gestacional")); ic = limpiar_numero(r.get("ic")); irv = limpiar_numero(r.get("irv"))
+    ref = referencia_hemodinamica_gestacional_v110(eg, "IRV")
+    if ref is None or ic is None or irv is None:
+        return {
+            "aplicable": False, "edad_gestacional": eg, "ic_estado": "NO EVALUABLE", "irv_estado": "NO EVALUABLE",
+            "res_estado": "NO EVALUABLE", "res_tipo": "IRV", "res_valor": irv, "res_unidad": "dyn.s.cm-5.m²",
+            "patron": "DATOS INSUFICIENTES", "patron_principal": "DATOS INSUFICIENTES", "subtipo": "DATOS INSUFICIENTES",
+            "diagnostico": "Faltan edad gestacional, IC o IRV indexado a superficie corporal. RVS no indexada no se utiliza como sustituto.",
+            "rango": ref,
+        }
+    ic_estado = "BAJO" if ic < ref["ic_min"] else ("AUMENTADO" if ic > ref["ic_max"] else "NORMAL")
+    irv_estado = "BAJO" if irv < ref["res_min"] else ("AUMENTADO" if irv > ref["res_max"] else "NORMAL")
+    if ic_estado == "NORMAL" and irv_estado == "NORMAL": patron = "NORMODINAMIA"
+    elif ic_estado == "BAJO" and irv_estado == "AUMENTADO": patron = "HIPODINAMIA"
+    elif ic_estado == "AUMENTADO" and irv_estado == "BAJO": patron = "HIPERDINAMIA"
+    elif ic_estado == "NORMAL" and irv_estado == "AUMENTADO": patron = "IC NORMAL CON IRV INADECUADAMENTE ALTO PARA EG"
+    elif ic_estado == "AUMENTADO" and irv_estado == "NORMAL": patron = "IC ALTO CON IRV NORMAL PARA EG"
+    elif ic_estado == "BAJO" and irv_estado == "NORMAL": patron = "IC BAJO CON IRV NORMAL PARA EG"
+    else: patron = f"PATRÓN MIXTO: IC {ic_estado} / IRV {irv_estado}"
+    return {
+        "aplicable": True, "edad_gestacional": eg, "ic_estado": ic_estado, "irv_estado": irv_estado,
+        "res_estado": irv_estado, "res_tipo": "IRV", "res_valor": irv, "res_unidad": "dyn.s.cm-5.m²",
+        "patron": patron, "patron_principal": patron, "subtipo": patron,
+        "ic_fuera_rango": ic_estado != "NORMAL", "irv_fuera_rango": irv_estado != "NORMAL", "res_fuera_rango": irv_estado != "NORMAL",
+        "rango": ref, "fuente_regla_resistencia": ref.get("res_fuente"),
+        "diagnostico": (
+            f"Hemodinamia materna por EG: {patron}. IC {fmt(ic,2)} ({ic_estado}); "
+            f"IRV {fmt(irv,0)} dyn.s.cm-5.m² ({irv_estado}). "
+            "IRV corresponde al índice de resistencia vascular indexado a superficie corporal; RVS es no indexada y no se informa como sustituto."
+        ),
+        "detalle": (
+            f"IC {fmt(ic,2)} L/min/m² ({ic_estado}); IRV {fmt(irv,0)} dyn.s.cm-5.m² ({irv_estado}). "
+            "IRV es el índice de resistencia vascular indexado a superficie corporal."
+        ),
+    }
+
+
+def crear_grafico_hemodinamia_materna_por_semanas_una_hoja_bytes(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Optional[io.BytesIO]:
+    """V118: gráfico materno siempre IC + IRV indexado a superficie corporal."""
+    contexto = contexto or {}; cg = clasificacion_hemodinamica_materna_gestacional(r, contexto)
+    if not cg.get("aplicable"):
+        return None
+    try:
+        import matplotlib.pyplot as plt, numpy as np, io as _io
+    except Exception:
+        return None
+    eg = float(cg["edad_gestacional"]); ic = limpiar_numero(r.get("ic")); irv = limpiar_numero(r.get("irv"))
+    semanas = np.linspace(6, 42, 145); iclo=[]; ichi=[]; rlo=[]; rhi=[]
+    for s in semanas:
+        rr = referencia_hemodinamica_gestacional_v110(s, "IRV")
+        iclo.append(rr["ic_min"]); ichi.append(rr["ic_max"]); rlo.append(rr["res_min"]); rhi.append(rr["res_max"])
+    fig, ax1 = plt.subplots(figsize=(11.6,4.1), dpi=170); ax2 = ax1.twinx(); fig.patch.set_facecolor("white")
+    ax1.fill_between(semanas, iclo, ichi, alpha=.18, label="Rango IC esperado")
+    ax2.fill_between(semanas, rlo, rhi, alpha=.13, label="Rango IRV indexado esperado")
+    ax1.scatter([eg],[ic],s=150,zorder=8); ax2.scatter([eg],[irv],s=135,marker="D",zorder=8)
+    ax1.annotate(f"IC {fmt(ic,2)} - {cg.get('ic_estado')}",(eg,ic),xytext=(8,16),textcoords="offset points",fontsize=8.5,fontweight="bold")
+    ax2.annotate(f"IRV {fmt(irv,0)} - {cg.get('irv_estado')}",(eg,irv),xytext=(8,-24),textcoords="offset points",fontsize=8.5,fontweight="bold")
+    ax1.set_xlim(6,42); ax1.set_xlabel("Edad gestacional (semanas)",fontsize=9); ax1.set_ylabel("IC (L/min/m²)",fontsize=9)
+    ax2.set_ylabel("IRV indexado a SC (dyn.s.cm-5.m²)",fontsize=9)
+    ax1.grid(True,alpha=.18); ax1.set_title(f"Hemodinamia materna por edad gestacional | EG {fmt(eg,0)} | {cg.get('patron')}",fontsize=10.5,fontweight="bold")
+    h1,l1=ax1.get_legend_handles_labels(); h2,l2=ax2.get_legend_handles_labels(); ax1.legend(h1+h2,l1+l2,loc="upper right",fontsize=7.2)
+    fig.text(.5,.005,"IRV = índice de resistencia vascular indexado a superficie corporal. RVS = resistencia vascular sistémica no indexada; no se intercambian.",ha="center",fontsize=6.5)
+    fig.tight_layout(rect=[0,.03,1,1]); buf=_io.BytesIO(); fig.savefig(buf,format="png",bbox_inches="tight",pad_inches=.06); plt.close(fig); buf.seek(0); return buf
+
+
+def _v118_limpiar_mencion_modelo_visible(texto: Any) -> str:
+    """Elimina nombres de modelos/autores de la salida clínica visible de riesgo PE."""
+    t = str(texto or "")
+    # Eliminar oraciones completas con menciones del modelo/árbol, sin tocar la bibliografía general.
+    t = re.sub(r"(?:^|(?<=[.!?])\s+)[^.!?]*(?:modelo\s+olano\s+2023|olano\s+2023|modelo\s+j48|[aá]rbol\s+j48)[^.!?]*[.!?]?", " ", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+_estimar_subtipo_pre_v118 = estimar_subtipo_pe_temprana_tardia
+
+def estimar_subtipo_pe_temprana_tardia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    out = dict(_estimar_subtipo_pre_v118(r, contexto) or {})
+    out["texto"] = _v118_limpiar_mencion_modelo_visible(out.get("texto"))
+    return out
+
+
+_calcular_riesgo_pre_v118 = calcular_riesgo_preeclampsia
+
+def calcular_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    out = dict(_calcular_riesgo_pre_v118(r, contexto) or {})
+    factores_limpios = []
+    modelo_positivo = False
+    for f in list(out.get("factores") or []):
+        fs = str(f)
+        if re.search(r"olano\s+2023|j48|modelo", fs, flags=re.IGNORECASE):
+            if re.search(r"clasifica.*\bpe\b|patr[oó]n.*\bpe\b", fs, flags=re.IGNORECASE) and not re.search(r"no[- ]?pe", fs, flags=re.IGNORECASE):
+                modelo_positivo = True
+            continue
+        factores_limpios.append(_v118_limpiar_mencion_modelo_visible(fs))
+    if modelo_positivo:
+        factores_limpios.append("Patrón multivariable de la base de conocimiento compatible con mayor riesgo en la ventana gestacional evaluada.")
+    out["factores"] = [x for x in factores_limpios if str(x).strip()]
+    sub = dict(out.get("riesgo_pe_temprana_tardia") or {})
+    if sub:
+        sub["texto"] = _v118_limpiar_mencion_modelo_visible(sub.get("texto"))
+        out["riesgo_pe_temprana_tardia"] = sub
+    return out
+
+
+_texto_riesgo_pre_v118 = texto_riesgo_preeclampsia
+
+def texto_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    t = _texto_riesgo_pre_v118(r, contexto)
+    t = _v118_limpiar_mencion_modelo_visible(t)
+    # El texto clínico siempre identifica la resistencia indexada.
+    t = re.sub(r"\bIRV\s*/\s*RVS\b|\bRVS\s*/\s*IRV\b", "IRV", t, flags=re.IGNORECASE)
+    return t
+
+
+def conclusion_predictiva_pe_una_hoja(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    riesgo = calcular_riesgo_preeclampsia(r, contexto); sub = riesgo.get("riesgo_pe_temprana_tardia") or {}; cg = riesgo.get("hemodinamia_gestacional") or {}
+    irv_txt = "IRV no disponible"
+    if limpiar_numero(cg.get("res_valor")) is not None:
+        irv_txt = f"IRV {cg.get('irv_estado','N/E')} para EG"
+    return {
+        "general": str(riesgo.get("categoria") or "No calculable"),
+        "temprana": str(sub.get("temprana") or "No calculable"),
+        "tardia": str(sub.get("tardia") or "No calculable"),
+        "nota": _v118_limpiar_mencion_modelo_visible(sub.get("texto") or ""),
+        "conclusion": (
+            f"{cg.get('patron','No clasificable')}. IC {cg.get('ic_estado','N/E')} para EG; {irv_txt}. "
+            f"Riesgo general: {riesgo.get('categoria','N/C')}."
+        ),
+    }
+
+
+_interpretar_hemodinamica_embarazo_pre_v118 = interpretar_hemodinamica_embarazo
+
+def interpretar_hemodinamica_embarazo(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    """V118: salida obstétrica limpia, siempre con IRV indexado y sin nombres de modelos en el riesgo."""
+    contexto = contexto or {}
+    if not contexto.get("embarazada", False):
+        return "No aplicable: paciente no marcada como embarazada."
+    cg = clasificacion_hemodinamica_materna_gestacional(r or {}, contexto)
+    riesgo = calcular_riesgo_preeclampsia(r or {}, contexto)
+    sub = riesgo.get("riesgo_pe_temprana_tardia") or {}
+    eg = limpiar_numero(contexto.get("edad_gestacional"))
+    irv = limpiar_numero((r or {}).get("irv"))
+    lineas = ["HEMODINAMIA MATERNA EN EMBARAZO"]
+    if eg is not None:
+        lineas.append(f"- Edad gestacional: {fmt(eg,0)} semanas.")
+    lineas.append(f"- Índice cardíaco (IC): {fmt((r or {}).get('ic'),2)} L/min/m²; {cg.get('ic_estado','NO EVALUABLE')} para la edad gestacional.")
+    if irv is not None:
+        lineas.append(f"- Índice de resistencia vascular (IRV), indexado a superficie corporal: {fmt(irv,0)} dyn.s.cm-5.m²; {cg.get('irv_estado','NO EVALUABLE')} para la edad gestacional.")
+    else:
+        lineas.append("- Índice de resistencia vascular (IRV), indexado a superficie corporal: no disponible. La RVS no indexada no se utiliza como sustituto.")
+    lineas.append(f"- Patrón hemodinámico materno: {cg.get('patron','DATOS INSUFICIENTES')}.")
+    lineas.append(f"- Riesgo general de preeclampsia por perfil hemodinámico: {riesgo.get('categoria','No calculable')}.")
+    if sub.get("texto"):
+        lineas.append(f"- {_v118_limpiar_mencion_modelo_visible(sub.get('texto'))}")
+    factores = [x for x in (riesgo.get("factores") or []) if x]
+    if factores:
+        lineas.append("- Factores que modifican el riesgo: " + "; ".join(factores))
+    lineas.append("- Interpretar junto con presión arterial, proteinuria, laboratorio, síntomas maternos, Doppler y crecimiento fetal. La evaluación hemodinámica no sustituye el diagnóstico obstétrico.")
+    return "\n".join(lineas)
+
+
+def texto_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    """V118: texto de riesgo sin mención visible a modelos/autores y con IRV indexado."""
+    res = calcular_riesgo_preeclampsia(r or {}, contexto or {})
+    if not res.get("aplicable"):
+        return "No aplicable: paciente no marcada como embarazada."
+    cg = res.get("hemodinamia_gestacional") or {}
+    sub = res.get("riesgo_pe_temprana_tardia") or {}
+    irv = limpiar_numero((r or {}).get("irv"))
+    puntaje = res.get("puntaje")
+    ptxt = "No disponible" if puntaje is None else f"{float(puntaje):.1f}/10".replace(".", ",")
+    irv_linea = (
+        f"IRV indexado a superficie corporal: {fmt(irv,0)} dyn.s.cm-5.m²; {cg.get('irv_estado','No evaluable')} para la edad gestacional."
+        if irv is not None else
+        "IRV indexado a superficie corporal: no disponible; la RVS no indexada no se utiliza como sustituto."
+    )
+    factores = "\n".join([f"- {x}" for x in (res.get("factores") or []) if x]) or "- Sin activadores mayores registrados."
+    subtxt = _v118_limpiar_mencion_modelo_visible(sub.get("texto") or "No calculable")
+    return (
+        f"Riesgo hemodinámico orientativo de preeclampsia: {ptxt}\n"
+        f"Categoría: {res.get('categoria')}\n"
+        f"Patrón hemodinámico materno por edad gestacional: {cg.get('patron', res.get('fenotipo','No clasificable'))}\n"
+        f"IC para edad gestacional: {cg.get('ic_estado','No evaluable')}\n"
+        f"{irv_linea}\n"
+        f"Riesgo PE temprana/tardía: {subtxt}\n"
+        f"Factores que modifican el riesgo:\n{factores}\n"
+        f"Conducta sugerida: {res.get('conducta')}\n"
+        "Advertencia: este módulo es apoyo a la decisión clínica. No diagnostica ni descarta preeclampsia; debe integrarse con criterios obstétricos, proteinuria, laboratorio, síntomas maternos y evaluación fetal."
+    )
+
+
+# Sanitizador final de lenguaje visible: no usar etiquetas híbridas IRV/RVS.
+_limpiar_patrones_pre_v118 = limpiar_patrones_prohibidos
+
+def limpiar_patrones_prohibidos(texto: Any) -> str:
+    t = _limpiar_patrones_pre_v118(texto)
+    t = re.sub(r"\bIRV\s*/\s*RVS\b|\bRVS\s*/\s*IRV\b", "IRV", t, flags=re.IGNORECASE)
+    return t
+
+
 r = extraer_resumen_integrado(df_final)
 paciente_detectado = normalizar_nombre_paciente(r.get("paciente")) or ""
 if es_paciente_pdf_invalido(paciente_detectado):
@@ -17859,8 +18243,8 @@ def significado_patron_hemodinamico_oficial(patron: Any) -> str:
     if "normodinamia" in p:
         return "índice cardíaco y resistencias vasculares dentro del rango diagnóstico programado."
     if "datos insuficientes" in p:
-        return "faltan IC y/o IRV/RVS para definir con seguridad el patrón circulatorio."
-    return "patrón hemodinámico basal definido por la combinación de IC e IRV/RVS."
+        return "faltan IC y/o IRV indexado para definir con seguridad el patrón circulatorio."
+    return "patrón hemodinámico basal definido por la combinación de IC e IRV indexado a superficie corporal."
 
 
 def _val_dom(rb: Dict[str, Any], r: Dict[str, Any], clave: str) -> Any:
@@ -18068,7 +18452,7 @@ _es_embarazo_ui = bool(contexto_embarazo.get("embarazada"))
 if not _es_embarazo_ui:
     # ── MÓDULO CLÍNICO ────────────────────────────────────────────────────────
     mostrar_grafico_fenotipo = st.checkbox(
-        "Mostrar gráfico de fenotipado IC vs IRV/RVS",
+        "Mostrar gráfico de fenotipado IC vs IRV indexado",
         value=False,
         help="Desactivado por defecto para acelerar la app. El gráfico se genera solo cuando se solicita."
     )
@@ -18079,7 +18463,7 @@ if not _es_embarazo_ui:
             st.subheader("Fenotipado clínico automatizado")
             st.image(
                 graf_fenotipo_ui,
-                caption="Gráfico dinámico IC vs IRV/RVS: ubicación real del paciente y desplazamiento ortostático basal → PARADO solo si existe registro PARADO explícito.",
+                caption="Gráfico dinámico IC vs IRV indexado: ubicación real del paciente y desplazamiento ortostático basal → PARADO solo si existe registro PARADO explícito.",
                 use_container_width=True,
             )
     st.subheader("Interpretación automática")
@@ -18122,12 +18506,12 @@ else:
     )
     if mostrar_graficos_embarazo:
         with st.spinner("Generando gráficos del módulo embarazo..."):
-            graf_materno_ui = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
-            graf_eg_ui = crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(r_panel, contexto_embarazo)
+            graf_materno_ui = crear_grafico_hemodinamia_materna_por_semanas_una_hoja_bytes(r_panel, contexto_embarazo)
+            graf_eg_ui = None
         if graf_materno_ui is not None:
-            st.image(graf_materno_ui, caption="Gráfico diagnóstico de hemodinamia materna: IC vs RVS con referencia gestacional (ACOSTADO/CINTA/SPOT/ESTUDIO BASAL)", use_container_width=True)
+            st.image(graf_materno_ui, caption="Gráfico diagnóstico de hemodinamia materna: IC + IRV indexado a superficie corporal según edad gestacional (ACOSTADO/CINTA/SPOT/ESTUDIO BASAL)", use_container_width=True)
         if graf_eg_ui is not None:
-            st.image(graf_eg_ui, caption="Hemodinamia materna vs edad gestacional: IC y RVS sobre curvas de referencia fisiológica gestacional, con conclusiones clínicas remarcadas", use_container_width=True)
+            st.image(graf_eg_ui, caption="Hemodinamia materna vs edad gestacional: IC e IRV indexado a superficie corporal, con conclusiones clínicas remarcadas", use_container_width=True)
     else:
         st.info("Modo rápido activo: gráficos del módulo embarazo omitidos en pantalla. Se pueden activar con la casilla superior.")
 
@@ -18347,7 +18731,7 @@ except Exception:
 # no vienen en el informe fuente. Si están disponibles, se integran y se informan.
 
 VARIABLES_ACOPLAMIENTO_OPCIONALES = {"EA", "EES", "EA/EES"}
-VARIABLES_CRITICAS_REALES_CGI = ["IC", "IRV/RVS", "FC", "CFT", "IV", "IAC", "CTS"]
+VARIABLES_CRITICAS_REALES_CGI = ["IC", "IRV", "FC", "CFT", "IV", "IAC", "CTS"]
 
 _generar_tabla_integracion_base_sin_alerta_ea = generar_tabla_integracion
 
