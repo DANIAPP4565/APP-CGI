@@ -16009,41 +16009,118 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     except Exception as e:
         content.append(P(f"No se pudieron generar las conclusiones integradas: {e}", small))
 
-    # 5. Láminas gráficas: apiladas a todo el ancho disponible.
-    # Esto aprovecha la zona inferior de la hoja y evita grandes espacios en blanco.
-    # KeepInFrame reduce proporcionalmente todo el informe si fuera necesario.
-    content.append(P("LAMINAS GRAFICAS", sec))
-    graf_1 = None
-    graf_2 = None
-    try:
-        graf_1 = crear_grafico_fenotipado_dinamico_bytes(r_panel, df)
-    except Exception:
-        graf_1 = None
-    try:
-        if es_embarazo:
-            graf_2 = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
-        else:
-            graf_2 = crear_grafico_propuesta_terapeutica_bytes(r_panel, df)
-    except Exception:
-        graf_2 = None
+    # 5. Láminas gráficas.
+    # En hemodinamia materna se reemplazan las láminas generales por el gráfico
+    # específico IC/IRV vs edad gestacional y, debajo, un diagnóstico predictivo
+    # compacto de riesgo de preeclampsia. En no embarazadas se mantiene el esquema
+    # general de fenotipado + propuesta terapéutica.
+    if es_embarazo:
+        content.append(P("LAMINA GRAFICA - HEMODINAMIA MATERNA", sec))
+        graf_materno = None
+        try:
+            # Es el mismo gráfico ancho usado en el informe completo: IC e IRV/RVS
+            # frente a las curvas de referencia por edad gestacional, con el punto real.
+            graf_materno = crear_grafico_hemodinamia_edad_gestacional_diagnostico_bytes(
+                r_panel, contexto_embarazo
+            )
+        except Exception:
+            graf_materno = None
 
-    im1 = fit_img(graf_1, ancho, 58*mm)
-    im2 = fit_img(graf_2, ancho, 58*mm)
-    filas_graficos = []
-    filas_graficos.append([im1 if im1 is not None else P("Gráfico de cuadrantes no disponible.", small)])
-    filas_graficos.append([im2 if im2 is not None else P("Segunda lámina gráfica no disponible.", small)])
-    graf_table = Table(filas_graficos, colWidths=[ancho])
-    graf_table.setStyle(TableStyle([
-        ("BOX", (0,0), (-1,-1), 0.3, colors.HexColor("#CBD5E1")),
-        ("INNERGRID", (0,0), (-1,-1), 0.3, colors.HexColor("#E2E8F0")),
-        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ("ALIGN", (0,0), (-1,-1), "CENTER"),
-        ("LEFTPADDING", (0,0), (-1,-1), 2),
-        ("RIGHTPADDING", (0,0), (-1,-1), 2),
-        ("TOPPADDING", (0,0), (-1,-1), 1.5),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 1.5),
-    ]))
-    content.append(graf_table)
+        im_materno = fit_img(graf_materno, ancho, 72*mm)
+        graf_table = Table(
+            [[im_materno if im_materno is not None else P(
+                "Gráfico de hemodinamia materna vs edad gestacional no disponible.", small
+            )]],
+            colWidths=[ancho],
+        )
+        graf_table.setStyle(TableStyle([
+            ("BOX", (0,0), (-1,-1), 0.35, colors.HexColor("#CBD5E1")),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (0,0), (-1,-1), "CENTER"),
+            ("LEFTPADDING", (0,0), (-1,-1), 1.5),
+            ("RIGHTPADDING", (0,0), (-1,-1), 1.5),
+            ("TOPPADDING", (0,0), (-1,-1), 1.2),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 1.2),
+        ]))
+        content.append(graf_table)
+
+        # Diagnóstico predictivo inmediatamente debajo del gráfico materno.
+        content.append(P("DIAGNOSTICO PREDICTIVO", sec))
+        try:
+            riesgo_pe = calcular_riesgo_preeclampsia(r_panel, contexto_embarazo) or {}
+            subtipo_pe = riesgo_pe.get("riesgo_pe_temprana_tardia") or {}
+            patron_materno = (riesgo_pe.get("hemodinamia_gestacional") or {}).get(
+                "patron", riesgo_pe.get("fenotipo", "No clasificable")
+            )
+            puntaje_pe = riesgo_pe.get("puntaje")
+            puntaje_txt = fmt(puntaje_pe, 1, "/10") if limpiar_numero(puntaje_pe) is not None else "N/D"
+            categoria_pe = riesgo_pe.get("categoria") or "No clasificable"
+            subtipo_txt = subtipo_pe.get("texto") or "Riesgo PE temprana/tardía no calculable."
+            conducta_pe = riesgo_pe.get("conducta") or (
+                "Integrar con PA seriada, proteinuria/laboratorio, síntomas, Doppler y biometría fetal."
+            )
+
+            # Color del cuadro según la categoría predictiva.
+            cat_norm = normalizar_txt(categoria_pe)
+            if "alto" in cat_norm:
+                bg_pred = colors.HexColor("#FEE2E2")
+                bd_pred = colors.HexColor("#DC2626")
+            elif "intermedio" in cat_norm or "aumentado" in cat_norm:
+                bg_pred = colors.HexColor("#FEF3C7")
+                bd_pred = colors.HexColor("#D97706")
+            else:
+                bg_pred = colors.HexColor("#DCFCE7")
+                bd_pred = colors.HexColor("#16A34A")
+
+            pred_rows = [
+                ["Patrón materno", str(patron_materno)],
+                ["Riesgo PE", f"{categoria_pe} ({puntaje_txt})"],
+                ["Predicción PE temprana / tardía", str(subtipo_txt)],
+                ["Conducta sugerida", str(conducta_pe)],
+            ]
+            pred_table = compact_table(
+                pred_rows, [ancho*0.28, ancho*0.72], header=False, padd=1.5
+            )
+            pred_table.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,-1), bg_pred),
+                ("BOX", (0,0), (-1,-1), 0.7, bd_pred),
+                ("LINEBEFORE", (0,0), (0,-1), 2.4, bd_pred),
+                ("FONTNAME", (0,0), (0,-1), "Helvetica-Bold"),
+            ]))
+            content.append(pred_table)
+        except Exception as e:
+            content.append(P(f"Diagnóstico predictivo no disponible: {e}", small))
+    else:
+        content.append(P("LAMINAS GRAFICAS", sec))
+        graf_1 = None
+        graf_2 = None
+        try:
+            graf_1 = crear_grafico_fenotipado_dinamico_bytes(r_panel, df)
+        except Exception:
+            graf_1 = None
+        try:
+            graf_2 = crear_grafico_propuesta_terapeutica_bytes(r_panel, df)
+        except Exception:
+            graf_2 = None
+
+        im1 = fit_img(graf_1, ancho, 58*mm)
+        im2 = fit_img(graf_2, ancho, 58*mm)
+        filas_graficos = [
+            [im1 if im1 is not None else P("Gráfico de cuadrantes no disponible.", small)],
+            [im2 if im2 is not None else P("Segunda lámina gráfica no disponible.", small)],
+        ]
+        graf_table = Table(filas_graficos, colWidths=[ancho])
+        graf_table.setStyle(TableStyle([
+            ("BOX", (0,0), (-1,-1), 0.3, colors.HexColor("#CBD5E1")),
+            ("INNERGRID", (0,0), (-1,-1), 0.3, colors.HexColor("#E2E8F0")),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (0,0), (-1,-1), "CENTER"),
+            ("LEFTPADDING", (0,0), (-1,-1), 2),
+            ("RIGHTPADDING", (0,0), (-1,-1), 2),
+            ("TOPPADDING", (0,0), (-1,-1), 1.5),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 1.5),
+        ]))
+        content.append(graf_table)
 
     # 6. Banda final fija: espacio reservado para LOGO, FIRMA y SELLO.
     # Se muestra siempre, incluso si todavía no se cargaron las imágenes, para que
