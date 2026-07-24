@@ -14460,6 +14460,12 @@ def obtener_logo_institucional_cgi(usuario_info: Optional[Dict[str, Any]] = None
 
 
 def guardar_logo_institucional_cgi(usuario_info: Dict[str, Any], uploaded_file: Any) -> Tuple[bool, str]:
+    """Guarda y persiste el logo institucional del usuario actual.
+
+    V113: además del archivo físico, registra la ruta en usuarios_app_cgi.json y en
+    session_state. Así el generador de PDF individual y por lotes recupera logo,
+    firma y sello mediante el mismo mecanismo persistente.
+    """
     if uploaded_file is None:
         return False, "Seleccione una imagen para el logo."
     try:
@@ -14467,12 +14473,37 @@ def guardar_logo_institucional_cgi(usuario_info: Dict[str, Any], uploaded_file: 
         if not data:
             return False, "El archivo de logo está vacío."
         ext = Path(str(getattr(uploaded_file, "name", "logo.png"))).suffix.lower() or ".png"
+        if ext not in [".png", ".jpg", ".jpeg", ".webp"]:
+            ext = ".png"
         for old_ext in [".png", ".jpg", ".jpeg", ".webp"]:
             old = _ruta_logo_institucional_cgi(usuario_info, old_ext)
             if old.exists():
-                old.unlink()
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
         ruta = _ruta_logo_institucional_cgi(usuario_info, ext)
         ruta.write_bytes(data)
+
+        # Persistir la referencia igual que firma/sello.
+        usuario = str((usuario_info or {}).get("usuario") or "").strip()
+        if usuario:
+            try:
+                usuarios = cargar_usuarios_app()
+                real_key = _buscar_usuario_flexible(usuarios, _normalizar_usuario(usuario)) or usuario
+                if real_key not in usuarios:
+                    usuarios[real_key] = dict(usuario_info or {})
+                usuarios[real_key]["logo_path"] = str(ruta)
+                usuarios[real_key]["logo_archivo"] = getattr(uploaded_file, "name", "")
+                usuarios[real_key]["logo_actualizado"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                guardar_usuarios_app(usuarios)
+                usuario_info["logo_path"] = str(ruta)
+                usuario_info["logo_archivo"] = getattr(uploaded_file, "name", "")
+                usuario_info["logo_actualizado"] = usuarios[real_key]["logo_actualizado"]
+                st.session_state["usuario_actual"] = usuario_info
+            except Exception:
+                # El archivo ya quedó guardado; la búsqueda robusta por nombre seguirá funcionando.
+                pass
         return True, "Logo institucional guardado. Se aplicará a todos los informes individuales y por lotes."
     except Exception as e:
         return False, f"No se pudo guardar el logo: {e}"
@@ -14487,6 +14518,22 @@ def eliminar_logo_institucional_cgi(usuario_info: Dict[str, Any]) -> Tuple[bool,
                 p.unlink(); eliminado = True
             except Exception:
                 pass
+    try:
+        usuario = str((usuario_info or {}).get("usuario") or "").strip()
+        usuarios = cargar_usuarios_app()
+        real_key = _buscar_usuario_flexible(usuarios, _normalizar_usuario(usuario)) if usuario else None
+        if real_key and real_key in usuarios:
+            usuarios[real_key].pop("logo_path", None)
+            usuarios[real_key].pop("logo_archivo", None)
+            usuarios[real_key].pop("logo_actualizado", None)
+            guardar_usuarios_app(usuarios)
+        if isinstance(usuario_info, dict):
+            usuario_info.pop("logo_path", None)
+            usuario_info.pop("logo_archivo", None)
+            usuario_info.pop("logo_actualizado", None)
+            st.session_state["usuario_actual"] = usuario_info
+    except Exception:
+        pass
     return True, "Logo institucional eliminado." if eliminado else "No había un logo institucional guardado."
 
 
@@ -15618,7 +15665,7 @@ except Exception:
 # V110 - COHERENCIA CLINICA DEFINITIVA + INFORMES UNA HOJA
 # Restauracion del grafico gestacional + auditoria de metricas
 # =========================================================
-BUILD_APP = "CGI-DOMINIOS-V112-INFORME-MATERNO-1HOJA-20260724"
+BUILD_APP = "CGI-DOMINIOS-V113-ASSETS-MATERNO-20260724"
 
 # Guardar implementaciones previas antes del override final.
 _extraer_resumen_integrado_pre_v110 = extraer_resumen_integrado
@@ -15876,6 +15923,144 @@ def conclusion_predictiva_pe_una_hoja(r: Dict[str, Any], contexto: Optional[Dict
             "nota":str(sub.get("texto") or ""),"conclusion":f"{cg.get('patron','No clasificable')}. IC {cg.get('ic_estado','N/E')} y {cg.get('res_tipo','resistencia')} {cg.get('res_estado','N/E')} para EG. Riesgo general: {riesgo.get('categoria','N/C')}."}
 
 
+# =========================================================
+# V113 - ASSETS PDF ROBUSTOS (LOGO / FIRMA / SELLO)
+# =========================================================
+def _resolver_asset_pdf_usuario(usuario_info: Optional[Dict[str, Any]], tipo: str) -> Optional[str]:
+    """Resuelve logo/firma/sello con múltiples respaldos.
+
+    Evita que una ruta antigua guardada en JSON o un cambio de extensión impida
+    insertar el activo en el PDF. Firma de Olano conserva su fallback embebido.
+    """
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    candidatos: List[Any] = []
+    tipo = str(tipo or "").lower().strip()
+    try:
+        if tipo == "firma":
+            candidatos += [obtener_path_firma_usuario(info), info.get("firma_path")]
+        elif tipo == "sello":
+            candidatos += [obtener_path_sello_usuario(info), info.get("sello_path")]
+        elif tipo == "logo":
+            candidatos += [obtener_logo_institucional_cgi(info), info.get("logo_path")]
+    except Exception:
+        pass
+
+    # Refrescar metadatos desde usuarios_app_cgi.json.
+    try:
+        usuario = str(info.get("usuario") or "").strip()
+        usuarios = cargar_usuarios_app()
+        real_key = _buscar_usuario_flexible(usuarios, _normalizar_usuario(usuario)) if usuario else None
+        reg = (usuarios.get(real_key) or {}) if real_key else {}
+        if tipo in {"firma", "sello"}:
+            candidatos.append(reg.get(f"{tipo}_path"))
+        elif tipo == "logo":
+            candidatos.append(reg.get("logo_path"))
+    except Exception:
+        pass
+
+    for c in candidatos:
+        try:
+            if c and Path(str(c)).exists() and Path(str(c)).is_file() and Path(str(c)).stat().st_size > 0:
+                return str(Path(str(c)))
+        except Exception:
+            pass
+
+    # Búsqueda física de respaldo por slug y cualquier extensión admitida.
+    try:
+        slug = _slug_archivo_usuario(info.get("usuario", "usuario_local"))
+        if tipo in {"firma", "sello"}:
+            for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+                p = USUARIO_ASSETS_DIR / f"{slug}_{tipo}{ext}"
+                if p.exists() and p.stat().st_size > 0:
+                    return str(p)
+        elif tipo == "logo":
+            for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+                p = APP_DATA_DIR / f"logo_institucional_{slug}{ext}"
+                if p.exists() and p.stat().st_size > 0:
+                    return str(p)
+    except Exception:
+        pass
+    return None
+
+
+def _dibujar_asset_pdf_canvas(canvas, path: Optional[str], x: float, y: float, max_w: float, max_h: float) -> bool:
+    """Dibuja PNG/JPG/WEBP en canvas preservando proporción y transparencia."""
+    if not path:
+        return False
+    try:
+        from reportlab.lib.utils import ImageReader
+        from PIL import Image as PILImage
+        import io as _io_asset
+
+        p = Path(str(path))
+        if not p.exists() or p.stat().st_size <= 0:
+            return False
+        # Convertir a PNG en memoria: evita incompatibilidades de ReportLab con WEBP
+        # y con perfiles/alpha de algunas imágenes cargadas desde celular.
+        im = PILImage.open(str(p))
+        im.load()
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGBA")
+        buf = _io_asset.BytesIO()
+        im.save(buf, format="PNG")
+        buf.seek(0)
+        reader = ImageReader(buf)
+        iw, ih = reader.getSize()
+        if not iw or not ih:
+            return False
+        scale = min(float(max_w) / float(iw), float(max_h) / float(ih))
+        dw, dh = float(iw) * scale, float(ih) * scale
+        dx = float(x) + (float(max_w) - dw) / 2.0
+        dy = float(y) + (float(max_h) - dh) / 2.0
+        canvas.drawImage(reader, dx, dy, width=dw, height=dh, preserveAspectRatio=True, mask="auto")
+        return True
+    except Exception:
+        return False
+
+
+def _footer_materno_con_assets_factory(usuario_info: Optional[Dict[str, Any]] = None):
+    """Callback ReportLab que fija firma, sello y logo dentro de la primera hoja.
+
+    Los activos se dibujan en una banda inferior reservada, por lo que ya no pueden
+    desplazarse a una segunda página aunque el contenido clínico sea extenso.
+    """
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    firma_path = _resolver_asset_pdf_usuario(info, "firma")
+    sello_path = _resolver_asset_pdf_usuario(info, "sello")
+    logo_path = _resolver_asset_pdf_usuario(info, "logo")
+
+    def _callback(canvas, doc):
+        from reportlab.lib import colors
+        _paper_footer(canvas, doc)
+        if getattr(doc, "page", 1) != 1:
+            return
+        canvas.saveState()
+        page_w, _page_h = doc.pagesize
+        left = doc.leftMargin
+        right = page_w - doc.rightMargin
+        y_label = 66
+        y_img = 29
+
+        canvas.setFillColor(colors.HexColor("#0B3D6E"))
+        canvas.setFont("Helvetica-Bold", 7.4)
+        canvas.drawString(left, y_label, "Firma y sello")
+        canvas.drawRightString(right, y_label, "Logo institucional")
+
+        firma_ok = _dibujar_asset_pdf_canvas(canvas, firma_path, left, y_img, 104, 33)
+        sello_ok = _dibujar_asset_pdf_canvas(canvas, sello_path, left + 108, y_img, 45, 33)
+        logo_ok = _dibujar_asset_pdf_canvas(canvas, logo_path, right - 92, y_img, 92, 33)
+
+        canvas.setFont("Helvetica", 5.8)
+        canvas.setFillColor(colors.HexColor("#64748B"))
+        if not (firma_ok or sello_ok):
+            canvas.drawString(left, y_img + 11, texto_firma_usuario(info))
+        if not logo_ok:
+            canvas.drawRightString(right, y_img + 11, "Logo no configurado")
+        canvas.restoreState()
+
+    return _callback
+
+
 def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]]=None) -> bytes:
     """Informe ejecutivo real de una página.
 
@@ -15902,6 +16087,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     rb = resumen_acostado_cinta_para_patron(dfx, r)
     emb = bool(contexto_embarazo and contexto_embarazo.get("embarazada"))
 
+    usuario_info = st.session_state.get("usuario_actual", {}) or {}
     b = _io.BytesIO()
     doc = SimpleDocTemplate(
         b,
@@ -15909,7 +16095,9 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         rightMargin=.65*cm,
         leftMargin=.65*cm,
         topMargin=.48*cm,
-        bottomMargin=.48*cm,
+        # En embarazo se reserva una banda inferior fija para firma, sello y logo.
+        # Esto impide que los activos sean expulsados a una segunda página.
+        bottomMargin=(2.78*cm if emb else .48*cm),
     )
     w = doc.width
     stl = _paper_styles()
@@ -15998,31 +16186,10 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         ))
         story.append(Spacer(1, 2))
 
-        # 6. FIRMA Y SELLO
-        story.append(_paper_paragraph("Firma y sello", stl["PaperH"]))
-        usuario_info = st.session_state.get("usuario_actual", {})
-        firma_sello = _paper_signature_table(w, usuario_info=usuario_info)
-        if firma_sello:
-            story.append(firma_sello)
-        else:
-            story.append(_paper_paragraph(texto_firma_usuario(usuario_info), stl["PaperSmall"]))
-        story.append(Spacer(1, 2))
-
-        # 7. LOGO INSTITUCIONAL
-        logo_path = obtener_logo_institucional_cgi(usuario_info)
-        if logo_path and _os.path.exists(logo_path):
-            try:
-                logo = Image(logo_path, width=72, height=34, kind="proportional")
-                logo_tabla = Table([[logo]], colWidths=[w])
-                logo_tabla.setStyle(TableStyle([
-                    ("ALIGN", (0,0), (-1,-1), "CENTER"),
-                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                    ("TOPPADDING", (0,0), (-1,-1), 1),
-                    ("BOTTOMPADDING", (0,0), (-1,-1), 0),
-                ]))
-                story.append(logo_tabla)
-            except Exception:
-                pass
+        # 6-7. FIRMA, SELLO Y LOGO INSTITUCIONAL
+        # V113: se dibujan en una banda inferior fija mediante callback de canvas.
+        # No se agregan como Flowables para evitar que ReportLab los desplace
+        # fuera de la primera hoja cuando el contenido clínico ocupa más altura.
 
     else:
         # Informe no obstétrico: se conserva el diseño previo y su logo de cabecera.
@@ -16070,7 +16237,14 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         else:
             story.append(_paper_paragraph(texto_firma_usuario(usuario_info), stl["PaperSmall"]))
 
-    doc.build(story, onFirstPage=_paper_footer, onLaterPages=_paper_footer)
+    if emb:
+        # Garantía real de una sola hoja: si el contenido supera el área disponible,
+        # KeepInFrame lo reduce proporcionalmente sin expulsar firma/sello/logo.
+        story = [KeepInFrame(w, doc.height, story, mode="shrink", mergeSpace=True)]
+        footer_cb = _footer_materno_con_assets_factory(usuario_info)
+        doc.build(story, onFirstPage=footer_cb, onLaterPages=_paper_footer)
+    else:
+        doc.build(story, onFirstPage=_paper_footer, onLaterPages=_paper_footer)
     return b.getvalue()
 
 
