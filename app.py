@@ -16228,17 +16228,28 @@ except Exception:
 # V114 - ASSETS PDF ROBUSTOS (LOGO / FIRMA / SELLO)
 # =========================================================
 def _resolver_asset_pdf_usuario(usuario_info: Optional[Dict[str, Any]], tipo: str) -> Optional[str]:
-    """Resuelve logo/firma/sello con múltiples respaldos.
+    """Resuelve logo/firma/sello con múltiples respaldos y búsqueda física tolerante.
 
-    Evita que una ruta antigua guardada en JSON o un cambio de extensión impida
-    insertar el activo en el PDF. Firma de Olano conserva su fallback embebido.
+    V116:
+    - Prioriza las rutas persistidas del usuario.
+    - Conserva el fallback embebido de firma de Ricardo Daniel Olano.
+    - Si la ruta histórica cambió o el activo fue guardado por una versión anterior,
+      busca por nombre dentro de app_cgi_data, usuarios_assets y el directorio de la app.
+    - No obliga a volver a cargar imágenes ya existentes.
     """
     info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
     candidatos: List[Any] = []
     tipo = str(tipo or "").lower().strip()
+
     try:
         if tipo == "firma":
             candidatos += [obtener_path_firma_usuario(info), info.get("firma_path")]
+            # Respaldo histórico embebido para el autor de la app.
+            try:
+                if usuario_habilitado_firma_olano(info):
+                    candidatos.append(obtener_path_firma_olano())
+            except Exception:
+                pass
         elif tipo == "sello":
             candidatos += [obtener_path_sello_usuario(info), info.get("sello_path")]
         elif tipo == "logo":
@@ -16259,57 +16270,142 @@ def _resolver_asset_pdf_usuario(usuario_info: Optional[Dict[str, Any]], tipo: st
     except Exception:
         pass
 
-    for c in candidatos:
+    def _path_valido(v: Any) -> Optional[str]:
         try:
-            if c and Path(str(c)).exists() and Path(str(c)).is_file() and Path(str(c)).stat().st_size > 0:
-                return str(Path(str(c)))
+            if not v:
+                return None
+            q = Path(str(v)).expanduser()
+            if q.exists() and q.is_file() and q.stat().st_size > 0:
+                return str(q)
         except Exception:
             pass
+        return None
 
-    # Búsqueda física de respaldo por slug y cualquier extensión admitida.
+    # 1) Rutas explícitas/persistidas.
+    for c in candidatos:
+        q = _path_valido(c)
+        if q:
+            return q
+
+    # 2) Nombres canónicos por usuario.
     try:
         slug = _slug_archivo_usuario(info.get("usuario", "usuario_local"))
         if tipo in {"firma", "sello"}:
             for ext in [".png", ".jpg", ".jpeg", ".webp"]:
-                p = USUARIO_ASSETS_DIR / f"{slug}_{tipo}{ext}"
-                if p.exists() and p.stat().st_size > 0:
-                    return str(p)
+                q = _path_valido(USUARIO_ASSETS_DIR / f"{slug}_{tipo}{ext}")
+                if q:
+                    return q
         elif tipo == "logo":
             for ext in [".png", ".jpg", ".jpeg", ".webp"]:
-                p = APP_DATA_DIR / f"logo_institucional_{slug}{ext}"
-                if p.exists() and p.stat().st_size > 0:
-                    return str(p)
+                q = _path_valido(APP_DATA_DIR / f"logo_institucional_{slug}{ext}")
+                if q:
+                    return q
     except Exception:
         pass
+
+    # 3) Compatibilidad con versiones anteriores: búsqueda física flexible.
+    # Se priorizan archivos cuyo nombre contiene el usuario y luego el más reciente.
+    try:
+        slug = _slug_archivo_usuario(info.get("usuario", "usuario_local"))
+        raices = []
+        for root in [
+            globals().get("USUARIO_ASSETS_DIR"),
+            globals().get("APP_DATA_DIR"),
+            Path(__file__).resolve().parent,
+        ]:
+            if root:
+                rr = Path(str(root))
+                if rr.exists() and rr not in raices:
+                    raices.append(rr)
+
+        claves = {
+            "firma": ["firma", "signature"],
+            "sello": ["sello", "stamp"],
+            "logo": ["logo", "institucional", "membrete"],
+        }.get(tipo, [tipo])
+        exts = {".png", ".jpg", ".jpeg", ".webp"}
+        encontrados = []
+        vistos = set()
+        for root in raices:
+            try:
+                for q in root.rglob("*"):
+                    try:
+                        if not q.is_file() or q.suffix.lower() not in exts:
+                            continue
+                        nombre = q.name.lower()
+                        if not any(k in nombre for k in claves):
+                            continue
+                        real = str(q.resolve())
+                        if real in vistos or q.stat().st_size <= 0:
+                            continue
+                        vistos.add(real)
+                        puntaje = 0
+                        if slug and slug.lower() in nombre:
+                            puntaje += 100
+                        if tipo in nombre:
+                            puntaje += 20
+                        if "institucional" in nombre and tipo == "logo":
+                            puntaje += 10
+                        encontrados.append((puntaje, q.stat().st_mtime, q))
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        if encontrados:
+            encontrados.sort(key=lambda x: (x[0], x[1]), reverse=True)
+            return str(encontrados[0][2])
+    except Exception:
+        pass
+
     return None
 
 
 def _dibujar_asset_pdf_canvas(canvas, path: Optional[str], x: float, y: float, max_w: float, max_h: float) -> bool:
-    """Dibuja PNG/JPG/WEBP en canvas preservando proporción y transparencia."""
+    """Dibuja logo/firma/sello preservando proporción.
+
+    V116 corrige un fallo crítico: PNG/JPG ya no dependen de Pillow. Primero se usa
+    ImageReader directamente sobre el archivo, que es el camino nativo de ReportLab.
+    Pillow queda solo como respaldo para WEBP o imágenes con perfiles problemáticos.
+    """
     if not path:
         return False
     try:
         from reportlab.lib.utils import ImageReader
-        from PIL import Image as PILImage
-        import io as _io_asset
-
         p = Path(str(path))
-        if not p.exists() or p.stat().st_size <= 0:
+        if not p.exists() or not p.is_file() or p.stat().st_size <= 0:
             return False
-        # Convertir a PNG en memoria: evita incompatibilidades de ReportLab con WEBP
-        # y con perfiles/alpha de algunas imágenes cargadas desde celular.
-        im = PILImage.open(str(p))
-        im.load()
-        if im.mode not in ("RGB", "RGBA"):
-            im = im.convert("RGBA")
-        buf = _io_asset.BytesIO()
-        im.save(buf, format="PNG")
-        buf.seek(0)
-        reader = ImageReader(buf)
-        iw, ih = reader.getSize()
+
+        reader = None
+        # Camino principal: compatible con PNG/JPG sin depender de Pillow.
+        try:
+            reader = ImageReader(str(p))
+            iw, ih = reader.getSize()
+        except Exception:
+            reader = None
+            iw = ih = None
+
+        # Respaldo para WEBP u otros archivos que ReportLab no abra directamente.
+        if reader is None or not iw or not ih:
+            try:
+                from PIL import Image as PILImage
+                import io as _io_asset
+                im = PILImage.open(str(p))
+                im.load()
+                if im.mode not in ("RGB", "RGBA"):
+                    im = im.convert("RGBA")
+                buf = _io_asset.BytesIO()
+                im.save(buf, format="PNG")
+                buf.seek(0)
+                reader = ImageReader(buf)
+                iw, ih = reader.getSize()
+            except Exception:
+                return False
+
         if not iw or not ih:
             return False
         scale = min(float(max_w) / float(iw), float(max_h) / float(ih))
+        if scale <= 0:
+            return False
         dw, dh = float(iw) * scale, float(ih) * scale
         dx = float(x) + (float(max_w) - dw) / 2.0
         dy = float(y) + (float(max_h) - dh) / 2.0
@@ -16320,12 +16416,15 @@ def _dibujar_asset_pdf_canvas(canvas, path: Optional[str], x: float, y: float, m
 
 
 def _footer_materno_con_assets_factory(usuario_info: Optional[Dict[str, Any]] = None):
-    """Callback ReportLab que fija firma, sello y logo dentro de la primera hoja.
+    """Dibuja firma, sello y logo en una banda fija de la primera hoja.
 
-    Los activos se dibujan en una banda inferior reservada, por lo que ya no pueden
-    desplazarse a una segunda página aunque el contenido clínico sea extenso.
+    V116:
+    - No depende de Flowables ni del espacio restante del documento.
+    - No verifica doc.page (el callback ya se ejecuta exclusivamente como onFirstPage).
+    - Muestra cada activo en un recuadro propio y deja un texto diagnóstico visible si
+      un archivo no pudo resolverse, evitando un pie aparentemente vacío.
     """
-    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    info = dict(usuario_info or st.session_state.get("usuario_actual", {}) or {})
     firma_path = _resolver_asset_pdf_usuario(info, "firma")
     sello_path = _resolver_asset_pdf_usuario(info, "sello")
     logo_path = _resolver_asset_pdf_usuario(info, "logo")
@@ -16333,30 +16432,58 @@ def _footer_materno_con_assets_factory(usuario_info: Optional[Dict[str, Any]] = 
     def _callback(canvas, doc):
         from reportlab.lib import colors
         _paper_footer(canvas, doc)
-        if getattr(doc, "page", 1) != 1:
-            return
         canvas.saveState()
         page_w, _page_h = doc.pagesize
-        left = doc.leftMargin
-        right = page_w - doc.rightMargin
-        y_label = 66
-        y_img = 29
+        left = float(doc.leftMargin)
+        right = float(page_w - doc.rightMargin)
 
+        # Banda institucional fija: por encima del footer técnico de la app.
+        box_y = 30
+        box_h = 58
+        gap = 8
+        firma_w = 142
+        sello_w = 68
+        logo_w = 118
+
+        canvas.setStrokeColor(colors.HexColor("#CBD5E1"))
+        canvas.setLineWidth(0.45)
+        canvas.line(left, box_y + box_h + 5, right, box_y + box_h + 5)
+
+        # --- Firma ---
+        fx = left
         canvas.setFillColor(colors.HexColor("#0B3D6E"))
-        canvas.setFont("Helvetica-Bold", 7.4)
-        canvas.drawString(left, y_label, "Firma y sello")
-        canvas.drawRightString(right, y_label, "Logo institucional")
+        canvas.setFont("Helvetica-Bold", 7.2)
+        canvas.drawString(fx, box_y + box_h - 3, "Firma")
+        firma_ok = _dibujar_asset_pdf_canvas(canvas, firma_path, fx, box_y + 2, firma_w, box_h - 15)
 
-        firma_ok = _dibujar_asset_pdf_canvas(canvas, firma_path, left, y_img, 104, 33)
-        sello_ok = _dibujar_asset_pdf_canvas(canvas, sello_path, left + 108, y_img, 45, 33)
-        logo_ok = _dibujar_asset_pdf_canvas(canvas, logo_path, right - 92, y_img, 92, 33)
+        # --- Sello ---
+        sx = fx + firma_w + gap
+        canvas.drawString(sx, box_y + box_h - 3, "Sello")
+        sello_ok = _dibujar_asset_pdf_canvas(canvas, sello_path, sx, box_y + 2, sello_w, box_h - 15)
+
+        # --- Logo institucional ---
+        lx = right - logo_w
+        canvas.drawRightString(right, box_y + box_h - 3, "Logo institucional")
+        logo_ok = _dibujar_asset_pdf_canvas(canvas, logo_path, lx, box_y + 2, logo_w, box_h - 15)
 
         canvas.setFont("Helvetica", 5.8)
         canvas.setFillColor(colors.HexColor("#64748B"))
-        if not (firma_ok or sello_ok):
-            canvas.drawString(left, y_img + 11, texto_firma_usuario(info))
+        if not firma_ok:
+            canvas.drawString(fx, box_y + 18, "Firma no localizada")
+        if not sello_ok:
+            canvas.drawString(sx, box_y + 18, "Sello no localizado")
         if not logo_ok:
-            canvas.drawRightString(right, y_img + 11, "Logo no configurado")
+            canvas.drawRightString(right, box_y + 18, "Logo no localizado")
+
+        # Identificación profesional siempre visible, aun cuando las imágenes sí estén.
+        try:
+            txt = texto_firma_usuario(info)
+            if txt:
+                canvas.setFillColor(colors.HexColor("#334155"))
+                canvas.setFont("Helvetica", 5.8)
+                canvas.drawString(left, box_y - 1, str(txt)[:105])
+        except Exception:
+            pass
         canvas.restoreState()
 
     return _callback
@@ -16398,7 +16525,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         topMargin=.48*cm,
         # En embarazo se reserva una banda inferior fija para firma, sello y logo.
         # Esto impide que los activos sean expulsados a una segunda página.
-        bottomMargin=(2.78*cm if emb else .48*cm),
+        bottomMargin=(3.55*cm if emb else .48*cm),
     )
     w = doc.width
     stl = _paper_styles()
