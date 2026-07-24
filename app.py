@@ -15618,7 +15618,7 @@ except Exception:
 # V110 - COHERENCIA CLINICA DEFINITIVA + INFORMES UNA HOJA
 # Restauracion del grafico gestacional + auditoria de metricas
 # =========================================================
-BUILD_APP = "CGI-DOMINIOS-V111-METODOLOGIA-20260724"
+BUILD_APP = "CGI-DOMINIOS-V112-INFORME-MATERNO-1HOJA-20260724"
 
 # Guardar implementaciones previas antes del override final.
 _extraer_resumen_integrado_pre_v110 = extraer_resumen_integrado
@@ -15877,54 +15877,201 @@ def conclusion_predictiva_pe_una_hoja(r: Dict[str, Any], contexto: Optional[Dict
 
 
 def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]]=None) -> bytes:
-    """Informe ejecutivo REAL de una pagina, con dos diseños: embarazo y no embarazo."""
+    """Informe ejecutivo real de una página.
+
+    Embarazo: estructura fija solicitada:
+      1) Datos del paciente
+      2) Metodología del estudio
+      3) Resultados
+      4) Gráfico de hemodinamia materna por semana gestacional
+      5) Conclusión clínica predictiva
+      6) Firma y sello
+      7) Logo institucional
+
+    No embarazo: conserva el diseño ejecutivo general existente.
+    """
     from reportlab.platypus import SimpleDocTemplate, Spacer, Image, Table, TableStyle, KeepTogether
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
     from reportlab.lib import colors
     import io as _io
-    dfx=completar_metricas_derivadas_cgi(df); r=extraer_resumen_integrado(dfx); rb=resumen_acostado_cinta_para_patron(dfx,r); emb=bool(contexto_embarazo and contexto_embarazo.get("embarazada"))
-    b=_io.BytesIO(); doc=SimpleDocTemplate(b,pagesize=A4,rightMargin=.65*cm,leftMargin=.65*cm,topMargin=.55*cm,bottomMargin=.55*cm); w=doc.width; stl=_paper_styles(); story=[]
-    titulo="INFORME HEMODINAMIA MATERNA" if emb else TITULO_MODULO_NO_EMBARAZADA
-    sub="Informe ejecutivo de una hoja - hemodinamia por edad gestacional y analisis predictivo" if emb else "Informe ejecutivo de una hoja - dominios hemodinamicos integrados"
-    story += _paper_header_story(titulo,sub); story.append(_paper_datos_paciente_table(r,contexto_embarazo,w)); story.append(Spacer(1,3))
-    if emb:
-        cg=clasificacion_hemodinamica_materna_gestacional(rb,contexto_embarazo); pred=conclusion_predictiva_pe_una_hoja(rb,contexto_embarazo)
-        rows=[["Metrica","Valor / lectura"],["Edad gestacional",f"{fmt((contexto_embarazo or {}).get('edad_gestacional'),0)} semanas"],["IC",f"{fmt(rb.get('ic'),2)} L/min/m2 - {cg.get('ic_estado','N/E')}"],[cg.get('res_tipo','RVS/IRV'),f"{fmt(cg.get('res_valor'),0)} - {cg.get('res_estado','N/E')}"],["Patron",cg.get('patron','No clasificable')]]
-        story.append(_paper_table(rows,[w*.30,w*.70],header=True,compact=True)); story.append(Spacer(1,3))
-        g=crear_grafico_hemodinamia_materna_por_semanas_una_hoja_bytes(rb,contexto_embarazo)
-        if g: story.append(Image(g,width=w,height=w*.315,kind="proportional"))
-        story.append(Spacer(1,2)); story.append(_paper_paragraph("Analisis predictivo de riesgo de preeclampsia",stl["PaperH"]))
-        story.append(_paper_table([["Riesgo","Resultado"],["General",pred["general"]],["PE temprana (<34 sem)",pred["temprana"]],["PE tardia",pred["tardia"]]],[w*.32,w*.68],header=True,compact=True))
-        story.append(Spacer(1,2)); story.append(_paper_paragraph(pred["conclusion"],stl["PaperSmall"])); story.append(_paper_paragraph(pred["nota"],stl["PaperSmall"]))
-        cft=limpiar_numero(rb.get("cft")); vol=estado_volemia_simple(cft, sexo="F", embarazo=True)
-        comp = f"AC Capan {fmt(rb.get('ava'),2)} | IV {fmt(rb.get('iv'),2)} | IAC {fmt(rb.get('iac'),2)} | CTS {fmt(normalizar_cts_cgi(rb.get('cts')),3)} | CFT {fmt(cft,2)}"
-        story.append(_paper_paragraph(f"Métricas complementarias: {comp}. Volemia: {vol} (CFT mujer 21-37 1/kOhm). CTS = PEP/LVET; AC Capan = EA/EES.",stl["PaperSmall"]))
-    else:
-        story.append(_paper_paragraph("E. Informe de dominios integrados resumido y didactico",stl["PaperH"])); story.append(_paper_dominios_integrados_table(rb,dfx,w)); story.append(Spacer(1,3))
-        g=None
-        try: g=crear_grafico_hemodinamico_no_embarazo_una_hoja_bytes(rb,dfx)
-        except Exception: pass
-        if g: story.append(Image(g,width=w,height=w*.40,kind="proportional"))
-        story.append(Spacer(1,2))
-        ac=limpiar_numero(rb.get("ava")); cts=normalizar_cts_cgi(rb.get("cts"))
-        concl=f"Patron basal: {clasificacion_dinamica_obligatoria(rb,None)}. AC Capan/EA-EES: {fmt(ac,2)}. IV: {fmt(rb.get('iv'),2)}. CTS: {fmt(cts,2)}. CFT: {fmt(rb.get('cft'),2)}."
-        story.append(_paper_paragraph(concl,stl["PaperSmall"]))
-        story.append(_paper_paragraph("La referencia diagnostica es ACOSTADO/CINTA/SPOT/ESTUDIO BASAL; PARADO se reserva para respuesta ortostatica. IRV y RVS no se intercambian por tener distinta indexacion y unidades.",stl["PaperSmall"]))
-    # Metodología común a los informes ejecutivos de una hoja (embarazo y no embarazo).
-    metodologia_una_hoja = (
-        "Metodología: Se realizó cardiografía de impedancia con dispositivo ZLogic (Exxer), "
-        "con el paciente en decúbito supino y posteriormente en bipedestación, utilizando "
-        "el promedio de tres registros consecutivos en cada posición."
-    )
-    story.append(Spacer(1,2))
-    story.append(_paper_paragraph(metodologia_una_hoja, stl["PaperSmall"]))
+    import os as _os
 
-    sig=_paper_signature_flowable(width=78,height=27)
-    if sig:
-        t=Table([[sig,_paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual",{})),stl["PaperSmall"])]],colWidths=[86,w-86]); t.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"MIDDLE"),("LINEABOVE",(0,0),(-1,0),.3,colors.HexColor("#CBD5E1"))])); story.append(Spacer(1,2)); story.append(t)
-    else: story.append(_paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual",{})),stl["PaperSmall"]))
-    doc.build(story,onFirstPage=_paper_footer,onLaterPages=_paper_footer); return b.getvalue()
+    dfx = completar_metricas_derivadas_cgi(df)
+    r = extraer_resumen_integrado(dfx)
+    rb = resumen_acostado_cinta_para_patron(dfx, r)
+    emb = bool(contexto_embarazo and contexto_embarazo.get("embarazada"))
+
+    b = _io.BytesIO()
+    doc = SimpleDocTemplate(
+        b,
+        pagesize=A4,
+        rightMargin=.65*cm,
+        leftMargin=.65*cm,
+        topMargin=.48*cm,
+        bottomMargin=.48*cm,
+    )
+    w = doc.width
+    stl = _paper_styles()
+    story = []
+
+    metodologia_una_hoja = (
+        "Se realizó cardiografía de impedancia con dispositivo ZLogic (Exxer), "
+        "con la paciente en decúbito supino y posteriormente en bipedestación, "
+        "utilizando el promedio de tres registros consecutivos en cada posición."
+    )
+
+    if emb:
+        # Cabecera obstétrica SIN logo: el logo institucional se ubica al final,
+        # después del bloque de firma y sello, según la estructura solicitada.
+        story += _paper_header_story_sin_logo_cgi(
+            "INFORME HEMODINAMIA MATERNA",
+            "Informe ejecutivo de una hoja - hemodinamia por edad gestacional y análisis predictivo",
+        )
+
+        # 1. DATOS DEL PACIENTE
+        story.append(_paper_paragraph("Datos del paciente", stl["PaperH"]))
+        story.append(_paper_datos_paciente_table(r, contexto_embarazo, w))
+        story.append(Spacer(1, 2))
+
+        # 2. METODOLOGÍA DEL ESTUDIO
+        story.append(_paper_paragraph("Metodología del estudio", stl["PaperH"]))
+        story.append(_paper_paragraph(metodologia_una_hoja, stl["PaperSmall"]))
+        story.append(Spacer(1, 2))
+
+        # 3. RESULTADOS
+        cg = clasificacion_hemodinamica_materna_gestacional(rb, contexto_embarazo)
+        pred = conclusion_predictiva_pe_una_hoja(rb, contexto_embarazo)
+        eg = limpiar_numero((contexto_embarazo or {}).get("edad_gestacional"))
+        cft = limpiar_numero(rb.get("cft"))
+        vol = estado_volemia_simple(cft, sexo="F", embarazo=True)
+        ac = limpiar_numero(rb.get("ava"))
+        iv = limpiar_numero(rb.get("iv"))
+        iac = limpiar_numero(rb.get("iac"))
+        cts = normalizar_cts_cgi(rb.get("cts"))
+
+        story.append(_paper_paragraph("Resultados", stl["PaperH"]))
+        resultados_rows = [
+            ["Métrica", "Resultado", "Interpretación"],
+            ["Edad gestacional", f"{fmt(eg,0)} semanas" if eg is not None else "No disponible", "Referencia gestacional"],
+            ["Índice cardíaco (IC)", f"{fmt(rb.get('ic'),2)} L/min/m²", str(cg.get("ic_estado") or "N/E")],
+            [str(cg.get("res_tipo") or "RVS/IRV"), f"{fmt(cg.get('res_valor'),0)} {cg.get('res_unidad','')}", str(cg.get("res_estado") or "N/E")],
+            ["Patrón hemodinámico", str(cg.get("patron") or "No clasificable"), "Según edad gestacional"],
+            ["AC Capan (Ea/Ees)", fmt(ac,2), clasificar_metrica_canonica("EA/EES", ac) if ac is not None else "N/E"],
+            ["IV", fmt(iv,2), clasificar_metrica_canonica("IV", iv) if iv is not None else "N/E"],
+            ["IAC", fmt(iac,2), "Interpretar según referencia femenina/gestacional" if iac is not None else "N/E"],
+            ["CTS (PEP/LVET)", fmt(cts,3), clasificar_metrica_canonica("CTS", cts) if cts is not None else "N/E"],
+            ["CFT", f"{fmt(cft,2)} 1/kΩ", vol],
+        ]
+        story.append(_paper_table(resultados_rows, [w*.27, w*.31, w*.42], header=True, compact=True))
+        story.append(Spacer(1, 2))
+
+        # 4. GRÁFICO DE HEMODINAMIA MATERNA POR SEMANA GESTACIONAL
+        story.append(_paper_paragraph("Gráfico de hemodinamia materna por semana gestacional", stl["PaperH"]))
+        g = crear_grafico_hemodinamia_materna_por_semanas_una_hoja_bytes(rb, contexto_embarazo)
+        if g:
+            # Altura deliberadamente compacta para garantizar una sola página A4.
+            story.append(Image(g, width=w, height=w*.245, kind="proportional"))
+        else:
+            story.append(_paper_paragraph(
+                "No hay edad gestacional y/o métricas hemodinámicas suficientes para generar el gráfico gestacional.",
+                stl["PaperSmall"],
+            ))
+        story.append(Spacer(1, 2))
+
+        # 5. CONCLUSIÓN CLÍNICA PREDICTIVA
+        story.append(_paper_paragraph("Conclusión clínica predictiva", stl["PaperH"]))
+        pred_rows = [
+            ["Predicción", "Resultado"],
+            ["Riesgo general de preeclampsia", pred.get("general") or "No calculable"],
+            ["Preeclampsia temprana (<34 semanas)", pred.get("temprana") or "No calculable"],
+            ["Preeclampsia tardía", pred.get("tardia") or "No calculable"],
+        ]
+        story.append(_paper_table(pred_rows, [w*.38, w*.62], header=True, compact=True))
+        story.append(Spacer(1, 1))
+        story.append(_paper_paragraph(str(pred.get("conclusion") or ""), stl["PaperSmall"]))
+        if pred.get("nota"):
+            story.append(_paper_paragraph(str(pred.get("nota")), stl["PaperSmall"]))
+        story.append(_paper_paragraph(
+            "Interpretación orientativa: integrar con presión arterial, proteinuria, laboratorio, síntomas maternos, Doppler uterino, crecimiento fetal y evaluación obstétrica. La predicción hemodinámica no sustituye el diagnóstico obstétrico.",
+            stl["PaperSmall"],
+        ))
+        story.append(Spacer(1, 2))
+
+        # 6. FIRMA Y SELLO
+        story.append(_paper_paragraph("Firma y sello", stl["PaperH"]))
+        usuario_info = st.session_state.get("usuario_actual", {})
+        firma_sello = _paper_signature_table(w, usuario_info=usuario_info)
+        if firma_sello:
+            story.append(firma_sello)
+        else:
+            story.append(_paper_paragraph(texto_firma_usuario(usuario_info), stl["PaperSmall"]))
+        story.append(Spacer(1, 2))
+
+        # 7. LOGO INSTITUCIONAL
+        logo_path = obtener_logo_institucional_cgi(usuario_info)
+        if logo_path and _os.path.exists(logo_path):
+            try:
+                logo = Image(logo_path, width=72, height=34, kind="proportional")
+                logo_tabla = Table([[logo]], colWidths=[w])
+                logo_tabla.setStyle(TableStyle([
+                    ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                    ("TOPPADDING", (0,0), (-1,-1), 1),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 0),
+                ]))
+                story.append(logo_tabla)
+            except Exception:
+                pass
+
+    else:
+        # Informe no obstétrico: se conserva el diseño previo y su logo de cabecera.
+        titulo = TITULO_MODULO_NO_EMBARAZADA
+        sub = "Informe ejecutivo de una hoja - dominios hemodinámicos integrados"
+        story += _paper_header_story(titulo, sub)
+        story.append(_paper_datos_paciente_table(r, contexto_embarazo, w))
+        story.append(Spacer(1, 2))
+
+        story.append(_paper_paragraph("Metodología del estudio", stl["PaperH"]))
+        story.append(_paper_paragraph(
+            metodologia_una_hoja.replace("la paciente", "el/la paciente"),
+            stl["PaperSmall"],
+        ))
+        story.append(Spacer(1, 2))
+
+        story.append(_paper_paragraph("E. Informe de dominios integrados resumido y didáctico", stl["PaperH"]))
+        story.append(_paper_dominios_integrados_table(rb, dfx, w))
+        story.append(Spacer(1, 3))
+        g = None
+        try:
+            g = crear_grafico_hemodinamico_no_embarazo_una_hoja_bytes(rb, dfx)
+        except Exception:
+            pass
+        if g:
+            story.append(Image(g, width=w, height=w*.38, kind="proportional"))
+        story.append(Spacer(1, 2))
+        ac = limpiar_numero(rb.get("ava"))
+        cts = normalizar_cts_cgi(rb.get("cts"))
+        concl = (
+            f"Patrón basal: {clasificacion_dinamica_obligatoria(rb,None)}. "
+            f"AC Capan/EA-EES: {fmt(ac,2)}. IV: {fmt(rb.get('iv'),2)}. "
+            f"CTS: {fmt(cts,2)}. CFT: {fmt(rb.get('cft'),2)}."
+        )
+        story.append(_paper_paragraph(concl, stl["PaperSmall"]))
+        story.append(_paper_paragraph(
+            "La referencia diagnóstica es ACOSTADO/CINTA/SPOT/ESTUDIO BASAL; PARADO se reserva para respuesta ortostática. IRV y RVS no se intercambian por tener distinta indexación y unidades.",
+            stl["PaperSmall"],
+        ))
+        usuario_info = st.session_state.get("usuario_actual", {})
+        firma_sello = _paper_signature_table(w, usuario_info=usuario_info)
+        if firma_sello:
+            story.append(Spacer(1,2))
+            story.append(firma_sello)
+        else:
+            story.append(_paper_paragraph(texto_firma_usuario(usuario_info), stl["PaperSmall"]))
+
+    doc.build(story, onFirstPage=_paper_footer, onLaterPages=_paper_footer)
+    return b.getvalue()
 
 
 # =========================================================
