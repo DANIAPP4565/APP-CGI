@@ -12315,11 +12315,11 @@ st.markdown("<div style='padding:8px 0 12px 0; font-weight:800; color:#0B3D6E; f
 try:
     usuario_actual = st.session_state.get("usuario_actual")
     if not usuario_actual:
-        usuario_actual = {"usuario": "usuario_local", "nombre": "Usuario local", "matricula": ""}
+        usuario_actual = {"usuario": "usuario_local", "nombre": "Ricardo Daniel Olano", "matricula": ""}
         st.session_state["usuario_actual"] = usuario_actual
         st.warning("Acceso local activado automáticamente. La app queda visible y operativa; el historial se guarda bajo usuario_local.")
 except Exception as e:
-    usuario_actual = {"usuario": "usuario_local", "nombre": "Usuario local", "matricula": ""}
+    usuario_actual = {"usuario": "usuario_local", "nombre": "Ricardo Daniel Olano", "matricula": ""}
     st.session_state["usuario_actual"] = usuario_actual
     st.error(f"No se pudo iniciar el módulo de usuarios. Se activa modo local. Detalle: {e}")
 
@@ -16924,6 +16924,333 @@ _v110_final_tabla_dominios = tabla_dominios_integrados_sin_ambiguedad
 _v110_final_paper_dominios = _paper_dominios_integrados_table
 
 
+
+# =========================================================
+# V117 - IDENTIDAD VISUAL PDF POR BYTES DIRECTOS
+# =========================================================
+# Motivo: Streamlit Cloud puede cambiar/perder rutas locales al redeployar y el
+# modo usuario_local no necesariamente coincide con el usuario que guardó los
+# activos. Para el PDF se priorizan SIEMPRE los bytes del file_uploader/session,
+# luego base64 persistido, luego archivos físicos y finalmente la firma embebida
+# del Dr. Ricardo Daniel Olano cuando la app corre en modo local.
+
+def _asset_session_key_cgi(tipo: str) -> str:
+    return f"_cgi_pdf_asset_{str(tipo or '').strip().lower()}_bytes"
+
+
+def _asset_session_name_key_cgi(tipo: str) -> str:
+    return f"_cgi_pdf_asset_{str(tipo or '').strip().lower()}_name"
+
+
+def _registrar_asset_upload_en_sesion_cgi(uploaded_file: Any, tipo: str) -> Optional[bytes]:
+    if uploaded_file is None:
+        return None
+    try:
+        data = _obtener_bytes_upload_cgi(uploaded_file)
+    except Exception:
+        try:
+            data = uploaded_file.getvalue()
+        except Exception:
+            data = b""
+    if not data:
+        return None
+    data = bytes(data)
+    try:
+        st.session_state[_asset_session_key_cgi(tipo)] = data
+        st.session_state[_asset_session_name_key_cgi(tipo)] = str(getattr(uploaded_file, "name", ""))
+    except Exception:
+        pass
+    return data
+
+
+def _asset_b64_field_cgi(tipo: str) -> str:
+    tipo = str(tipo or '').strip().lower()
+    return "logo_b64" if tipo == "logo" else f"{tipo}_b64"
+
+
+def _persistir_asset_b64_usuario_cgi(usuario_info: Optional[Dict[str, Any]], tipo: str, data: bytes, nombre: str = "") -> None:
+    if not data:
+        return
+    try:
+        import base64
+        info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+        usuario = str(info.get("usuario") or "usuario_local").strip() or "usuario_local"
+        usuarios = cargar_usuarios_app()
+        real_key = _buscar_usuario_flexible(usuarios, _normalizar_usuario(usuario)) or _normalizar_usuario(usuario)
+        if real_key not in usuarios:
+            usuarios[real_key] = dict(info)
+        campo = _asset_b64_field_cgi(tipo)
+        usuarios[real_key][campo] = base64.b64encode(bytes(data)).decode("ascii")
+        usuarios[real_key][f"{tipo}_archivo"] = nombre or usuarios[real_key].get(f"{tipo}_archivo", "")
+        usuarios[real_key][f"{tipo}_actualizado"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        guardar_usuarios_app(usuarios)
+        if isinstance(info, dict):
+            info[campo] = usuarios[real_key][campo]
+            info[f"{tipo}_archivo"] = usuarios[real_key][f"{tipo}_archivo"]
+            info[f"{tipo}_actualizado"] = usuarios[real_key][f"{tipo}_actualizado"]
+            st.session_state["usuario_actual"] = info
+    except Exception:
+        pass
+
+
+def _decodificar_b64_asset_cgi(valor: Any) -> Optional[bytes]:
+    if not valor:
+        return None
+    try:
+        import base64
+        data = base64.b64decode(str(valor).encode("ascii"), validate=False)
+        return bytes(data) if data else None
+    except Exception:
+        return None
+
+
+def _obtener_asset_pdf_bytes_cgi(usuario_info: Optional[Dict[str, Any]], tipo: str) -> Optional[bytes]:
+    """Fuente única para logo/firma/sello del PDF.
+
+    Prioridad:
+      1) bytes vivos del file_uploader/session_state;
+      2) base64 persistido en el registro del usuario actual;
+      3) si usuario_local, un único activo previo encontrado en registros históricos;
+      4) ruta física resuelta;
+      5) para firma: firma embebida de Ricardo Daniel Olano en modo local/autor.
+    """
+    tipo = str(tipo or '').strip().lower()
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+
+    # 1. Bytes directos de la sesión: esta es la vía más robusta en Streamlit.
+    try:
+        data = st.session_state.get(_asset_session_key_cgi(tipo))
+        if isinstance(data, (bytes, bytearray)) and len(data) > 0:
+            return bytes(data)
+    except Exception:
+        pass
+
+    # 2. Base64 del usuario actual (sesión o JSON).
+    campo_b64 = _asset_b64_field_cgi(tipo)
+    data = _decodificar_b64_asset_cgi(info.get(campo_b64) if isinstance(info, dict) else None)
+    if data:
+        return data
+    try:
+        usuarios = cargar_usuarios_app()
+        usuario = str(info.get("usuario") or "").strip()
+        real_key = _buscar_usuario_flexible(usuarios, _normalizar_usuario(usuario)) if usuario else None
+        if real_key:
+            data = _decodificar_b64_asset_cgi((usuarios.get(real_key) or {}).get(campo_b64))
+            if data:
+                return data
+
+        # 3. Compatibilidad con el actual modo usuario_local: si solo existe un
+        # activo persistido en otro perfil, recuperarlo para no perderlo al quitar login.
+        if _normalizar_usuario(usuario) in {"", "usuario_local", "local"}:
+            encontrados = []
+            for reg in usuarios.values():
+                if not isinstance(reg, dict):
+                    continue
+                d = _decodificar_b64_asset_cgi(reg.get(campo_b64))
+                if d:
+                    encontrados.append(d)
+            if len(encontrados) == 1:
+                return encontrados[0]
+    except Exception:
+        pass
+
+    # 4. Ruta física (compatibilidad con versiones anteriores).
+    try:
+        path = _resolver_asset_pdf_usuario(info, tipo)
+        if path and Path(str(path)).exists():
+            data = Path(str(path)).read_bytes()
+            if data:
+                return data
+    except Exception:
+        pass
+
+    # 5. Firma embebida del autor. En modo local, la app pertenece al Dr. Olano;
+    # no debe quedar sin firma por haber eliminado la pantalla de login.
+    if tipo == "firma":
+        try:
+            usuario = _normalizar_usuario(info.get("usuario", ""))
+            es_local = usuario in {"", "usuario_local", "local"}
+            if es_local or usuario_habilitado_firma_olano(info):
+                import base64
+                data = base64.b64decode(FIRMA_RICARDO_DANIEL_OLANO_B64.encode("ascii"))
+                if data:
+                    return bytes(data)
+        except Exception:
+            pass
+    return None
+
+
+def _dibujar_asset_pdf_bytes_cgi(canvas, image_bytes: Optional[bytes], x: float, y: float, max_w: float, max_h: float) -> bool:
+    if not image_bytes:
+        return False
+    try:
+        import io as _io_asset
+        from reportlab.lib.utils import ImageReader
+        reader = ImageReader(_io_asset.BytesIO(bytes(image_bytes)))
+        iw, ih = reader.getSize()
+        if not iw or not ih:
+            return False
+        scale = min(float(max_w)/float(iw), float(max_h)/float(ih))
+        if scale <= 0:
+            return False
+        dw, dh = float(iw)*scale, float(ih)*scale
+        dx = float(x) + (float(max_w)-dw)/2.0
+        dy = float(y) + (float(max_h)-dh)/2.0
+        canvas.drawImage(reader, dx, dy, width=dw, height=dh, preserveAspectRatio=True, mask='auto')
+        return True
+    except Exception:
+        return False
+
+
+def _footer_materno_con_assets_factory(usuario_info: Optional[Dict[str, Any]] = None):
+    """V117: firma/sello/logo desde bytes, no desde rutas locales."""
+    info = dict(usuario_info or st.session_state.get("usuario_actual", {}) or {})
+    firma_bytes = _obtener_asset_pdf_bytes_cgi(info, "firma")
+    sello_bytes = _obtener_asset_pdf_bytes_cgi(info, "sello")
+    logo_bytes = _obtener_asset_pdf_bytes_cgi(info, "logo")
+
+    def _callback(canvas, doc):
+        from reportlab.lib import colors
+        from reportlab.lib.units import mm
+        _paper_footer(canvas, doc)
+        canvas.saveState()
+        page_w, _page_h = doc.pagesize
+        left = float(doc.leftMargin)
+        right = float(page_w - doc.rightMargin)
+
+        # Banda visible y suficientemente alta. Orden solicitado: firma/sello + logo al cierre.
+        band_y = 10.5 * mm
+        band_h = 20.5 * mm
+        gap = 3.0 * mm
+        usable = right - left
+        firma_w = usable * 0.43
+        sello_w = usable * 0.18
+        logo_w = usable - firma_w - sello_w - 2*gap
+
+        canvas.setStrokeColor(colors.HexColor("#CBD5E1"))
+        canvas.setLineWidth(0.45)
+        canvas.line(left, band_y + band_h + 1.5*mm, right, band_y + band_h + 1.5*mm)
+
+        fx = left
+        sx = fx + firma_w + gap
+        lx = sx + sello_w + gap
+
+        # Etiquetas pequeñas para mantener trazabilidad visual.
+        canvas.setFillColor(colors.HexColor("#0B3D6E"))
+        canvas.setFont("Helvetica-Bold", 6.8)
+        canvas.drawString(fx, band_y + band_h - 1.5*mm, "Firma")
+        canvas.drawString(sx, band_y + band_h - 1.5*mm, "Sello")
+        canvas.drawRightString(right, band_y + band_h - 1.5*mm, "Logo institucional")
+
+        firma_ok = _dibujar_asset_pdf_bytes_cgi(canvas, firma_bytes, fx, band_y, firma_w, band_h - 4*mm)
+        sello_ok = _dibujar_asset_pdf_bytes_cgi(canvas, sello_bytes, sx, band_y, sello_w, band_h - 4*mm)
+        logo_ok = _dibujar_asset_pdf_bytes_cgi(canvas, logo_bytes, lx, band_y, logo_w, band_h - 4*mm)
+
+        # Nunca ocultar silenciosamente un activo faltante.
+        canvas.setFont("Helvetica", 5.5)
+        canvas.setFillColor(colors.HexColor("#64748B"))
+        if not firma_ok:
+            canvas.drawString(fx, band_y + 6*mm, "Firma no disponible")
+        if not sello_ok:
+            canvas.drawString(sx, band_y + 6*mm, "Sello no disponible")
+        if not logo_ok:
+            canvas.drawRightString(right, band_y + 6*mm, "Logo no disponible")
+
+        # Identificación profesional debajo de la firma, sin invadir el footer técnico.
+        try:
+            nombre = str(info.get("nombre") or "Ricardo Daniel Olano").strip()
+            matricula = str(info.get("matricula") or "").strip()
+            txt = nombre + (f" - Matrícula {matricula}" if matricula else "")
+            canvas.setFillColor(colors.HexColor("#334155"))
+            canvas.setFont("Helvetica", 5.4)
+            canvas.drawString(left, 8.6*mm, txt[:110])
+        except Exception:
+            pass
+        canvas.restoreState()
+    return _callback
+
+
+# Overrides de guardado: además del archivo físico, conservar bytes en sesión y base64.
+_guardar_imagen_usuario_app_v116 = guardar_imagen_usuario_app
+
+def guardar_imagen_usuario_app(usuario_info: Dict[str, Any], uploaded_file: Any, tipo: str) -> Tuple[bool, str]:
+    data = _registrar_asset_upload_en_sesion_cgi(uploaded_file, tipo)
+    if not data:
+        return False, "No se seleccionó ningún archivo válido."
+    ok, msg = _guardar_imagen_usuario_app_v116(usuario_info, uploaded_file, tipo)
+    _persistir_asset_b64_usuario_cgi(usuario_info, tipo, data, str(getattr(uploaded_file, "name", "")))
+    return True if data else ok, (f"{tipo.capitalize()} activado para el PDF y guardado." if data else msg)
+
+
+_guardar_logo_institucional_cgi_v116 = guardar_logo_institucional_cgi
+
+def guardar_logo_institucional_cgi(usuario_info: Dict[str, Any], uploaded_file: Any) -> Tuple[bool, str]:
+    data = _registrar_asset_upload_en_sesion_cgi(uploaded_file, "logo")
+    if not data:
+        return False, "Seleccione una imagen válida para el logo."
+    ok, msg = _guardar_logo_institucional_cgi_v116(usuario_info, uploaded_file)
+    _persistir_asset_b64_usuario_cgi(usuario_info, "logo", data, str(getattr(uploaded_file, "name", "")))
+    return True if data else ok, ("Logo institucional activado para el PDF y guardado." if data else msg)
+
+
+
+_eliminar_imagen_usuario_app_v116 = eliminar_imagen_usuario_app
+
+def eliminar_imagen_usuario_app(usuario_info: Dict[str, Any], tipo: str) -> Tuple[bool, str]:
+    try:
+        st.session_state.pop(_asset_session_key_cgi(tipo), None)
+        st.session_state.pop(_asset_session_name_key_cgi(tipo), None)
+    except Exception:
+        pass
+    try:
+        info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+        usuario = str(info.get("usuario") or "").strip()
+        usuarios = cargar_usuarios_app()
+        real_key = _buscar_usuario_flexible(usuarios, _normalizar_usuario(usuario)) if usuario else None
+        if real_key and real_key in usuarios:
+            usuarios[real_key].pop(_asset_b64_field_cgi(tipo), None)
+            guardar_usuarios_app(usuarios)
+        if isinstance(info, dict):
+            info.pop(_asset_b64_field_cgi(tipo), None)
+            st.session_state["usuario_actual"] = info
+    except Exception:
+        pass
+    return _eliminar_imagen_usuario_app_v116(usuario_info, tipo)
+
+
+_eliminar_logo_institucional_cgi_v116 = eliminar_logo_institucional_cgi
+
+def eliminar_logo_institucional_cgi(usuario_info: Dict[str, Any]) -> Tuple[bool, str]:
+    try:
+        st.session_state.pop(_asset_session_key_cgi("logo"), None)
+        st.session_state.pop(_asset_session_name_key_cgi("logo"), None)
+    except Exception:
+        pass
+    try:
+        info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+        usuario = str(info.get("usuario") or "").strip()
+        usuarios = cargar_usuarios_app()
+        real_key = _buscar_usuario_flexible(usuarios, _normalizar_usuario(usuario)) if usuario else None
+        if real_key and real_key in usuarios:
+            usuarios[real_key].pop("logo_b64", None)
+            guardar_usuarios_app(usuarios)
+        if isinstance(info, dict):
+            info.pop("logo_b64", None)
+            st.session_state["usuario_actual"] = info
+    except Exception:
+        pass
+    return _eliminar_logo_institucional_cgi_v116(usuario_info)
+
+
+def _estado_assets_pdf_cgi(usuario_info: Optional[Dict[str, Any]] = None) -> Dict[str, bool]:
+    info = usuario_info or st.session_state.get("usuario_actual", {}) or {}
+    return {
+        "logo": bool(_obtener_asset_pdf_bytes_cgi(info, "logo")),
+        "firma": bool(_obtener_asset_pdf_bytes_cgi(info, "firma")),
+        "sello": bool(_obtener_asset_pdf_bytes_cgi(info, "sello")),
+    }
+
+
 with st.sidebar:
     st.success(f"Usuario: {usuario_actual.get('nombre', usuario_actual.get('usuario', ''))}")
     if usuario_actual.get("matricula"):
@@ -16940,6 +17267,9 @@ with st.sidebar:
         if logo_preview:
             st.image(logo_preview, caption="Logo institucional activo", use_container_width=True)
         logo_upload = st.file_uploader("Cargar logo institucional común", type=["png", "jpg", "jpeg", "webp"], key="upload_logo_institucional_cgi")
+        if logo_upload is not None:
+            _registrar_asset_upload_en_sesion_cgi(logo_upload, "logo")
+            st.image(logo_upload, caption="Logo listo para insertar en PDF", use_container_width=True)
         col_logo1, col_logo2 = st.columns(2)
         with col_logo1:
             if st.button("Guardar logo", key="btn_guardar_logo_cgi"):
@@ -16950,13 +17280,26 @@ with st.sidebar:
                 ok, msg = eliminar_logo_institucional_cgi(usuario_actual)
                 st.success(msg) if ok else st.error(msg)
         firma_upload = st.file_uploader("Cargar firma digital", type=["png", "jpg", "jpeg", "webp"], key="upload_firma_usuario")
+        if firma_upload is not None:
+            _registrar_asset_upload_en_sesion_cgi(firma_upload, "firma")
+            st.image(firma_upload, caption="Firma lista para insertar en PDF", use_container_width=True)
         if st.button("Guardar firma", key="btn_guardar_firma_usuario"):
             ok, msg = guardar_imagen_usuario_app(usuario_actual, firma_upload, "firma")
             st.success(msg) if ok else st.error(msg)
         sello_upload = st.file_uploader("Cargar sello digital", type=["png", "jpg", "jpeg", "webp"], key="upload_sello_usuario")
+        if sello_upload is not None:
+            _registrar_asset_upload_en_sesion_cgi(sello_upload, "sello")
+            st.image(sello_upload, caption="Sello listo para insertar en PDF", use_container_width=True)
         if st.button("Guardar sello", key="btn_guardar_sello_usuario"):
             ok, msg = guardar_imagen_usuario_app(usuario_actual, sello_upload, "sello")
             st.success(msg) if ok else st.error(msg)
+        _assets_estado = _estado_assets_pdf_cgi(usuario_actual)
+        st.caption(
+            "Activos que se insertarán en el PDF: "
+            + f"Logo {'✓' if _assets_estado['logo'] else '✗'} · "
+            + f"Firma {'✓' if _assets_estado['firma'] else '✗'} · "
+            + f"Sello {'✓' if _assets_estado['sello'] else '✗'}"
+        )
         col_del1, col_del2 = st.columns(2)
         with col_del1:
             if st.button("Quitar firma", key="btn_quitar_firma_usuario"):
