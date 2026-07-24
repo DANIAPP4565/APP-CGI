@@ -8714,14 +8714,162 @@ def _paper_conclusion_ejecutiva(r: Dict[str, Any], contexto_embarazo: Optional[D
     )
 
 
+def crear_grafico_hemodinamia_materna_por_semanas_una_hoja_bytes(
+    r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None
+) -> Optional[io.BytesIO]:
+    """Gráfico compacto y coherente con las reglas canónicas de la app.
+
+    Muestra IC e IRV/RVS del registro basal frente a los rangos gestacionales
+    que usa obtener_rango_hemodinamico_gestacional(), evitando que el gráfico
+    utilice referencias distintas de las empleadas para el diagnóstico textual.
+    """
+    contexto = contexto or {}
+    if not contexto.get("embarazada"):
+        return None
+    eg = limpiar_numero(contexto.get("edad_gestacional"))
+    ic = limpiar_numero((r or {}).get("ic"))
+    irv = limpiar_numero((r or {}).get("irv"))
+    if eg is None or (ic is None and irv is None):
+        return None
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+        import io as _io
+    except Exception:
+        return None
+
+    semanas = np.arange(4.0, 43.01, 0.25)
+    ic_low, ic_high, irv_low, irv_high = [], [], [], []
+    for sem in semanas:
+        rg = obtener_rango_hemodinamico_gestacional(float(sem))
+        if rg is None:
+            ic_low.append(float("nan")); ic_high.append(float("nan"))
+            irv_low.append(float("nan")); irv_high.append(float("nan"))
+        else:
+            ic_low.append(float(rg["ic_min"])); ic_high.append(float(rg["ic_max"]))
+            irv_low.append(float(rg["irv_min"])); irv_high.append(float(rg["irv_max"]))
+
+    cg = clasificacion_hemodinamica_materna_gestacional(r, contexto)
+    patron = str(cg.get("patron") or cg.get("diagnostico") or "NO CLASIFICABLE")
+
+    fig, ax1 = plt.subplots(figsize=(12.5, 4.4), dpi=170)
+    fig.patch.set_facecolor("white")
+    ax1.set_facecolor("#F8FAFC")
+    ax2 = ax1.twinx()
+
+    ax1.fill_between(semanas, ic_low, ic_high, alpha=0.20, color="#2563EB", label="Rango IC esperado")
+    ax2.fill_between(semanas, irv_low, irv_high, alpha=0.15, color="#DC2626", label="Rango IRV esperado")
+    for corte in (14, 28):
+        ax1.axvline(corte, color="#94A3B8", lw=1.2, ls="--", alpha=0.9)
+
+    if ic is not None:
+        ax1.scatter([eg], [ic], s=170, color="#1D4ED8", edgecolor="white", linewidth=2.2, zorder=8)
+        ax1.annotate(
+            f"IC {fmt(ic,2)}\n{cg.get('ic_estado','')}", xy=(eg, ic), xytext=(12, 18),
+            textcoords="offset points", fontsize=9.2, fontweight="bold", color="#1D4ED8",
+            bbox=dict(boxstyle="round,pad=0.28", fc="white", ec="#1D4ED8", alpha=0.96),
+            arrowprops=dict(arrowstyle="->", color="#1D4ED8", lw=1.2),
+        )
+    if irv is not None:
+        ax2.scatter([eg], [irv], s=155, marker="D", color="#B91C1C", edgecolor="white", linewidth=2.0, zorder=8)
+        ax2.annotate(
+            f"IRV {fmt(irv,0)}\n{cg.get('irv_estado','')}", xy=(eg, irv), xytext=(12, -38),
+            textcoords="offset points", fontsize=9.2, fontweight="bold", color="#991B1B",
+            bbox=dict(boxstyle="round,pad=0.28", fc="white", ec="#B91C1C", alpha=0.96),
+            arrowprops=dict(arrowstyle="->", color="#B91C1C", lw=1.2),
+        )
+
+    ax1.set_xlim(4, 42)
+    ax1.set_xticks([6,10,14,18,22,26,30,34,38,42])
+    ax1.set_ylim(1.8, 6.2)
+    ax2.set_ylim(400, 2300)
+    ax1.set_xlabel("Edad gestacional (semanas)", fontsize=10.5, fontweight="bold")
+    ax1.set_ylabel("IC (L/min/m²)", fontsize=10.5, fontweight="bold", color="#1D4ED8")
+    ax2.set_ylabel("IRV/RVS (dyn.s.cm-5)", fontsize=10.5, fontweight="bold", color="#B91C1C")
+    ax1.tick_params(axis="y", labelcolor="#1D4ED8", labelsize=8.5)
+    ax2.tick_params(axis="y", labelcolor="#B91C1C", labelsize=8.5)
+    ax1.tick_params(axis="x", labelsize=8.5)
+    ax1.grid(True, alpha=0.18)
+    ax1.set_title(
+        f"Hemodinamia materna según semanas de gestación | EG {fmt(eg,0)} | {patron}",
+        fontsize=11.5, fontweight="bold", color="#0B3D6E", pad=8
+    )
+    ax1.text(9, 1.93, "1er trimestre", ha="center", va="bottom", fontsize=8.5, color="#475569")
+    ax1.text(21, 1.93, "2do trimestre", ha="center", va="bottom", fontsize=8.5, color="#475569")
+    ax1.text(35, 1.93, "3er trimestre", ha="center", va="bottom", fontsize=8.5, color="#475569")
+
+    # Leyenda combinada y nota metodológica mínima.
+    h1, l1 = ax1.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax1.legend(h1+h2, l1+l2, loc="upper right", fontsize=8.2, framealpha=0.92)
+    fig.text(
+        0.5, 0.01,
+        "Punto del paciente: registro ACOSTADO/CINTA/SPOT/ESTUDIO BASAL. Los rangos graficados son los mismos usados por la clasificación automática de la app.",
+        ha="center", fontsize=7.8, color="#475569"
+    )
+    fig.tight_layout(rect=[0.02, 0.04, 0.98, 0.97])
+    buf = _io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.08, facecolor="white")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def conclusion_predictiva_pe_una_hoja(
+    r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None
+) -> Dict[str, str]:
+    """Resumen compacto: riesgo general, PE temprana y PE tardía.
+
+    No crea un algoritmo nuevo: consume exactamente las funciones de riesgo
+    vigentes de la app para que PDF completo, pantalla y una-hoja coincidan.
+    """
+    contexto = contexto or {}
+    riesgo = calcular_riesgo_preeclampsia(r, contexto)
+    sub = riesgo.get("riesgo_pe_temprana_tardia") or estimar_subtipo_pe_temprana_tardia(r, contexto)
+    general = str(riesgo.get("categoria") or "No calculable")
+    puntaje = limpiar_numero(riesgo.get("puntaje"))
+    if puntaje is not None:
+        general = f"{general} ({fmt(puntaje,1)}/10)"
+
+    if sub.get("aplicable"):
+        temprana = str(sub.get("temprana") or "No calculable")
+        tardia = str(sub.get("tardia") or "No calculable")
+        pt = limpiar_numero(sub.get("puntaje_temprana"))
+        pl = limpiar_numero(sub.get("puntaje_tardia"))
+        if pt is not None:
+            temprana += f" (score {fmt(pt,1)})"
+        if pl is not None:
+            tardia += f" (score {fmt(pl,1)})"
+        nota = str(sub.get("texto") or "")
+    else:
+        temprana = "No calculable"
+        tardia = "No calculable"
+        nota = str(sub.get("texto") or "No se dispone de edad gestacional válida para subclasificación.")
+
+    cg = clasificacion_hemodinamica_materna_gestacional(r, contexto)
+    conclusion = (
+        f"Patrón hemodinámico materno: {cg.get('patron','No clasificable')}. "
+        f"IC {cg.get('ic_estado','no evaluable')} e IRV {cg.get('irv_estado','no evaluable')} para la edad gestacional. "
+        f"Riesgo general: {general}. PE temprana: {temprana}. PE tardía: {tardia}."
+    )
+    return {
+        "general": general,
+        "temprana": temprana,
+        "tardia": tardia,
+        "nota": nota,
+        "conclusion": conclusion,
+    }
+
+
 def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> bytes:
     """PDF ejecutivo de una hoja con motor ReportLab tipo paper.
 
     Corrección solicitada:
     - Retira por completo la sección "1. Panel de lectura rápida".
     - La reemplaza por "E. Informe de dominios integrados resumido y didáctico".
-    - Conserva el gráfico de cuadrantes hemodinámicos.
-    - Conserva el gráfico de recomendación terapéutica / propuesta terapéutica ICG individualizada.
+    - En embarazo reemplaza los cuadrantes por un gráfico de hemodinamia materna según semanas de gestación.
+    - Debajo del gráfico informa conclusión predictiva de PE general, temprana y tardía.
+    - En no embarazadas conserva cuadrantes y recomendación terapéutica.
     - La sección E se muestra una sola vez y usa el mismo motor diagnóstico canónico del informe completo.
     """
     try:
@@ -8782,60 +8930,89 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         story.append(_paper_paragraph(f"No se pudo insertar el informe de dominios integrados: {e}", stl["PaperSmall"]))
     story.append(Spacer(1, 4))
 
-    # Gráficos integrados. Se elimina la numeración antigua para no dejar una
-    # secuencia 1/2 inconsistente después de reemplazar el Panel de lectura rápida.
+    # Gráficos integrados. En hemodinamia materna se muestra UN SOLO gráfico
+    # por semanas de gestación, seguido de la conclusión predictiva PE general/temprana/tardía.
+    # Esto reemplaza el gráfico de cuadrantes en la versión obstétrica de una hoja
+    # y evita forzar una segunda página. El módulo no obstétrico conserva su diseño previo.
     story.append(_paper_paragraph("Graficos integrados", stl["PaperH"]))
 
-    # 2.a conserva el gráfico de cuadrantes hemodinámicos.
-    # En embarazo, 2.b deja de ser terapéutico y pasa a ser gráfico de hemodinamia materna
-    # contra edad gestacional, para mantener el informe obstétrico centrado en fisiología materna.
-    graf_cuadrantes = None
-    try:
-        graf_cuadrantes = crear_grafico_fenotipado_dinamico_bytes(r_panel, df)
-    except Exception:
-        graf_cuadrantes = None
+    if es_embarazo:
+        story.append(_paper_paragraph("Hemodinamia materna segun semanas de embarazo", stl["PaperH"]))
+        graf_materno = None
+        try:
+            graf_materno = crear_grafico_hemodinamia_materna_por_semanas_una_hoja_bytes(r_panel, contexto_embarazo)
+        except Exception:
+            graf_materno = None
 
-    graf_2b = None
-    titulo_2b = "Grafico de recomendacion terapeutica"
-    fallback_2b = "No hay IC, IRV/RVS o CFT suficientes para generar el gráfico de recomendación terapéutica."
-    try:
-        if es_embarazo:
-            graf_2b = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
-            titulo_2b = "Grafico de hemodinamia materna por edad gestacional"
-            fallback_2b = "No hay edad gestacional, IC e IRV/RVS suficientes para generar el gráfico de hemodinamia materna."
+        if graf_materno is not None:
+            try:
+                graf_materno.seek(0)
+            except Exception:
+                pass
+            # Altura compacta para preservar el formato real de una hoja.
+            story.append(Image(graf_materno, width=ancho, height=ancho*0.34, kind="proportional"))
         else:
-            graf_2b = crear_grafico_propuesta_terapeutica_bytes(r_panel, df)
-    except Exception:
-        graf_2b = None
+            story.append(_paper_paragraph(
+                "No hay edad gestacional, IC e IRV/RVS suficientes para generar el grafico de hemodinamia materna por semanas.",
+                stl["PaperSmall"]
+            ))
+        story.append(Spacer(1, 3))
 
-    # Gráfico de cuadrantes a hoja completa: no va más en una celda a media página.
-    # Esto mejora legibilidad del plano IC vs IRV/RVS y evita que los rótulos se compriman.
-    img_w_cuad = ancho
-    img_h_cuad = ancho * 0.62
-    img_w_2b = ancho
-    img_h_2b = ancho * (0.55 if es_embarazo else 0.38)
-
-    story.append(_paper_paragraph("Grafico de cuadrantes hemodinamicos", stl["PaperH"]))
-    if graf_cuadrantes is not None:
-        try:
-            graf_cuadrantes.seek(0)
-        except Exception:
-            pass
-        story.append(Image(graf_cuadrantes, width=img_w_cuad, height=img_h_cuad, kind="proportional"))
+        # Conclusión predictiva debajo del gráfico, usando el MISMO motor de riesgo
+        # vigente en pantalla e informe completo: general + temprana + tardía.
+        pred = conclusion_predictiva_pe_una_hoja(r_panel, contexto_embarazo)
+        story.append(_paper_paragraph("Conclusion predictiva de riesgo de preeclampsia", stl["PaperH"]))
+        tabla_pred = [
+            ["Riesgo", "Resultado predictivo"],
+            ["Preeclampsia general", pred.get("general", "No calculable")],
+            ["Preeclampsia temprana (<34 sem)", pred.get("temprana", "No calculable")],
+            ["Preeclampsia tardia", pred.get("tardia", "No calculable")],
+        ]
+        story.append(_paper_table(tabla_pred, col_widths=[ancho*0.34, ancho*0.66], header=True, compact=True))
+        story.append(Spacer(1, 2))
+        story.append(_paper_paragraph(pred.get("conclusion", ""), stl["PaperSmall"]))
+        if pred.get("nota"):
+            story.append(_paper_paragraph(pred.get("nota", ""), stl["PaperSmall"]))
+        story.append(Spacer(1, 2))
     else:
-        story.append(_paper_paragraph("No hay IC e IRV/RVS suficientes para generar el gráfico de cuadrantes hemodinámicos.", stl["PaperSmall"]))
-    story.append(Spacer(1, 3))
-
-    story.append(_paper_paragraph(titulo_2b, stl["PaperH"]))
-    if graf_2b is not None:
+        # Módulo no embarazada: conserva cuadrantes + recomendación terapéutica.
+        graf_cuadrantes = None
         try:
-            graf_2b.seek(0)
+            graf_cuadrantes = crear_grafico_fenotipado_dinamico_bytes(r_panel, df)
         except Exception:
-            pass
-        story.append(Image(graf_2b, width=img_w_2b, height=img_h_2b, kind="proportional"))
-    else:
-        story.append(_paper_paragraph(fallback_2b, stl["PaperSmall"]))
-    story.append(Spacer(1, 3))
+            graf_cuadrantes = None
+        story.append(_paper_paragraph("Grafico de cuadrantes hemodinamicos", stl["PaperH"]))
+        if graf_cuadrantes is not None:
+            try:
+                graf_cuadrantes.seek(0)
+            except Exception:
+                pass
+            story.append(Image(graf_cuadrantes, width=ancho, height=ancho*0.62, kind="proportional"))
+        else:
+            story.append(_paper_paragraph(
+                "No hay IC e IRV/RVS suficientes para generar el grafico de cuadrantes hemodinamicos.",
+                stl["PaperSmall"]
+            ))
+        story.append(Spacer(1, 3))
+
+        graf_tx = None
+        try:
+            graf_tx = crear_grafico_propuesta_terapeutica_bytes(r_panel, df)
+        except Exception:
+            graf_tx = None
+        story.append(_paper_paragraph("Grafico de recomendacion terapeutica", stl["PaperH"]))
+        if graf_tx is not None:
+            try:
+                graf_tx.seek(0)
+            except Exception:
+                pass
+            story.append(Image(graf_tx, width=ancho, height=ancho*0.38, kind="proportional"))
+        else:
+            story.append(_paper_paragraph(
+                "No hay IC, IRV/RVS o CFT suficientes para generar el grafico de recomendacion terapeutica.",
+                stl["PaperSmall"]
+            ))
+        story.append(Spacer(1, 3))
 
     nota = (
         "Nota: el patrón hemodinámico se define por el registro ACOSTADO/CINTA/SPOT/ESTUDIO BASAL. "
@@ -13402,8 +13579,8 @@ def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Di
         basal_df = dfx
     rb = _zlg_resumen_posicion_v3(basal_df, es_parado=False)
     rp = _zlg_resumen_posicion_v3(pie_df, es_parado=True) if not pie_df.empty else {}
-    # Descartar parado espurio si no tiene IC ni IRV propios.
-    if rp and not (es_valor_util(rp.get("ic")) or es_valor_util(rp.get("irv"))):
+    # Descartar parado espurio solo si no tiene IC ni ninguna resistencia propia.
+    if rp and not (es_valor_util(rp.get("ic")) or es_valor_util(rp.get("irv")) or es_valor_util(rp.get("rvs"))):
         rp = {}
     return rb, rp
 
@@ -13411,18 +13588,31 @@ def obtener_resumenes_ortostaticos(df: pd.DataFrame) -> Tuple[Dict[str, Any], Di
 def calcular_delta_ortostatico(df: pd.DataFrame) -> Dict[str, Any]:
     rb, rp = obtener_resumenes_ortostaticos(df)
     if not rb or not rp:
-        return {"basal": rb or {}, "de_pie": {}, "delta_ic": None, "delta_irv": None, "delta_fc": None, "delta_pas": None, "delta_pad": None,
+        return {"basal": rb or {}, "de_pie": {}, "delta_ic": None, "delta_irv": None, "delta_rvs": None, "resistencia_tipo": None, "delta_fc": None, "delta_pas": None, "delta_pad": None,
                 "detalle": "ORTOSTATISMO NO EVALUABLE: no se detectó registro PARADO explícito con datos completos. La referencia diagnóstica es ACOSTADO/CINTA/SPOT/ESTUDIO BASAL."}
     res = {"basal": rb, "de_pie": rp}
-    for key, delta_key in [("ic","delta_ic"),("irv","delta_irv"),("fc","delta_fc"),("pas","delta_pas"),("pad","delta_pad")]:
+    for key, delta_key in [("ic","delta_ic"),("fc","delta_fc"),("pas","delta_pas"),("pad","delta_pad")]:
         vb = limpiar_numero(rb.get(key)); vp = limpiar_numero(rp.get(key))
         res[delta_key] = (vp - vb) if vb is not None and vp is not None else None
-    ok_ic = res.get("delta_ic") is not None and res["delta_ic"] < 0
-    ok_irv = res.get("delta_irv") is not None and res["delta_irv"] > 0
-    if ok_ic and ok_irv:
-        res["detalle"] = "Respuesta ortostática fisiológica: IC baja e IRV/RVS aumenta al pasar a PARADO."
+    # Comparar la misma resistencia en ambas posiciones; nunca sustituir IRV por RVS.
+    ib, ip = limpiar_numero(rb.get("irv")), limpiar_numero(rp.get("irv"))
+    sb, sp = limpiar_numero(rb.get("rvs")), limpiar_numero(rp.get("rvs"))
+    if ib is not None and ip is not None:
+        res["resistencia_tipo"] = "IRV"; res["delta_irv"] = ip - ib; res["delta_rvs"] = None
+        delta_res = res["delta_irv"]
+    elif sb is not None and sp is not None:
+        res["resistencia_tipo"] = "RVS"; res["delta_rvs"] = sp - sb; res["delta_irv"] = res["delta_rvs"]  # alias histórico para consumidores previos
+        delta_res = res["delta_rvs"]
     else:
-        res["detalle"] = "REVISAR CARGA/MATCHEO DE DATOS ORTOSTÁTICOS: se espera que IC baje e IRV/RVS aumente al comparar ACOSTADO/CINTA/SPOT/ESTUDIO BASAL contra PARADO."
+        res["resistencia_tipo"] = None; res["delta_irv"] = None; res["delta_rvs"] = None; delta_res = None
+    ok_ic = res.get("delta_ic") is not None and res["delta_ic"] < 0
+    ok_res = delta_res is not None and delta_res > 0
+    if ok_ic and ok_res:
+        res["detalle"] = f"Respuesta ortostática fisiológica: IC baja y {res.get('resistencia_tipo')} aumenta al pasar a PARADO."
+    elif delta_res is None:
+        res["detalle"] = "ORTOSTATISMO PARCIAL: no existe la misma métrica de resistencia (IRV o RVS) en ambas posiciones; no se mezclan índices con resistencia no indexada."
+    else:
+        res["detalle"] = f"Respuesta ortostática no concordante con el patrón esperado: se espera descenso de IC y aumento de {res.get('resistencia_tipo')}."
     return res
 
 
@@ -13873,8 +14063,6 @@ def diagnostico_ica(valor: Any) -> str:
 
 
 def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
-    if callable(globals().get("_ea_ees_identicos_sospechosos")) and _ea_ees_identicos_sospechosos(ea, ees):
-        return "ACOPLAMIENTO NO CLASIFICABLE: EA Y EES IDÉNTICAS"
     ratio = calcular_ea_ees_derivado(ea, ees) if callable(globals().get("calcular_ea_ees_derivado")) else calcular_acoplamiento_va(ea, ees, ava)
     if ratio is None:
         return "ACOPLAMIENTO NO CLASIFICABLE"
@@ -13938,7 +14126,7 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
         [
             "Acoplamiento ventrículo-arterial",
             f"EA {fmt(ea,2)} | EES {fmt(ees,2)} | EA/EES {fmt(ratio,2)}",
-            texto_regla_cgi("EA/EES") + ". Solo se clasifica si EA y EES son válidos y no son una duplicación sospechosa.",
+            texto_regla_cgi("EA/EES") + ". EA/EES se calcula si ambas elastancias son válidas; EA=EES no se invalida automáticamente.",
             acoplamiento,
         ],
         [
@@ -15183,9 +15371,9 @@ def _v109_extraer_metricas_texto(texto: str) -> Dict[str, Optional[float]]:
         r"(?:\bZ0\b|Impedancia\s+Basal|Baseline\s+Impedance)\s*[:=\-]?\s*(\d+(?:[.,]\d+)?)",
     ], 5.0, 80.0)
     out["DZDT_MAX"] = _v109_buscar_numero(texto, [
-        r"d\s*Z\s*/\s*d\s*t\s*(?:\|\s*)?(?:m[aá]x|max)?\s*[:=\-]?\s*(\d+(?:[.,]\d+)?)",
-        r"(?:dZdt|dZ/dt)\s*(?:max|m[aá]x)\s*[:=\-]?\s*(\d+(?:[.,]\d+)?)",
-    ], 0.05, 20.0)
+        r"d\s*Z\s*/\s*d\s*t\s*(?:\|\s*)?(?:m[aá]x|max)?\s*[:=\-]?\s*([-+]?\d+(?:[.,]\d+)?)",
+        r"(?:dZdt|dZ/dt)\s*(?:max|m[aá]x)\s*[:=\-]?\s*([-+]?\d+(?:[.,]\d+)?)",
+    ], -20.0, 20.0)
     ppe, pe = _v109_extraer_ppe_pe(texto)
     out["PPE"] = ppe
     out["PE"] = pe
@@ -15424,6 +15612,559 @@ try:
         return r
 except Exception:
     pass
+
+
+# =========================================================
+# V110 - COHERENCIA CLINICA DEFINITIVA + INFORMES UNA HOJA
+# Restauracion del grafico gestacional + auditoria de metricas
+# =========================================================
+BUILD_APP = "CGI-DOMINIOS-V110-COHERENCIA-20260724"
+
+# Guardar implementaciones previas antes del override final.
+_extraer_resumen_integrado_pre_v110 = extraer_resumen_integrado
+_completar_metricas_derivadas_pre_v110 = completar_metricas_derivadas_cgi
+_calcular_riesgo_pe_pre_v110 = calcular_riesgo_preeclampsia
+_estimar_subtipo_pe_pre_v110 = estimar_subtipo_pe_temprana_tardia
+
+# Referencias ICG usadas por la app. CTS siempre se almacena como razon, no porcentaje.
+REGLAS_CGI_CANONICAS["IV"].update({"bajo": 33.0, "alto": 65.0, "unidad": "10^-3/s", "regla": "disminuido <33; rango 33-65; aumentado >65"})
+REGLAS_CGI_CANONICAS["CTS"].update({"bajo": 0.30, "alto": 0.50, "unidad": "PEP/LVET", "regla": "<0,30 bajo; 0,30-0,50 rango; >0,50 elevado"})
+
+
+def _v110_completar_fila_metricas(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Completa/valida metricas sin mezclar posiciones ni variables homonimas."""
+    r = _v109_completar_fila_metricas(dict(row or {}))
+    alertas = []
+    previo = str(r.get("Validacion_metricas_derivadas") or "")
+    if previo and previo != "COHERENTE":
+        alertas.append(previo)
+
+    # AC Capan = EA Capan / EES Capan. Un cociente exactamente 1,00 puede ser fisiologico:
+    # no se invalida solo porque EA y EES coincidan numericamente.
+    ea = _v109_num_col(r, "EA", "EA Capan")
+    ees = _v109_num_col(r, "EES", "EES Capan")
+    ac_imp = _v109_num_col(r, "EA/EES", "AC Capan", "AVA")
+    if ea is not None and ees not in (None, 0):
+        ac_calc = ea / ees
+        if 0.10 <= ac_calc <= 5.0:
+            r["EA/EES"] = ac_calc
+            r["Origen_AC_Capan"] = "calculado EA Capan/EES Capan"
+            if ac_imp is not None and abs(ac_imp-ac_calc) > max(0.05, 0.05*abs(ac_calc)):
+                alertas.append(f"AC Capan importado {ac_imp:.3f} difiere de EA/EES calculado {ac_calc:.3f}; se usa el cociente calculado.")
+
+    # CTS: la definicion matematica es PEP/LVET. Si los tiempos explicitos existen,
+    # se usan para validar y corregir una lectura OCR discordante del porcentaje.
+    ppe = _v109_num_col(r, "PPE", "PEP")
+    pe = _v109_num_col(r, "PE", "LVET", "TEVI")
+    cts_directo = normalizar_cts_cgi(_v109_num_col(r, "CTS", "STR"))
+    cts_calc = None
+    if ppe is not None and pe not in (None, 0) and 20 <= ppe <= 250 and 100 <= pe <= 500:
+        cts_calc = ppe / pe
+    if cts_calc is not None and 0.05 <= cts_calc <= 1.5:
+        if cts_directo is None or abs(cts_directo-cts_calc) > 0.03:
+            if cts_directo is not None:
+                alertas.append(f"CTS OCR/importado {cts_directo:.3f} no coincide con PEP/LVET {cts_calc:.3f}; se usa PEP/LVET calculado.")
+            r["CTS"] = cts_calc
+            r["Origen_CTS"] = "calculado PEP/LVET"
+        else:
+            r["CTS"] = cts_directo
+            r["Origen_CTS"] = "importado y verificado contra PEP/LVET"
+    elif cts_directo is not None:
+        r["CTS"] = cts_directo
+
+    # CFT = 1000/Z0: se usa solo como control/recuperacion, no para inventar CFTnr.
+    cft = _v109_num_col(r, "CFT", "TFC")
+    z0 = _v109_num_col(r, "Z0", "Impedancia Basal")
+    if cft is None and z0 not in (None, 0):
+        cft_calc = 1000.0/z0
+        if 5 <= cft_calc <= 120:
+            r["CFT"] = cft_calc
+            r["Origen_CFT"] = "calculado 1000/Z0"
+    elif cft is not None and z0 not in (None, 0):
+        cft_calc = 1000.0/z0
+        if abs(cft-cft_calc)/max(cft_calc, 1e-9) > 0.12:
+            alertas.append(f"CFT {cft:.2f} no concuerda con 1000/Z0 {cft_calc:.2f}; revisar OCR/unidades.")
+
+    r["Validacion_metricas_derivadas"] = " | ".join(dict.fromkeys(alertas)) if alertas else "COHERENTE"
+    return r
+
+
+def completar_metricas_derivadas_cgi(df: Optional[pd.DataFrame]) -> pd.DataFrame:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame() if df is None else df
+    try:
+        base = estandarizar_columnas_clinicas(df).copy()
+    except Exception:
+        base = df.copy()
+    filas = [_v110_completar_fila_metricas(f.to_dict()) for _, f in base.iterrows()]
+    out = pd.DataFrame(filas)
+    for c in base.columns:
+        if c not in out.columns:
+            out[c] = base[c].values
+    return out.reset_index(drop=True)
+
+
+def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
+    """Resumen estricto: IRV y RVS permanecen separados; nunca se sustituyen entre si."""
+    dfx = completar_metricas_derivadas_cgi(df)
+    r = dict(_extraer_resumen_integrado_pre_v110(dfx) or {})
+    try:
+        diag = seleccionar_df_diagnostico(dfx)
+    except Exception:
+        diag = dfx
+    def ultimo(col):
+        if col not in diag.columns:
+            return None
+        for v in diag[col].tolist()[::-1]:
+            if es_valor_util(v):
+                return v
+        return None
+    for key, col in {"ic":"IC","irv":"IRV","rvs":"RVS","iv":"IV","iac":"IAC","cts":"CTS","ea":"EA","ees":"EES","ava":"EA/EES","cft":"CFT","cftnr":"CFTnr","ca":"CA","z0":"Z0"}.items():
+        v = ultimo(col)
+        if es_valor_util(v):
+            r[key] = v
+        elif key in ("irv","rvs"):
+            r[key] = None
+    sexo = ultimo("Sexo")
+    if es_valor_util(sexo):
+        r["sexo"] = str(sexo).strip().upper()
+    r["cts"] = normalizar_cts_cgi(r.get("cts"))
+    ea, ees = limpiar_numero(r.get("ea")), limpiar_numero(r.get("ees"))
+    if ea is not None and ees not in (None, 0):
+        ratio = ea/ees
+        if 0.1 <= ratio <= 5:
+            r["ava"] = ratio
+    return r
+
+
+# Referencia de la version obstetrica previa, ahora convertida en UNA sola fuente
+# para grafico y clasificacion. RVS usa la curva historica; IRV conserva rangos
+# indexados separados para no mezclar unidades.
+_GEST_W = [6,10,14,18,22,26,30,34,38,42]
+_GEST_IC_LOW = [3.2,3.2,3.2,3.5,3.8,4.0,4.0,3.8,3.6,3.6]
+_GEST_IC_HIGH = [5.5,5.5,5.5,6.0,6.0,6.0,6.0,6.0,6.0,6.0]
+_GEST_RVS_LOW = [850,850,850,750,750,750,750,750,750,750]
+_GEST_RVS_HIGH = [1450,1450,1450,1300,1300,1300,1300,1300,1300,1300]
+
+
+def _interp_gest(eg: float, ys: List[float]) -> float:
+    import numpy as np
+    return float(np.interp(float(eg), _GEST_W, ys))
+
+
+def referencia_hemodinamica_gestacional_v110(eg: Any, tipo_resistencia: str = "RVS") -> Optional[Dict[str, Any]]:
+    e = limpiar_numero(eg)
+    if e is None or e < 4 or e > 42:
+        return None
+    ref = {"ic_min": _interp_gest(e, _GEST_IC_LOW), "ic_max": _interp_gest(e, _GEST_IC_HIGH)}
+    if str(tipo_resistencia).upper() == "RVS":
+        ref.update({"res_min": _interp_gest(e, _GEST_RVS_LOW), "res_max": _interp_gest(e, _GEST_RVS_HIGH), "res_tipo":"RVS", "res_unidad":"dyn.s.cm-5"})
+    else:
+        # IRV/SVRI indexado: mantener referencia separada y explicita.
+        if e <= 13:
+            lo, hi = 900.0, 1900.0
+        elif e <= 27:
+            lo, hi = 700.0, 1700.0
+        else:
+            lo, hi = 600.0, 1600.0
+        ref.update({"res_min":lo, "res_max":hi, "res_tipo":"IRV", "res_unidad":"dyn.s.cm-5.m2"})
+    return ref
+
+
+def clasificacion_hemodinamica_materna_gestacional(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    contexto = contexto or {}; r = r or {}
+    eg = limpiar_numero(contexto.get("edad_gestacional"))
+    ic = limpiar_numero(r.get("ic"))
+    rvs = limpiar_numero(r.get("rvs")); irv = limpiar_numero(r.get("irv"))
+    # La grafica historica estaba construida con RVS no indexada; se prioriza RVS si existe.
+    tipo = "RVS" if rvs is not None else "IRV"
+    res = rvs if rvs is not None else irv
+    ref = referencia_hemodinamica_gestacional_v110(eg, tipo)
+    if ref is None or ic is None or res is None:
+        return {"aplicable":False,"edad_gestacional":eg,"ic_estado":"NO EVALUABLE","irv_estado":"NO EVALUABLE","res_estado":"NO EVALUABLE","res_tipo":tipo,"patron":"DATOS INSUFICIENTES","diagnostico":"Faltan edad gestacional, IC o resistencia vascular valida.","rango":ref}
+    ic_estado = "BAJO" if ic < ref["ic_min"] else ("AUMENTADO" if ic > ref["ic_max"] else "NORMAL")
+    res_estado = "BAJO" if res < ref["res_min"] else ("AUMENTADO" if res > ref["res_max"] else "NORMAL")
+    if ic_estado == "NORMAL" and res_estado == "NORMAL": patron="NORMODINAMIA"
+    elif ic_estado == "BAJO" and res_estado == "AUMENTADO": patron="HIPODINAMIA"
+    elif ic_estado == "AUMENTADO" and res_estado == "BAJO": patron="HIPERDINAMIA"
+    elif ic_estado == "NORMAL" and res_estado == "AUMENTADO": patron=f"IC NORMAL CON {tipo} INADECUADAMENTE ALTA PARA EG"
+    elif ic_estado == "AUMENTADO" and res_estado == "NORMAL": patron=f"IC ALTO CON {tipo} NORMAL PARA EG"
+    elif ic_estado == "BAJO" and res_estado == "NORMAL": patron=f"IC BAJO CON {tipo} NORMAL PARA EG"
+    else: patron=f"PATRON MIXTO: IC {ic_estado} / {tipo} {res_estado}"
+    return {
+        "aplicable":True,"edad_gestacional":eg,"ic_estado":ic_estado,"irv_estado":res_estado,"res_estado":res_estado,"res_tipo":tipo,
+        "res_valor":res,"res_unidad":ref["res_unidad"],"patron":patron,"patron_principal":patron,
+        "ic_fuera_rango":ic_estado!="NORMAL","irv_fuera_rango":res_estado!="NORMAL","res_fuera_rango":res_estado!="NORMAL","rango":ref,
+        "diagnostico":f"Hemodinamia materna por EG: {patron}. IC {fmt(ic,2)} ({ic_estado}); {tipo} {fmt(res,0)} ({res_estado})."
+    }
+
+
+def _categoria_score_v110(x: float) -> str:
+    if x >= 4: return "ALTO"
+    if x >= 2: return "INTERMEDIO/AUMENTADO"
+    return "BAJO/NO ELEVADO"
+
+
+def estimar_subtipo_pe_temprana_tardia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Salida orientativa. La mera disponibilidad de una variable NO suma riesgo."""
+    contexto=contexto or {}; r=r or {}; eg=limpiar_numero(contexto.get("edad_gestacional"))
+    if eg is None:
+        return {"aplicable":False,"texto":"No calculable: falta edad gestacional.","temprana":None,"tardia":None}
+    if eg >= 34:
+        return {"aplicable":False,"texto":"EG >=34 semanas: no corresponde estimar PE temprana; se informa riesgo global actual y fenotipo tardio solo como contexto clinico.","temprana":"No aplicable por EG","tardia":"Evaluar con riesgo global actual"}
+    cg=clasificacion_hemodinamica_materna_gestacional(r,contexto); patron=str(cg.get("patron") or "")
+    crecimiento=normalizar_txt(contexto.get("crecimiento_fetal") or ""); doppler=normalizar_txt(contexto.get("doppler_uterino") or ""); imc=limpiar_numero(contexto.get("imc")); hdp=bool(contexto.get("hdp"))
+    t=l=0.0; ft=[]; fl=[]
+    if hdp: t+=0.75; l+=0.75
+    if patron=="HIPODINAMIA" or "INADECUADAMENTE ALTA" in patron:
+        t+=2.0; ft.append("Fenotipo vasoconstrictor/hipodinamico para la edad gestacional.")
+    if any(x in crecimiento for x in ["sga","rciu","fgr","iugr","restriccion","pequeno"]): t+=1.5; ft.append("Restriccion de crecimiento/SGA informada.")
+    if any(x in doppler for x in ["alter","aument","notch","incisura","patolog"]): t+=1.5; ft.append("Doppler uterino alterado/notching.")
+    if patron=="HIPERDINAMIA" or "IC ALTO" in patron: l+=1.5; fl.append("Fenotipo de alto flujo para EG.")
+    if imc is not None and imc>=30: l+=1.0; fl.append("IMC >=30, factor materno/metabolico.")
+    return {"aplicable":True,"temprana":_categoria_score_v110(t),"tardia":_categoria_score_v110(l),"puntaje_temprana":t,"puntaje_tardia":l,
+            "factores_temprana":ft or ["Sin activadores hemodinamicos especificos registrados."],"factores_tardia":fl or ["Sin activadores hemodinamicos especificos registrados."],
+            "texto":f"Analisis predictivo orientativo: PE temprana {_categoria_score_v110(t)}; PE tardia {_categoria_score_v110(l)}."}
+
+
+def calcular_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    contexto=contexto or {}; r=r or {}
+    if not contexto.get("embarazada",False):
+        return {"aplicable":False,"puntaje":None,"categoria":"No aplicable","color":"gris","factores":[],"conducta":"No corresponde."}
+    cg=clasificacion_hemodinamica_materna_gestacional(r,contexto); patron=str(cg.get("patron") or "")
+    puntos=0.0; factores=[]
+    if patron=="HIPODINAMIA": puntos+=3.0; factores.append("IC bajo con resistencia vascular alta para EG.")
+    elif "INADECUADAMENTE ALTA" in patron: puntos+=2.0; factores.append("Resistencia vascular inadecuadamente alta para EG.")
+    elif patron=="HIPERDINAMIA" or "IC ALTO" in patron: puntos+=1.0; factores.append("Fenotipo de alto flujo para EG.")
+    if bool(contexto.get("hdp")): puntos+=1.0; factores.append("HDP/HTA obstetrica presente o sospechada.")
+    crec=normalizar_txt(contexto.get("crecimiento_fetal") or ""); dop=normalizar_txt(contexto.get("doppler_uterino") or ""); imc=limpiar_numero(contexto.get("imc"))
+    if any(x in crec for x in ["sga","rciu","fgr","iugr","restriccion","pequeno"]): puntos+=1.25; factores.append("RCF/SGA informado.")
+    if any(x in dop for x in ["alter","aument","notch","incisura","patolog"]): puntos+=1.25; factores.append("Doppler uterino alterado.")
+    if imc is not None and imc>=30: puntos+=0.5; factores.append("IMC >=30.")
+    puntos=min(10.0,puntos); cat="RIESGO HEMODINAMICO ALTO DE PREECLAMPSIA" if puntos>=4 else ("RIESGO HEMODINAMICO INTERMEDIO/AUMENTADO DE PREECLAMPSIA" if puntos>=2 else "RIESGO HEMODINAMICO BAJO O NO ELEVADO")
+    color="rojo" if puntos>=4 else ("amarillo" if puntos>=2 else "verde")
+    sub=estimar_subtipo_pe_temprana_tardia(r,contexto)
+    return {"aplicable":True,"puntaje":puntos,"categoria":cat,"color":color,"factores":factores or ["Sin activadores mayores registrados."],
+            "conducta":"Integrar con PA, proteinuria/laboratorio, sintomas, Doppler, crecimiento fetal y obstetricia de alto riesgo.","fenotipo":patron,
+            "hemodinamia_gestacional":cg,"riesgo_pe_temprana_tardia":sub,"fuentes_base_conocimiento":["modelo hemodinamico local; no sustituye screening obstetrico validado"]}
+
+
+def crear_grafico_hemodinamia_materna_por_semanas_una_hoja_bytes(r: Dict[str, Any], contexto: Optional[Dict[str, Any]]=None) -> Optional[io.BytesIO]:
+    contexto=contexto or {}; cg=clasificacion_hemodinamica_materna_gestacional(r,contexto)
+    if not cg.get("aplicable"): return None
+    try:
+        import matplotlib.pyplot as plt, numpy as np, io as _io
+    except Exception: return None
+    eg=float(cg["edad_gestacional"]); ic=limpiar_numero(r.get("ic")); tipo=cg.get("res_tipo","RVS"); res=limpiar_numero(cg.get("res_valor"))
+    semanas=np.linspace(6,42,145); iclo=[]; ichi=[]; rlo=[]; rhi=[]
+    for s in semanas:
+        rr=referencia_hemodinamica_gestacional_v110(s,tipo); iclo.append(rr["ic_min"]); ichi.append(rr["ic_max"]); rlo.append(rr["res_min"]); rhi.append(rr["res_max"])
+    fig,ax1=plt.subplots(figsize=(11.6,4.1),dpi=170); ax2=ax1.twinx(); fig.patch.set_facecolor("white")
+    ax1.fill_between(semanas,iclo,ichi,alpha=.18,label="Rango IC esperado"); ax2.fill_between(semanas,rlo,rhi,alpha=.13,label=f"Rango {tipo} esperado")
+    ax1.scatter([eg],[ic],s=150,zorder=8); ax2.scatter([eg],[res],s=135,marker="D",zorder=8)
+    ax1.annotate(f"IC {fmt(ic,2)} - {cg.get('ic_estado')}",(eg,ic),xytext=(8,16),textcoords="offset points",fontsize=8.5,fontweight="bold")
+    ax2.annotate(f"{tipo} {fmt(res,0)} - {cg.get('res_estado')}",(eg,res),xytext=(8,-24),textcoords="offset points",fontsize=8.5,fontweight="bold")
+    ax1.set_xlim(6,42); ax1.set_xlabel("Edad gestacional (semanas)",fontsize=9); ax1.set_ylabel("IC (L/min/m2)",fontsize=9); ax2.set_ylabel(f"{tipo} ({cg.get('res_unidad','')})",fontsize=9)
+    ax1.grid(True,alpha=.18); ax1.set_title(f"Hemodinamia materna segun edad gestacional | EG {fmt(eg,0)} | {cg.get('patron')}",fontsize=10.5,fontweight="bold")
+    h1,l1=ax1.get_legend_handles_labels(); h2,l2=ax2.get_legend_handles_labels(); ax1.legend(h1+h2,l1+l2,loc="upper right",fontsize=7.5)
+    fig.tight_layout(); buf=_io.BytesIO(); fig.savefig(buf,format="png",bbox_inches="tight",pad_inches=.06); plt.close(fig); buf.seek(0); return buf
+
+
+def conclusion_predictiva_pe_una_hoja(r: Dict[str, Any], contexto: Optional[Dict[str, Any]]=None) -> Dict[str,str]:
+    riesgo=calcular_riesgo_preeclampsia(r,contexto); sub=riesgo.get("riesgo_pe_temprana_tardia") or {}; cg=riesgo.get("hemodinamia_gestacional") or {}
+    return {"general":str(riesgo.get("categoria") or "No calculable"),"temprana":str(sub.get("temprana") or "No calculable"),"tardia":str(sub.get("tardia") or "No calculable"),
+            "nota":str(sub.get("texto") or ""),"conclusion":f"{cg.get('patron','No clasificable')}. IC {cg.get('ic_estado','N/E')} y {cg.get('res_tipo','resistencia')} {cg.get('res_estado','N/E')} para EG. Riesgo general: {riesgo.get('categoria','N/C')}."}
+
+
+def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]]=None) -> bytes:
+    """Informe ejecutivo REAL de una pagina, con dos diseños: embarazo y no embarazo."""
+    from reportlab.platypus import SimpleDocTemplate, Spacer, Image, Table, TableStyle, KeepTogether
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    import io as _io
+    dfx=completar_metricas_derivadas_cgi(df); r=extraer_resumen_integrado(dfx); rb=resumen_acostado_cinta_para_patron(dfx,r); emb=bool(contexto_embarazo and contexto_embarazo.get("embarazada"))
+    b=_io.BytesIO(); doc=SimpleDocTemplate(b,pagesize=A4,rightMargin=.65*cm,leftMargin=.65*cm,topMargin=.55*cm,bottomMargin=.55*cm); w=doc.width; stl=_paper_styles(); story=[]
+    titulo="INFORME HEMODINAMIA MATERNA" if emb else TITULO_MODULO_NO_EMBARAZADA
+    sub="Informe ejecutivo de una hoja - hemodinamia por edad gestacional y analisis predictivo" if emb else "Informe ejecutivo de una hoja - dominios hemodinamicos integrados"
+    story += _paper_header_story(titulo,sub); story.append(_paper_datos_paciente_table(r,contexto_embarazo,w)); story.append(Spacer(1,3))
+    if emb:
+        cg=clasificacion_hemodinamica_materna_gestacional(rb,contexto_embarazo); pred=conclusion_predictiva_pe_una_hoja(rb,contexto_embarazo)
+        rows=[["Metrica","Valor / lectura"],["Edad gestacional",f"{fmt((contexto_embarazo or {}).get('edad_gestacional'),0)} semanas"],["IC",f"{fmt(rb.get('ic'),2)} L/min/m2 - {cg.get('ic_estado','N/E')}"],[cg.get('res_tipo','RVS/IRV'),f"{fmt(cg.get('res_valor'),0)} - {cg.get('res_estado','N/E')}"],["Patron",cg.get('patron','No clasificable')]]
+        story.append(_paper_table(rows,[w*.30,w*.70],header=True,compact=True)); story.append(Spacer(1,3))
+        g=crear_grafico_hemodinamia_materna_por_semanas_una_hoja_bytes(rb,contexto_embarazo)
+        if g: story.append(Image(g,width=w,height=w*.315,kind="proportional"))
+        story.append(Spacer(1,2)); story.append(_paper_paragraph("Analisis predictivo de riesgo de preeclampsia",stl["PaperH"]))
+        story.append(_paper_table([["Riesgo","Resultado"],["General",pred["general"]],["PE temprana (<34 sem)",pred["temprana"]],["PE tardia",pred["tardia"]]],[w*.32,w*.68],header=True,compact=True))
+        story.append(Spacer(1,2)); story.append(_paper_paragraph(pred["conclusion"],stl["PaperSmall"])); story.append(_paper_paragraph(pred["nota"],stl["PaperSmall"]))
+        cft=limpiar_numero(rb.get("cft")); vol=estado_volemia_simple(cft, sexo="F", embarazo=True)
+        comp = f"AC Capan {fmt(rb.get('ava'),2)} | IV {fmt(rb.get('iv'),2)} | IAC {fmt(rb.get('iac'),2)} | CTS {fmt(normalizar_cts_cgi(rb.get('cts')),3)} | CFT {fmt(cft,2)}"
+        story.append(_paper_paragraph(f"Métricas complementarias: {comp}. Volemia: {vol} (CFT mujer 21-37 1/kOhm). CTS = PEP/LVET; AC Capan = EA/EES.",stl["PaperSmall"]))
+    else:
+        story.append(_paper_paragraph("E. Informe de dominios integrados resumido y didactico",stl["PaperH"])); story.append(_paper_dominios_integrados_table(rb,dfx,w)); story.append(Spacer(1,3))
+        g=None
+        try: g=crear_grafico_hemodinamico_no_embarazo_una_hoja_bytes(rb,dfx)
+        except Exception: pass
+        if g: story.append(Image(g,width=w,height=w*.40,kind="proportional"))
+        story.append(Spacer(1,2))
+        ac=limpiar_numero(rb.get("ava")); cts=normalizar_cts_cgi(rb.get("cts"))
+        concl=f"Patron basal: {clasificacion_dinamica_obligatoria(rb,None)}. AC Capan/EA-EES: {fmt(ac,2)}. IV: {fmt(rb.get('iv'),2)}. CTS: {fmt(cts,2)}. CFT: {fmt(rb.get('cft'),2)}."
+        story.append(_paper_paragraph(concl,stl["PaperSmall"]))
+        story.append(_paper_paragraph("La referencia diagnostica es ACOSTADO/CINTA/SPOT/ESTUDIO BASAL; PARADO se reserva para respuesta ortostatica. IRV y RVS no se intercambian por tener distinta indexacion y unidades.",stl["PaperSmall"]))
+    sig=_paper_signature_flowable(width=78,height=27)
+    if sig:
+        t=Table([[sig,_paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual",{})),stl["PaperSmall"])]],colWidths=[86,w-86]); t.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"MIDDLE"),("LINEABOVE",(0,0),(-1,0),.3,colors.HexColor("#CBD5E1"))])); story.append(Spacer(1,2)); story.append(t)
+    else: story.append(_paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual",{})),stl["PaperSmall"]))
+    doc.build(story,onFirstPage=_paper_footer,onLaterPages=_paper_footer); return b.getvalue()
+
+
+# =========================================================
+# V110 CORE FINAL PRE-UI - REGLAS CLINICAS SIN AMBIGUEDAD
+# Este bloque queda antes del sidebar para que también lo use el modo por lotes.
+# =========================================================
+REGLAS_CGI_CANONICAS["RVS"] = {
+    "bajo": 800.0, "alto": 1400.0, "unidad": "dyn.s.cm-5",
+    "regla": "baja <800; normal 800-1400; elevada >1400",
+}
+
+
+def normalizar_sexo_icg(sexo: Any) -> Optional[str]:
+    t = normalizar_txt(sexo or "")
+    if t in {"f", "female", "femenino", "mujer"} or "femen" in t or "mujer" in t:
+        return "F"
+    if t in {"m", "male", "masculino", "hombre"} or "mascul" in t or "hombre" in t:
+        return "M"
+    return None
+
+
+def referencia_cft_sexo(sexo: Any, embarazo: bool = False) -> Tuple[Optional[float], Optional[float], str]:
+    sx = "F" if embarazo else normalizar_sexo_icg(sexo)
+    if sx == "F":
+        return 21.0, 37.0, "mujer: 21-37 1/kOhm"
+    if sx == "M":
+        return 30.0, 50.0, "varón: 30-50 1/kOhm"
+    return None, None, "sexo no disponible: no se aplica un rango único de CFT"
+
+
+def referencia_iac_sexo(sexo: Any, embarazo: bool = False) -> Tuple[float, float, str]:
+    sx = "F" if embarazo else normalizar_sexo_icg(sexo)
+    if sx == "F":
+        return 90.0, 170.0, "mujer: 90-170 /100 s²"
+    # Conserva el rango masculino/operativo original cuando el sexo no está disponible,
+    # pero lo explicita como tal para evitar presentarlo como referencia universal.
+    return 70.0, 150.0, ("varón: 70-150 /100 s²" if sx == "M" else "referencia operativa por defecto 70-150 /100 s²; sexo no disponible")
+
+
+def seleccionar_resistencia_clinica(r: Optional[Dict[str, Any]]) -> Tuple[str, Optional[float], float, float, str]:
+    r = r or {}
+    irv = limpiar_numero(r.get("irv"))
+    rvs = limpiar_numero(r.get("rvs"))
+    if irv is not None:
+        return "IRV", irv, 1200.0, 2000.0, "dyn.s.cm-5.m²"
+    if rvs is not None:
+        return "RVS", rvs, 800.0, 1400.0, "dyn.s.cm-5"
+    return "IRV/RVS", None, 0.0, 0.0, ""
+
+
+def _estado_tres_rangos(v: Any, bajo: float, alto: float) -> str:
+    x = limpiar_numero(v)
+    if x is None:
+        return "NO CLASIFICABLE"
+    if x < bajo:
+        return "BAJO"
+    if x > alto:
+        return "ELEVADO"
+    return "NORMAL"
+
+
+def fenotipo_hemodinamico_por_resistencia(ic: Any, r: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    icv = limpiar_numero(ic)
+    tipo, rv, rlo, rhi, unidad = seleccionar_resistencia_clinica(r)
+    if icv is None or rv is None:
+        return {"categoria": "DATOS INSUFICIENTES", "detalle": f"Falta IC y/o {tipo} válido para definir el patrón basal.", "tipo_resistencia": tipo}
+    ic_estado = _estado_tres_rangos(icv, 2.5, 4.0)
+    rv_estado = _estado_tres_rangos(rv, rlo, rhi)
+    if ic_estado == "NORMAL" and rv_estado == "NORMAL":
+        cat = "NORMODINAMIA"
+    elif ic_estado == "BAJO" and rv_estado == "ELEVADO":
+        cat = "HIPODINAMIA"
+    elif ic_estado == "ELEVADO" and rv_estado == "BAJO":
+        cat = "HIPERDINAMIA"
+    elif ic_estado == "NORMAL" and rv_estado == "ELEVADO":
+        cat = f"ÍNDICE CARDÍACO NORMAL + {tipo} INADECUADAMENTE ELEVADA"
+    elif ic_estado == "ELEVADO" and rv_estado == "NORMAL":
+        cat = f"ÍNDICE CARDÍACO ELEVADO + {tipo} NORMAL"
+    elif ic_estado == "BAJO" and rv_estado == "NORMAL":
+        cat = f"ÍNDICE CARDÍACO BAJO + {tipo} NORMAL"
+    else:
+        cat = f"PATRÓN MIXTO: IC {ic_estado} / {tipo} {rv_estado}"
+    return {
+        "categoria": cat,
+        "detalle": f"IC {fmt(icv,2)} ({ic_estado}); {tipo} {fmt(rv,0)} {unidad} ({rv_estado}).",
+        "tipo_resistencia": tipo,
+    }
+
+
+def clasificacion_dinamica_obligatoria(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> str:
+    if contexto and contexto.get("embarazada"):
+        return str(clasificacion_hemodinamica_materna_gestacional(r or {}, contexto).get("patron_principal") or "DATOS INSUFICIENTES")
+    return fenotipo_hemodinamico_por_resistencia((r or {}).get("ic"), r or {}).get("categoria", "DATOS INSUFICIENTES")
+
+
+def diagnostico_perfil_hemodinamico(ic: Any, irv: Any = None, rvs: Any = None) -> str:
+    rr = {"irv": irv, "rvs": rvs}
+    return fenotipo_hemodinamico_por_resistencia(ic, rr).get("detalle", "DATOS INSUFICIENTES")
+
+
+def estado_volemia_simple(cft: Any, cftnr: Any = None, sexo: Any = None, embarazo: bool = False) -> str:
+    v = limpiar_numero(cft)
+    lo, hi, _ = referencia_cft_sexo(sexo, embarazo=embarazo)
+    if v is None:
+        return "VOLEMIA NO CLASIFICABLE"
+    if lo is None or hi is None:
+        return "VOLEMIA NO CLASIFICABLE POR FALTA DE SEXO"
+    if v < lo:
+        return "HIPOVOLEMIA"
+    if v > hi:
+        return "HIPERVOLEMIA"
+    return "NORMOVOLEMIA"
+
+
+def diagnostico_volemia(cft: Any, cftnr: Any = None, sexo: Any = None, embarazo: bool = False) -> str:
+    estado = estado_volemia_simple(cft, cftnr, sexo=sexo, embarazo=embarazo)
+    _, _, ref = referencia_cft_sexo(sexo, embarazo=embarazo)
+    return f"{estado}. CFT {fmt(cft,2)} 1/kOhm. Referencia: {ref}. CFTnr se informa por separado y no sustituye CFT."
+
+
+def estado_contractilidad_canonico(iv: Any, iac: Any, cts: Any, sexo: Any = None, embarazo: bool = False) -> str:
+    ivv = limpiar_numero(iv)
+    iacv = limpiar_numero(iac)
+    ctsv = normalizar_cts_cgi(cts)
+    estados = []
+    if ivv is not None:
+        estados.append("AUMENTADA" if ivv > 65 else ("DISMINUIDA" if ivv < 33 else "NORMAL"))
+    if iacv is not None:
+        ilo, ihi, _ = referencia_iac_sexo(sexo, embarazo=embarazo)
+        estados.append("AUMENTADA" if iacv > ihi else ("DISMINUIDA" if iacv < ilo else "NORMAL"))
+    if ctsv is not None:
+        # CTS alto = peor desempeño sistólico; CTS bajo = mayor desempeño.
+        estados.append("AUMENTADA" if ctsv < 0.30 else ("DISMINUIDA" if ctsv > 0.50 else "NORMAL"))
+    if len(estados) < 2:
+        return "CONTRACTILIDAD NO CLASIFICABLE (DATOS INSUFICIENTES)"
+    if all(e == "NORMAL" for e in estados):
+        return "CONTRACTILIDAD CONSERVADA"
+    if estados.count("AUMENTADA") >= 2:
+        return "CONTRACTILIDAD AUMENTADA"
+    if estados.count("DISMINUIDA") >= 2:
+        return "CONTRACTILIDAD DISMINUIDA"
+    return "CONTRACTILIDAD MIXTA / MÉTRICAS NO CONCORDANTES"
+
+
+def estado_contractilidad_simple(iv: Any, iac: Any, cts: Any, sexo: Any = None, embarazo: bool = False) -> str:
+    return estado_contractilidad_canonico(iv, iac, cts, sexo=sexo, embarazo=embarazo)
+
+
+def diagnostico_contractilidad(iv: Any, iac: Any, cts: Any, sexo: Any = None, embarazo: bool = False) -> str:
+    estado = estado_contractilidad_canonico(iv, iac, cts, sexo=sexo, embarazo=embarazo)
+    _, _, iac_ref = referencia_iac_sexo(sexo, embarazo=embarazo)
+    return (
+        f"{estado}. IV {fmt(iv,2)} (ref. 33-65); IAC {fmt(iac,2)} (ref. {iac_ref}); "
+        f"CTS {fmt(normalizar_cts_cgi(cts),3)} (PEP/LVET; ref. 0,30-0,50). "
+        "No se informa contractilidad conservada si hay menos de dos métricas disponibles o si son discordantes."
+    )
+
+
+def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> List[List[str]]:
+    r = dict(r or {})
+    rb = resumen_acostado_cinta_para_patron(df, r)
+    ic = valor_preferente(rb.get("ic"), r.get("ic"))
+    tipo, rv, rlo, rhi, runit = seleccionar_resistencia_clinica(rb)
+    if rv is None:
+        tipo, rv, rlo, rhi, runit = seleccionar_resistencia_clinica(r)
+    sexo = valor_preferente(rb.get("sexo"), r.get("sexo"))
+    cft = valor_preferente(rb.get("cft"), r.get("cft"))
+    iv = valor_preferente(rb.get("iv"), r.get("iv")); iac = valor_preferente(rb.get("iac"), r.get("iac")); cts = normalizar_cts_cgi(valor_preferente(rb.get("cts"), r.get("cts")))
+    ca = valor_preferente(rb.get("ca"), r.get("ca")); ea = valor_preferente(rb.get("ea"), r.get("ea")); ees = valor_preferente(rb.get("ees"), r.get("ees")); ava = valor_preferente(rb.get("ava"), r.get("ava"))
+    ratio = calcular_ea_ees_derivado(ea, ees)
+    if ratio is None:
+        ratio = limpiar_numero(ava)
+    patron = fenotipo_hemodinamico_por_resistencia(ic, {"irv": rv if tipo == "IRV" else None, "rvs": rv if tipo == "RVS" else None}).get("categoria", "DATOS INSUFICIENTES")
+    vol = estado_volemia_simple(cft, sexo=sexo)
+    contract = estado_contractilidad_canonico(iv, iac, cts, sexo=sexo)
+    acop = estado_acoplamiento_simple(ea, ees, ratio)
+    ica = clasificar_metrica_canonica("CA", ca)
+    _, _, cft_ref = referencia_cft_sexo(sexo)
+    _, _, iac_ref = referencia_iac_sexo(sexo)
+    try:
+        orto = estado_ortostatico_simple(df)
+    except Exception:
+        orto = "NO CLASIFICABLE"
+    try:
+        d = calcular_delta_ortostatico(df) if df is not None and isinstance(df, pd.DataFrame) and len(df) >= 2 else {}
+    except Exception:
+        d = {}
+    delta_txt = f"ΔIC {fmt(d.get('delta_ic'),2)}; ΔIRV {fmt(d.get('delta_irv'),0)}; ΔFC {fmt(d.get('delta_fc'),0)}; ΔPAS {fmt(d.get('delta_pas'),0)}" if d else "Sin par basal/parado válido"
+    rows = [
+        ["Dominio","Métricas usadas","Regla diagnóstica programada","Resultado"],
+        ["Patrón hemodinámico de referencia",f"IC {fmt(ic,2)} | {tipo} {fmt(rv,0)}",f"IC: bajo <2,5; normal 2,5-4,0; elevado >4,0. {tipo}: bajo <{fmt(rlo,0)}; normal {fmt(rlo,0)}-{fmt(rhi,0)}; elevado >{fmt(rhi,0)} {runit}.",patron],
+        ["Volemia",f"CFT {fmt(cft,2)}",f"Referencia por sexo: {cft_ref}.",vol],
+        ["Contractilidad",f"IV {fmt(iv,2)} | IAC {fmt(iac,2)} | CTS {fmt(cts,3)}",f"IV 33-65; IAC {iac_ref}; CTS 0,30-0,50. Se requieren ≥2 métricas para clasificación global; discordancia = patrón mixto.",contract],
+        ["Acoplamiento ventrículo-arterial",f"EA {fmt(ea,2)} | EES {fmt(ees,2)} | AC {fmt(ratio,2)}","AC Capan = EA Capan/EES Capan. <1,0 óptimo; 1,0-1,3 subóptimo; >1,3 desacoplamiento. EA=EES y AC=1,00 no se invalida por sí solo.",acop],
+        ["Complacencia arterial / ICA",f"CA/ICA {fmt(ca,2)} mL/mmHg",texto_regla_cgi("CA"),ica],
+        ["Comportamiento ortostático",delta_txt,"Referencia diagnóstica = ACOSTADO/CINTA/SPOT; PARADO solo para respuesta ortostática.",orto],
+    ]
+    return rows
+
+
+def _paper_dominios_integrados_table(r: Dict[str, Any], df: Optional[pd.DataFrame], ancho_total: float):
+    rows = tabla_dominios_integrados_sin_ambiguedad(r, df)
+    return _paper_table(rows,[ancho_total*.20,ancho_total*.22,ancho_total*.38,ancho_total*.20],header=True,compact=True)
+
+
+def crear_grafico_hemodinamico_no_embarazo_una_hoja_bytes(r: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Optional[io.BytesIO]:
+    """Gráfico basal/ortostático con eje correcto según IRV o RVS, sin intercambiarlas."""
+    try:
+        import matplotlib.pyplot as plt
+        import io as _io
+    except Exception:
+        return None
+    rb = resumen_acostado_cinta_para_patron(df, r or {})
+    tipo, rv, rlo, rhi, runit = seleccionar_resistencia_clinica(rb)
+    ic = limpiar_numero(rb.get("ic"))
+    if ic is None or rv is None:
+        return None
+    fig, ax = plt.subplots(figsize=(8.9,3.55), dpi=170)
+    ax.axvspan(2.5,4.0,alpha=.10)
+    ax.axhspan(rlo,rhi,alpha=.10)
+    ax.axvline(2.5,ls="--",lw=1); ax.axvline(4.0,ls="--",lw=1)
+    ax.axhline(rlo,ls="--",lw=1); ax.axhline(rhi,ls="--",lw=1)
+    ax.scatter([ic],[rv],s=170,zorder=8,label="Basal")
+    try:
+        _, rp = obtener_resumenes_ortostaticos(df) if df is not None else ({},{})
+        icp = limpiar_numero(rp.get("ic")); rvp = limpiar_numero(rp.get("irv" if tipo=="IRV" else "rvs"))
+        if icp is not None and rvp is not None:
+            ax.scatter([icp],[rvp],s=120,marker="D",zorder=8,label="Parado")
+            ax.annotate("",xy=(icp,rvp),xytext=(ic,rv),arrowprops=dict(arrowstyle="->",lw=1.4))
+    except Exception:
+        pass
+    ax.set_xlabel("Índice cardíaco (L/min/m²)",fontsize=9); ax.set_ylabel(f"{tipo} ({runit})",fontsize=9)
+    ax.set_title(f"Fenotipo hemodinámico basal | {fenotipo_hemodinamico_por_resistencia(ic, rb).get('categoria')}",fontsize=10,fontweight="bold")
+    ax.grid(True,alpha=.18); ax.legend(fontsize=8,loc="best"); fig.tight_layout()
+    buf=_io.BytesIO(); fig.savefig(buf,format="png",bbox_inches="tight",pad_inches=.05); plt.close(fig); buf.seek(0); return buf
+
+
+# Guardar aliases para reactivar estas reglas después de bloques históricos que aún
+# existen más abajo por compatibilidad con versiones previas.
+_v110_final_clasificacion_dinamica = clasificacion_dinamica_obligatoria
+_v110_final_diagnostico_perfil = diagnostico_perfil_hemodinamico
+_v110_final_estado_volemia = estado_volemia_simple
+_v110_final_diagnostico_volemia = diagnostico_volemia
+_v110_final_estado_contractilidad = estado_contractilidad_canonico
+_v110_final_estado_contractilidad_simple = estado_contractilidad_simple
+_v110_final_diagnostico_contractilidad = diagnostico_contractilidad
+_v110_final_tabla_dominios = tabla_dominios_integrados_sin_ambiguedad
+_v110_final_paper_dominios = _paper_dominios_integrados_table
+
 
 with st.sidebar:
     st.success(f"Usuario: {usuario_actual.get('nombre', usuario_actual.get('usuario', ''))}")
@@ -15858,31 +16599,29 @@ def _corregir_acoplamiento_identico_v23(r: Dict[str, Any], df: Optional[pd.DataF
 _extraer_resumen_integrado_pre_v23 = extraer_resumen_integrado
 
 def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
-    r = _extraer_resumen_integrado_pre_v23(df)
-    return _corregir_acoplamiento_identico_v23(r, df)
+    """Mantiene el resumen V110 estricto.
+
+    No invalida EA/EES únicamente porque ambos valores sean iguales: EA/EES=1,00
+    puede ser un resultado fisiológicamente posible. La discordancia se marca solo
+    cuando existe evidencia concreta entre valor importado y valor recalculado.
+    """
+    return _extraer_resumen_integrado_pre_v23(df)
 
 
 def calcular_ea_ees_derivado(ea: Any, ees: Any) -> Optional[float]:
-    """EA/EES = EA Capan / EES Capan, con bloqueo de EA y EES idénticas."""
+    """AC Capan = EA Capan / EES Capan; admite legítimamente una relación 1,00."""
     eav = limpiar_numero(ea)
     eesv = limpiar_numero(ees)
     if eav is None or eesv in [None, 0]:
         return None
-    if _ea_ees_identicos_sospechosos(eav, eesv):
-        return None
-    return eav / eesv
+    ratio = eav / eesv
+    return ratio if 0.1 <= ratio <= 5.0 else None
 
 
 def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
-    """Diagnóstico EA/EES seguro: calcula primero; AC Capan importado es solo respaldo trazable."""
+    """Diagnóstico EA/EES: cálculo prioritario; AC Capan importado solo como respaldo."""
     eav = limpiar_numero(ea)
     eesv = limpiar_numero(ees)
-    if _ea_ees_identicos_sospechosos(eav, eesv):
-        return (
-            "Acoplamiento ventrículo-arterial no clasificable. "
-            f"EA Capan y EES Capan aparecen idénticos ({fmt(eav)} / {fmt(eesv)}), "
-            "lo que sugiere duplicación o error de extracción. Corregir EES Capan antes de interpretar EA/EES."
-        )
     avav = calcular_ea_ees_derivado(ea, ees)
     origen = "calculado"
     if avav is None:
@@ -15896,16 +16635,12 @@ def diagnostico_acoplamiento(ea: Any, ees: Any, ava: Any = None) -> str:
         base = f"AC Capan/EA-EES importado del equipo: {fmt(avav)} (no recalculable por falta de EA y/o EES). "
     if avav < 1.0:
         return base + "Acoplamiento ventrículo-arterial óptimo según la regla operativa configurada en la app."
-    if 1.0 <= avav <= 1.3:
+    if avav <= 1.3:
         return base + "Acoplamiento ventrículo-arterial subóptimo según la regla operativa configurada en la app."
-    if avav > 1.3:
-        return base + "Desacoplamiento ventrículo-arterial según la regla operativa configurada en la app."
-    return base + "Valor fuera de rango fisiológico esperado; revisar datos fuente."
+    return base + "Desacoplamiento ventrículo-arterial según la regla operativa configurada en la app."
 
 
 def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
-    if _ea_ees_identicos_sospechosos(ea, ees):
-        return "ACOPLAMIENTO NO CLASIFICABLE: EA Y EES IDÉNTICAS"
     avav = calcular_ea_ees_derivado(ea, ees)
     if avav is None:
         avav = limpiar_numero(ava)
@@ -15913,11 +16648,9 @@ def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
         return "ACOPLAMIENTO NO CLASIFICABLE"
     if avav < 1.0:
         return "ACOPLAMIENTO ÓPTIMO"
-    if 1.0 <= avav <= 1.3:
+    if avav <= 1.3:
         return "ACOPLAMIENTO SUBÓPTIMO"
-    if avav > 1.3:
-        return "DESACOPLAMIENTO VENTRÍCULO-ARTERIAL"
-    return "ACOPLAMIENTO NO CLASIFICABLE"
+    return "DESACOPLAMIENTO VENTRÍCULO-ARTERIAL"
 
 
 
@@ -15976,7 +16709,7 @@ contexto_embarazo = construir_contexto_embarazo(
 # El registro PARADO se reserva para la respuesta ortostática y no debe reemplazar estos valores.
 r_acostado_cinta_panel, r_depie_panel = obtener_resumenes_ortostaticos(df_final)
 r_panel = dict(r)
-for _k in ["ic", "irv", "fc", "pas", "pad", "ca", "cft", "cftnr"]:
+for _k in ["ic", "irv", "rvs", "fc", "pas", "pad", "ca", "cft", "cftnr"]:
     if limpiar_numero(r_acostado_cinta_panel.get(_k)) is not None:
         r_panel[_k] = r_acostado_cinta_panel.get(_k)
 r_panel["posicion_referencia"] = r_acostado_cinta_panel.get("posicion") or r.get("posicion_referencia")
@@ -15985,10 +16718,12 @@ r_panel["metodo_referencia"] = r_acostado_cinta_panel.get("metodo") or r.get("me
 if not contexto_embarazo.get("embarazada"):
     st.caption("Valores mostrados en las tarjetas: ACOSTADO OR CINTA OR SPOT OR ESTUDIO BASAL, patrón basal de referencia diagnóstica. PARADO se informa por separado como respuesta ortostática.")
     c1, c2, c3, c4 = st.columns(4)
+    _tipo_res_panel, _valor_res_panel, _res_lo_panel, _res_hi_panel, _res_unit_panel = seleccionar_resistencia_clinica(r_panel)
+    _estado_res_panel = _estado_tres_rangos(_valor_res_panel, _res_lo_panel, _res_hi_panel) if _valor_res_panel is not None else "NO CLASIFICABLE"
     with c1:
         st.markdown(f"<div class='metric-card'><b>IC - ACOSTADO/CINTA/SPOT/ESTUDIO BASAL</b><br>{fmt(r_panel.get('ic'))}<br><span class='muted'>{clasificar_ic(r_panel.get('ic'))}</span></div>", unsafe_allow_html=True)
     with c2:
-        st.markdown(f"<div class='metric-card'><b>IRV / RVS - ACOSTADO/CINTA/SPOT/ESTUDIO BASAL</b><br>{fmt(r_panel.get('irv'),0)}<br><span class='muted'>{clasificar_irv(r_panel.get('irv'))}</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><b>{_tipo_res_panel} - ACOSTADO/CINTA/SPOT/ESTUDIO BASAL</b><br>{fmt(_valor_res_panel,0)}<br><span class='muted'>{_estado_res_panel}</span></div>", unsafe_allow_html=True)
     with c3:
         st.markdown(f"<div class='metric-card'><b>CFT - ACOSTADO/CINTA/SPOT/ESTUDIO BASAL</b><br>{fmt(r_panel.get('cft'))}<br><span class='muted'>{diagnostico_volemia(r_panel.get('cft')).split('.')[0]}</span></div>", unsafe_allow_html=True)
     with c4:
@@ -16094,8 +16829,6 @@ def diagnostico_ica(valor: Any) -> str:
 
 
 def estado_acoplamiento_simple(ea: Any, ees: Any, ava: Any = None) -> str:
-    if callable(globals().get("_ea_ees_identicos_sospechosos")) and _ea_ees_identicos_sospechosos(ea, ees):
-        return "ACOPLAMIENTO NO CLASIFICABLE: EA Y EES IDÉNTICAS"
     ratio = calcular_ea_ees_derivado(ea, ees) if callable(globals().get("calcular_ea_ees_derivado")) else calcular_acoplamiento_va(ea, ees, ava)
     if ratio is None:
         return "ACOPLAMIENTO NO CLASIFICABLE"
@@ -16159,7 +16892,7 @@ def tabla_dominios_integrados_sin_ambiguedad(r: Dict[str, Any], df: Optional[pd.
         [
             "Acoplamiento ventrículo-arterial",
             f"EA {fmt(ea,2)} | EES {fmt(ees,2)} | EA/EES {fmt(ratio,2)}",
-            texto_regla_cgi("EA/EES") + ". Solo se clasifica si EA y EES son válidos y no son una duplicación sospechosa.",
+            texto_regla_cgi("EA/EES") + ". EA/EES se calcula si ambas elastancias son válidas; EA=EES no se invalida automáticamente.",
             acoplamiento,
         ],
         [
@@ -16213,6 +16946,22 @@ def auditar_coherencia_dominios(r: Dict[str, Any], df: Optional[pd.DataFrame] = 
             errores.append(f"Dominio sin resultado: {row[0] if row else 'desconocido'}")
     return errores
 
+
+# =========================================================
+# V110 REACTIVACION FINAL PARA MODO INDIVIDUAL
+# Los bloques históricos V23/V108 se conservan por compatibilidad, pero no deben
+# volver a reemplazar las reglas clínicas auditadas de V110.
+# =========================================================
+clasificacion_dinamica_obligatoria = _v110_final_clasificacion_dinamica
+diagnostico_perfil_hemodinamico = _v110_final_diagnostico_perfil
+estado_volemia_simple = _v110_final_estado_volemia
+diagnostico_volemia = _v110_final_diagnostico_volemia
+estado_contractilidad_canonico = _v110_final_estado_contractilidad
+estado_contractilidad_simple = _v110_final_estado_contractilidad_simple
+diagnostico_contractilidad = _v110_final_diagnostico_contractilidad
+tabla_dominios_integrados_sin_ambiguedad = _v110_final_tabla_dominios
+_paper_dominios_integrados_table = _v110_final_paper_dominios
+
 _es_embarazo_ui = bool(contexto_embarazo.get("embarazada"))
 
 if not _es_embarazo_ui:
@@ -16233,9 +16982,9 @@ if not _es_embarazo_ui:
                 use_container_width=True,
             )
     st.subheader("Interpretación automática")
-    st.markdown(f"<div class='card'><b>Perfil hemodinámico:</b><br>{diagnostico_perfil_hemodinamico(r_panel.get('ic'), r_panel.get('irv'))}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr'))}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='card'><b>Contractilidad:</b><br>{diagnostico_contractilidad(r.get('iv'), r.get('iac'), r.get('cts'))}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Perfil hemodinámico:</b><br>{diagnostico_perfil_hemodinamico(r_panel.get('ic'), r_panel.get('irv'), r_panel.get('rvs'))}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Estado volémico:</b><br>{diagnostico_volemia(r_panel.get('cft'), r_panel.get('cftnr'), r_panel.get('sexo'))}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'><b>Contractilidad:</b><br>{diagnostico_contractilidad(r.get('iv'), r.get('iac'), r.get('cts'), r.get('sexo'))}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Acoplamiento ventrículo-arterial:</b><br>{diagnostico_acoplamiento(r.get('ea'), r.get('ees'), r.get('ava'))}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Índice de compliance arterial (ICA):</b><br>{diagnostico_ica(r_panel.get('ca') or r.get('ca'))}</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='card'><b>Análisis ortostático automático:</b><br>{interpretar_ortostatismo(df_final)}</div>", unsafe_allow_html=True)
