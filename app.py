@@ -15868,7 +15868,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         rightMargin=0.65*cm,
         leftMargin=0.65*cm,
         topMargin=0.55*cm,
-        bottomMargin=0.85*cm,
+        bottomMargin=0.95*cm,
         allowSplitting=0,
     )
     ancho = doc.width
@@ -16027,8 +16027,8 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     except Exception:
         graf_2 = None
 
-    im1 = fit_img(graf_1, ancho, 82*mm)
-    im2 = fit_img(graf_2, ancho, 82*mm)
+    im1 = fit_img(graf_1, ancho, 58*mm)
+    im2 = fit_img(graf_2, ancho, 58*mm)
     filas_graficos = []
     filas_graficos.append([im1 if im1 is not None else P("Gráfico de cuadrantes no disponible.", small)])
     filas_graficos.append([im2 if im2 is not None else P("Segunda lámina gráfica no disponible.", small)])
@@ -16045,19 +16045,97 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     ]))
     content.append(graf_table)
 
-    # Firma/sello en banda final compacta.
+    # 6. Banda final fija: espacio reservado para LOGO, FIRMA y SELLO.
+    # Se muestra siempre, incluso si todavía no se cargaron las imágenes, para que
+    # el diseño final conserve el espacio y no cambie entre pacientes.
+    content.append(Spacer(1, 1.2))
     try:
-        firma_tbl = _paper_signature_table(ancho, st.session_state.get("usuario_actual", {}))
+        usuario_actual_pdf = st.session_state.get("usuario_actual", {}) or {}
     except Exception:
-        firma_tbl = None
-    if firma_tbl is not None:
-        content.append(Spacer(1, 1.5))
-        content.append(firma_tbl)
-    else:
-        try:
-            content.append(P(texto_firma_usuario(st.session_state.get("usuario_actual", {})), small))
-        except Exception:
-            pass
+        usuario_actual_pdf = {}
+
+    def _branding_placeholder(label):
+        return Table(
+            [[P(label, cell_b)]],
+            colWidths=[ancho/3.0 - 4],
+            rowHeights=[18*mm],
+            style=TableStyle([
+                ("BOX", (0,0), (-1,-1), 0.45, colors.HexColor("#94A3B8")),
+                ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#F8FAFC")),
+                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                ("LEFTPADDING", (0,0), (-1,-1), 2),
+                ("RIGHTPADDING", (0,0), (-1,-1), 2),
+                ("TOPPADDING", (0,0), (-1,-1), 2),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+            ])
+        )
+
+    # Logo institucional común.
+    logo_flow = None
+    try:
+        logo_path = obtener_logo_institucional_cgi(usuario_actual_pdf) if "obtener_logo_institucional_cgi" in globals() else None
+        if logo_path:
+            from reportlab.platypus import Image as RLImage
+            logo_flow = RLImage(logo_path, width=42*mm, height=14*mm, kind="proportional")
+    except Exception:
+        logo_flow = None
+
+    # Firma y sello del usuario autenticado.
+    try:
+        firma_flow = _paper_signature_flowable(width=48*mm, height=14*mm, usuario_info=usuario_actual_pdf)
+    except Exception:
+        firma_flow = None
+    try:
+        sello_flow = _paper_seal_flowable(width=28*mm, height=16*mm, usuario_info=usuario_actual_pdf)
+    except Exception:
+        sello_flow = None
+
+    def _slot_con_imagen(label, flow):
+        if flow is None:
+            return _branding_placeholder(label)
+        nested = Table(
+            [[flow], [P(label, small)]],
+            colWidths=[ancho/3.0 - 4],
+            rowHeights=[15*mm, 3*mm],
+            style=TableStyle([
+                ("BOX", (0,0), (-1,-1), 0.45, colors.HexColor("#94A3B8")),
+                ("BACKGROUND", (0,0), (-1,-1), colors.white),
+                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                ("LEFTPADDING", (0,0), (-1,-1), 2),
+                ("RIGHTPADDING", (0,0), (-1,-1), 2),
+                ("TOPPADDING", (0,0), (-1,-1), 1),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 1),
+            ])
+        )
+        return nested
+
+    branding = Table(
+        [[
+            _slot_con_imagen("LOGO INSTITUCIONAL", logo_flow),
+            _slot_con_imagen("FIRMA DIGITAL", firma_flow),
+            _slot_con_imagen("SELLO DIGITAL", sello_flow),
+        ]],
+        colWidths=[ancho/3.0, ancho/3.0, ancho/3.0],
+        hAlign="LEFT",
+    )
+    branding.setStyle(TableStyle([
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("LEFTPADDING", (0,0), (-1,-1), 1.2),
+        ("RIGHTPADDING", (0,0), (-1,-1), 1.2),
+        ("TOPPADDING", (0,0), (-1,-1), 0.8),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 0.8),
+    ]))
+    content.append(branding)
+
+    # Identificación profesional debajo de la banda, sin ocupar una segunda hoja.
+    try:
+        firma_txt = texto_firma_usuario(usuario_actual_pdf)
+        if firma_txt:
+            content.append(P(firma_txt, small))
+    except Exception:
+        pass
 
     # Garantía dura de una hoja: todo el contenido se ajusta al marco disponible.
     frame = KeepInFrame(
