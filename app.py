@@ -15618,7 +15618,7 @@ except Exception:
 # V110 - COHERENCIA CLINICA DEFINITIVA + INFORMES UNA HOJA
 # Restauracion del grafico gestacional + auditoria de metricas
 # =========================================================
-BUILD_APP = "CGI-DOMINIOS-V110-COHERENCIA-20260724"
+BUILD_APP = "CGI-DOMINIOS-V111-METODOLOGIA-20260724"
 
 # Guardar implementaciones previas antes del override final.
 _extraer_resumen_integrado_pre_v110 = extraer_resumen_integrado
@@ -15911,6 +15911,15 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         concl=f"Patron basal: {clasificacion_dinamica_obligatoria(rb,None)}. AC Capan/EA-EES: {fmt(ac,2)}. IV: {fmt(rb.get('iv'),2)}. CTS: {fmt(cts,2)}. CFT: {fmt(rb.get('cft'),2)}."
         story.append(_paper_paragraph(concl,stl["PaperSmall"]))
         story.append(_paper_paragraph("La referencia diagnostica es ACOSTADO/CINTA/SPOT/ESTUDIO BASAL; PARADO se reserva para respuesta ortostatica. IRV y RVS no se intercambian por tener distinta indexacion y unidades.",stl["PaperSmall"]))
+    # Metodología común a los informes ejecutivos de una hoja (embarazo y no embarazo).
+    metodologia_una_hoja = (
+        "Metodología: Se realizó cardiografía de impedancia con dispositivo ZLogic (Exxer), "
+        "con el paciente en decúbito supino y posteriormente en bipedestación, utilizando "
+        "el promedio de tres registros consecutivos en cada posición."
+    )
+    story.append(Spacer(1,2))
+    story.append(_paper_paragraph(metodologia_una_hoja, stl["PaperSmall"]))
+
     sig=_paper_signature_flowable(width=78,height=27)
     if sig:
         t=Table([[sig,_paper_paragraph(texto_firma_usuario(st.session_state.get("usuario_actual",{})),stl["PaperSmall"])]],colWidths=[86,w-86]); t.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"MIDDLE"),("LINEABOVE",(0,0),(-1,0),.3,colors.HexColor("#CBD5E1"))])); story.append(Spacer(1,2)); story.append(t)
