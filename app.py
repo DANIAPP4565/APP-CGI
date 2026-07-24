@@ -15824,6 +15824,254 @@ def auditar_coherencia_dominios(r: Dict[str, Any], df: Optional[pd.DataFrame] = 
             errores.append(f"Dominio sin resultado: {row[0] if row else 'desconocido'}")
     return errores
 
+
+# =========================================================
+# INFORME PDF RESUMIDO DE UNA HOJA - VERSION COMPACTA ZLOGIC
+# =========================================================
+def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]] = None) -> bytes:
+    """Genera un informe ejecutivo CGI estrictamente contenido en una sola hoja A4.
+
+    Orden: datos del paciente -> metodología -> resultados -> conclusiones -> láminas gráficas -> firma/sello.
+    Usa KeepInFrame(mode='shrink') como barrera final para impedir que ReportLab cree una segunda página.
+    """
+    try:
+        import io
+        from html import escape
+        from reportlab.platypus import (
+            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepInFrame
+        )
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import cm, mm
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    except Exception as e:
+        raise RuntimeError(
+            "Falta instalar ReportLab. Agregue 'reportlab' a requirements.txt y ejecute: pip install reportlab"
+        ) from e
+
+    r = extraer_resumen_integrado(df)
+    r_panel = resumen_acostado_cinta_para_patron(df, r)
+    es_embarazo = bool(contexto_embarazo and contexto_embarazo.get("embarazada"))
+
+    try:
+        r_basal, r_parado = obtener_resumenes_ortostaticos(df)
+    except Exception:
+        r_basal, r_parado = {}, {}
+    r_basal = r_basal or r_panel or r
+    r_parado = r_parado or {}
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=0.65*cm,
+        leftMargin=0.65*cm,
+        topMargin=0.55*cm,
+        bottomMargin=0.85*cm,
+        allowSplitting=0,
+    )
+    ancho = doc.width
+
+    ss = getSampleStyleSheet()
+    title = ParagraphStyle(
+        "OneTitle", parent=ss["Title"], fontName="Helvetica-Bold",
+        fontSize=11.5, leading=12.5, alignment=TA_CENTER,
+        textColor=colors.HexColor("#0B4F8A"), spaceAfter=1.5,
+    )
+    subtitle = ParagraphStyle(
+        "OneSub", parent=ss["BodyText"], fontName="Helvetica",
+        fontSize=6.8, leading=7.5, alignment=TA_CENTER,
+        textColor=colors.HexColor("#475569"), spaceAfter=1,
+    )
+    sec = ParagraphStyle(
+        "OneSec", parent=ss["Heading2"], fontName="Helvetica-Bold",
+        fontSize=7.4, leading=8.0, textColor=colors.HexColor("#0B4F8A"),
+        spaceBefore=1.2, spaceAfter=1.0,
+    )
+    body = ParagraphStyle(
+        "OneBody", parent=ss["BodyText"], fontName="Helvetica",
+        fontSize=6.0, leading=6.8, alignment=TA_LEFT,
+        textColor=colors.HexColor("#111827"), spaceAfter=0,
+    )
+    cell = ParagraphStyle(
+        "OneCell", parent=ss["BodyText"], fontName="Helvetica",
+        fontSize=5.7, leading=6.25, textColor=colors.HexColor("#111827"),
+        wordWrap="CJK",
+    )
+    cell_b = ParagraphStyle(
+        "OneCellB", parent=cell, fontName="Helvetica-Bold",
+        textColor=colors.HexColor("#0F3555"),
+    )
+    small = ParagraphStyle(
+        "OneSmall", parent=ss["BodyText"], fontName="Helvetica",
+        fontSize=5.3, leading=5.9, textColor=colors.HexColor("#475569"),
+    )
+
+    def P(txt, sty=body):
+        return Paragraph(escape(_paper_safe_text(txt)), sty)
+
+    def compact_table(rows, widths, header=False, padd=1.4):
+        rr = []
+        for i, row in enumerate(rows):
+            rr.append([P(v, cell_b if (header and i == 0) else cell) for v in row])
+        t = Table(rr, colWidths=widths, hAlign="LEFT")
+        style = [
+            ("GRID", (0,0), (-1,-1), 0.3, colors.HexColor("#CBD5E1")),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("LEFTPADDING", (0,0), (-1,-1), padd),
+            ("RIGHTPADDING", (0,0), (-1,-1), padd),
+            ("TOPPADDING", (0,0), (-1,-1), 1.1),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 1.1),
+        ]
+        if header:
+            style += [
+                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#EAF2FA")),
+                ("TEXTCOLOR", (0,0), (-1,0), colors.HexColor("#0B4F8A")),
+            ]
+        t.setStyle(TableStyle(style))
+        return t
+
+    def val(d, key, dec=2, unit=""):
+        x = d.get(key) if isinstance(d, dict) else None
+        return fmt(x, dec, unit) if limpiar_numero(x) is not None else "N/D"
+
+    def fit_img(buf, max_w, max_h):
+        if buf is None:
+            return None
+        try:
+            if hasattr(buf, "seek"):
+                buf.seek(0)
+            im = Image(buf)
+            im._restrictSize(max_w, max_h)
+            return im
+        except Exception:
+            return None
+
+    content = []
+    titulo = "INFORME HEMODINAMICO CGI - HEMODINAMIA MATERNA" if es_embarazo else "INFORME HEMODINAMICO CGI"
+    content.append(P(titulo, title))
+    content.append(P("Cardiografia de impedancia - evaluación hemodinámica no invasiva", subtitle))
+
+    # 1. Datos del paciente
+    content.append(P("DATOS DEL PACIENTE", sec))
+    datos = [
+        ["Paciente", normalizar_nombre_paciente(r.get("paciente")) or "No disponible", "DNI", r.get("dni") or "SD"],
+        ["Edad", f"{r.get('edad') or 'No disponible'} años", "Fecha", r.get("fecha") or "No disponible"],
+        ["Obra social", r.get("obra_social") or "No disponible", "Estudio", "CGI basal + bipedestación"],
+    ]
+    if es_embarazo:
+        eg = contexto_embarazo.get("edad_gestacional") or "No especificada"
+        datos.append(["Edad gestacional", f"{eg} semanas" if eg != "No especificada" else eg, "Módulo", "Hemodinamia materna"])
+    content.append(compact_table(datos, [ancho*0.15, ancho*0.35, ancho*0.14, ancho*0.36], header=False))
+
+    # 2. Metodología - texto solicitado por el usuario.
+    content.append(P("METODOLOGIA DE MEDICION", sec))
+    metodologia = (
+        "Medicion realizada con dispositivo ZLogic piezoelectrico (Exxer) con paciente en decubito supino "
+        "y luego en bipedestacion, promediando 3 mediciones en cada posicion."
+    )
+    meth = Table([[P(metodologia, body)]], colWidths=[ancho])
+    meth.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#F1F7FC")),
+        ("BOX", (0,0), (-1,-1), 0.35, colors.HexColor("#BFD5E5")),
+        ("LEFTPADDING", (0,0), (-1,-1), 3),
+        ("RIGHTPADDING", (0,0), (-1,-1), 3),
+        ("TOPPADDING", (0,0), (-1,-1), 2),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+    ]))
+    content.append(meth)
+
+    # 3. Resultados comparativos basal vs bipedestación.
+    content.append(P("RESULTADOS", sec))
+    resultados = [
+        ["Métrica", "Decúbito supino / basal", "Bipedestación"],
+        ["PA", f"{val(r_basal,'pas',0)}/{val(r_basal,'pad',0)} mmHg", f"{val(r_parado,'pas',0)}/{val(r_parado,'pad',0)} mmHg"],
+        ["FC", val(r_basal,"fc",0," lpm"), val(r_parado,"fc",0," lpm")],
+        ["Índice cardíaco (IC)", val(r_basal,"ic",2," L/min/m2"), val(r_parado,"ic",2," L/min/m2")],
+        ["IRV", val(r_basal,"irv",0," dyn.s.cm-5.m2"), val(r_parado,"irv",0," dyn.s.cm-5.m2")],
+        ["CA / ICA", val(r_basal,"ca",2," mL/mmHg"), val(r_parado,"ca",2," mL/mmHg")],
+        ["CFT", val(r_basal,"cft",2), val(r_parado,"cft",2)],
+        ["Contractilidad", f"IV {val(r_basal,'iv',1)} | IAC {val(r_basal,'iac',1)} | CTS {val(r_basal,'cts',2)}", f"IV {val(r_parado,'iv',1)} | IAC {val(r_parado,'iac',1)} | CTS {val(r_parado,'cts',2)}"],
+        ["Acoplamiento VA", f"EA {val(r_basal,'ea',2)} | EES {val(r_basal,'ees',2)} | EA/EES {val(r_basal,'ava',2)}", f"EA {val(r_parado,'ea',2)} | EES {val(r_parado,'ees',2)} | EA/EES {val(r_parado,'ava',2)}"],
+    ]
+    content.append(compact_table(resultados, [ancho*0.24, ancho*0.38, ancho*0.38], header=True))
+
+    # 4. Conclusiones: se conservan los estados canónicos, sin repetir reglas largas.
+    content.append(P("CONCLUSIONES", sec))
+    try:
+        dominios = tabla_dominios_integrados_sin_ambiguedad(r_panel, df)
+        concl = [["Dominio", "Conclusión"]]
+        for row in dominios[1:]:
+            if len(row) >= 4:
+                concl.append([row[0], row[3]])
+        content.append(compact_table(concl, [ancho*0.32, ancho*0.68], header=True))
+    except Exception as e:
+        content.append(P(f"No se pudieron generar las conclusiones integradas: {e}", small))
+
+    # 5. Láminas gráficas: apiladas a todo el ancho disponible.
+    # Esto aprovecha la zona inferior de la hoja y evita grandes espacios en blanco.
+    # KeepInFrame reduce proporcionalmente todo el informe si fuera necesario.
+    content.append(P("LAMINAS GRAFICAS", sec))
+    graf_1 = None
+    graf_2 = None
+    try:
+        graf_1 = crear_grafico_fenotipado_dinamico_bytes(r_panel, df)
+    except Exception:
+        graf_1 = None
+    try:
+        if es_embarazo:
+            graf_2 = crear_grafico_hemodinamia_materna_gestacional_bytes(r_panel, contexto_embarazo)
+        else:
+            graf_2 = crear_grafico_propuesta_terapeutica_bytes(r_panel, df)
+    except Exception:
+        graf_2 = None
+
+    im1 = fit_img(graf_1, ancho, 82*mm)
+    im2 = fit_img(graf_2, ancho, 82*mm)
+    filas_graficos = []
+    filas_graficos.append([im1 if im1 is not None else P("Gráfico de cuadrantes no disponible.", small)])
+    filas_graficos.append([im2 if im2 is not None else P("Segunda lámina gráfica no disponible.", small)])
+    graf_table = Table(filas_graficos, colWidths=[ancho])
+    graf_table.setStyle(TableStyle([
+        ("BOX", (0,0), (-1,-1), 0.3, colors.HexColor("#CBD5E1")),
+        ("INNERGRID", (0,0), (-1,-1), 0.3, colors.HexColor("#E2E8F0")),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("ALIGN", (0,0), (-1,-1), "CENTER"),
+        ("LEFTPADDING", (0,0), (-1,-1), 2),
+        ("RIGHTPADDING", (0,0), (-1,-1), 2),
+        ("TOPPADDING", (0,0), (-1,-1), 1.5),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 1.5),
+    ]))
+    content.append(graf_table)
+
+    # Firma/sello en banda final compacta.
+    try:
+        firma_tbl = _paper_signature_table(ancho, st.session_state.get("usuario_actual", {}))
+    except Exception:
+        firma_tbl = None
+    if firma_tbl is not None:
+        content.append(Spacer(1, 1.5))
+        content.append(firma_tbl)
+    else:
+        try:
+            content.append(P(texto_firma_usuario(st.session_state.get("usuario_actual", {})), small))
+        except Exception:
+            pass
+
+    # Garantía dura de una hoja: todo el contenido se ajusta al marco disponible.
+    frame = KeepInFrame(
+        maxWidth=ancho,
+        maxHeight=doc.height - 2*mm,
+        content=content,
+        mode="shrink",
+        hAlign="LEFT",
+        vAlign="TOP",
+    )
+    doc.build([frame], onFirstPage=_paper_footer, onLaterPages=_paper_footer)
+    return buffer.getvalue()
+
+
 _es_embarazo_ui = bool(contexto_embarazo.get("embarazada"))
 
 if not _es_embarazo_ui:
