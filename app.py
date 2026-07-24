@@ -14462,7 +14462,7 @@ def obtener_logo_institucional_cgi(usuario_info: Optional[Dict[str, Any]] = None
 def guardar_logo_institucional_cgi(usuario_info: Dict[str, Any], uploaded_file: Any) -> Tuple[bool, str]:
     """Guarda y persiste el logo institucional del usuario actual.
 
-    V113: además del archivo físico, registra la ruta en usuarios_app_cgi.json y en
+    V114: además del archivo físico, registra la ruta en usuarios_app_cgi.json y en
     session_state. Así el generador de PDF individual y por lotes recupera logo,
     firma y sello mediante el mismo mecanismo persistente.
     """
@@ -15665,7 +15665,7 @@ except Exception:
 # V110 - COHERENCIA CLINICA DEFINITIVA + INFORMES UNA HOJA
 # Restauracion del grafico gestacional + auditoria de metricas
 # =========================================================
-BUILD_APP = "CGI-DOMINIOS-V113-ASSETS-MATERNO-20260724"
+BUILD_APP = "CGI-DOMINIOS-V115-KB-HEMODINAMICA-MATERNA-20260724"
 
 # Guardar implementaciones previas antes del override final.
 _extraer_resumen_integrado_pre_v110 = extraer_resumen_integrado
@@ -15923,8 +15923,309 @@ def conclusion_predictiva_pe_una_hoja(r: Dict[str, Any], contexto: Optional[Dict
             "nota":str(sub.get("texto") or ""),"conclusion":f"{cg.get('patron','No clasificable')}. IC {cg.get('ic_estado','N/E')} y {cg.get('res_tipo','resistencia')} {cg.get('res_estado','N/E')} para EG. Riesgo general: {riesgo.get('categoria','N/C')}."}
 
 
+
 # =========================================================
-# V113 - ASSETS PDF ROBUSTOS (LOGO / FIRMA / SELLO)
+# V115 - BASE DE CONOCIMIENTO HEMODINAMICA MATERNA AUDITADA
+# Integra valores reales de los documentos aportados por el usuario.
+# Jerarquia:
+# 1) Puntos de corte clinicos/consenso -> pueden clasificar.
+# 2) Arbol J48 publicado -> se reproduce con sus cortes exactos SOLO 10-16 sem.
+# 3) Medianas/IC95% de cohortes -> contexto comparativo, NO "normalidad" ni corte.
+# 4) RVS/TPVR no indexada y IRV/SVRI indexada NUNCA comparten puntos de corte.
+# =========================================================
+
+BASE_CONOCIMIENTO_HEMODINAMICA_MATERNA_V115 = {
+    "AIPE_SIMP_2024": {
+        "tipo": "consenso_posicion",
+        "rvs_tpvr_fenotipos": {
+            "hiperdinamico_menor": 800.0,
+            "hipodinamico_mayor": 1300.0,
+            "unidad": "dyn.s.cm-5",
+            "nota": "Aplicable a RVS/TPVR NO indexada. No trasladar automaticamente a IRV/SVRI.",
+        },
+        "cortes_contextuales_tpvr": [
+            {"poblacion":"Nuliparas normotensas con notch uterino bilateral", "semana":"24", "corte":1400.0, "sens":89, "esp":94, "metodo":"ecocardiografia", "evento":"compuesto HDP/PE/FGR/abruptio/muerte perinatal"},
+            {"poblacion":"Hipertension gestacional leve precoz", "semana":"27-29", "corte":1340.0, "sens":90, "esp":91, "metodo":"ecocardiografia", "evento":"compuesto HDP/PE/FGR/abruptio/muerte perinatal"},
+            {"poblacion":"Hipertension cronica tratada", "semana":"24", "corte":1355.0, "sens":84, "esp":93, "metodo":"ecocardiografia", "evento":"FGR"},
+            {"poblacion":"Normotensas con sospecha de FGR", "semana":"27-29", "corte":1006.0, "sens":92, "esp":78, "metodo":"USCOM", "evento":"FGR"},
+            {"poblacion":"Normotensas con sospecha de FGR", "semana":"27-29", "corte":1222.0, "sens":100, "esp":96, "metodo":"USCOM", "evento":"FGR con flujo umbilical anormal"},
+        ],
+    },
+    "OLANO_2023_10_16_SEMANAS": {
+        "tipo": "cohorte_y_arbol_J48",
+        "poblacion": "Embarazadas de alto riesgo, 10-16 semanas, sin tratamiento antihipertensivo",
+        "n": 112,
+        "pe_n": 17,
+        "no_pe_n": 95,
+        "variables_arbol": ["ICA", "ITS", "IC", "CTE", "IH"],
+        "rendimiento": {"correctamente_clasificadas_pct":93.75, "kappa":0.70, "vpp":0.94, "vpn":0.35, "auc_roc":0.93},
+        # Valores publicados en Tabla 2. Son DESCRIPTIVOS/COMPARATIVOS, no rangos de normalidad.
+        "tabla2": {
+            "CFT": {"PE":{"mediana":44.91,"ic95":[41.43,49.87]}, "NO_PE":{"mediana":41.46,"ic95":[39.78,43.49]}, "p":0.026},
+            "CTE": {"PE":{"mediana":36.28,"ic95":[35.71,39.25]}, "NO_PE":{"mediana":35.99,"ic95":[35.08,36.67]}, "p":0.210},
+            "CTS": {"PE":{"mediana":32.15,"ic95":[26.07,36.03]}, "NO_PE":{"mediana":32.54,"ic95":[31.25,33.71]}, "p":0.748, "unidad":"%"},
+            "IAC": {"PE":{"mediana":291.37,"ic95":[196.82,382.56]}, "NO_PE":{"mediana":314.48,"ic95":[279.68,351.57]}, "p":0.529},
+            "IC": {"PE":{"mediana":4.71,"ic95":[4.25,5.01]}, "NO_PE":{"mediana":4.66,"ic95":[4.39,4.97]}, "p":0.951},
+            "ICA": {"PE":{"mediana":1.31,"ic95":[1.11,1.40]}, "NO_PE":{"mediana":1.47,"ic95":[1.35,1.54]}, "p":0.100},
+            "IDS": {"PE":{"mediana":62.51,"ic95":[46.56,71.98]}, "NO_PE":{"mediana":62.48,"ic95":[59.71,69.38]}, "p":0.641},
+            "ITS": {"PE":{"mediana":6.65,"ic95":[5.07,7.02]}, "NO_PE":{"mediana":5.55,"ic95":[5.27,5.91]}, "p":0.065},
+            "IRV": {"PE":{"mediana":1684.63,"ic95":[1542.56,1912.82]}, "NO_PE":{"mediana":1507.83,"ic95":[1412.24,1586.64]}, "p":0.054},
+            "EA": {"PE":{"mediana":1.04,"ic95":[0.91,1.27]}, "NO_PE":{"mediana":0.96,"ic95":[0.92,1.06]}, "p":0.204},
+            "EES": {"PE":{"mediana":1.34,"ic95":[1.17,1.56]}, "NO_PE":{"mediana":1.25,"ic95":[1.21,1.32]}, "p":0.169},
+            "AC": {"PE":{"mediana":0.75,"ic95":[0.66,0.89]}, "NO_PE":{"mediana":0.74,"ic95":[0.71,0.78]}, "p":0.932},
+            "IH": {"PE":{"media":18.12,"de":4.11,"ic95":[16.00,20.23]}, "NO_PE":{"media":20.96,"de":5.69,"ic95":[19.80,22.12]}, "p":0.052},
+            "IV": {"PE":{"media":117.12,"de":23.43,"ic95":[105.07,129.17]}, "NO_PE":{"media":123.96,"de":25.92,"ic95":[118.68,129.24]}, "p":0.312},
+            "VOPcf": {"PE":{"media":6.42,"de":1.12,"ic95":[5.82,7.02]}, "NO_PE":{"media":6.09,"de":1.03,"ic95":[5.87,6.31]}, "p":0.250},
+        },
+        # Cortes exactos visibles en Fig. 1 del arbol J48 publicado.
+        "arbol_j48": {
+            "ICA": 1.45,
+            "ITS": 6.46,
+            "IC_rama_ICA_baja": 5.20,
+            "CTE": 36.68,
+            "IH": 14.44,
+            "IC_rama_ICA_alta": 5.21,
+        },
+    },
+}
+
+# Mantener sincronizada la base general visible por otras funciones.
+try:
+    BASE_CONOCIMIENTO_PREECLAMPSIA_HEMODINAMIA["AIPE_SIMP_2024"]["perfiles"] = {
+        "hipodinamico": "RVS/TPVR no indexada >1300 dyn.s.cm-5; integrar con CO/IC bajo y contexto clinico.",
+        "normodinamico": "RVS/TPVR no indexada 800-1300 dyn.s.cm-5 con flujo adecuado.",
+        "hiperdinamico": "RVS/TPVR no indexada <800 dyn.s.cm-5; integrar con CO/IC alto y edad gestacional.",
+    }
+    BASE_CONOCIMIENTO_PREECLAMPSIA_HEMODINAMIA["Olano_2023_RAC"]["valores_publicados_tabla2"] = BASE_CONOCIMIENTO_HEMODINAMICA_MATERNA_V115["OLANO_2023_10_16_SEMANAS"]["tabla2"]
+    BASE_CONOCIMIENTO_PREECLAMPSIA_HEMODINAMIA["Olano_2023_RAC"]["cortes_arbol_j48"] = BASE_CONOCIMIENTO_HEMODINAMICA_MATERNA_V115["OLANO_2023_10_16_SEMANAS"]["arbol_j48"]
+except Exception:
+    pass
+
+
+def _v115_valor(r: Dict[str, Any], *claves: str) -> Optional[float]:
+    r = r or {}
+    for c in claves:
+        for k in (c, c.lower(), c.upper(), c.capitalize()):
+            if k in r:
+                v = limpiar_numero(r.get(k))
+                if v is not None:
+                    return v
+    return None
+
+
+def evaluar_arbol_olano_2023_v115(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Reproduce el arbol J48 publicado por Olano et al. 2023.
+
+    Solo es aplicable a la ventana 10-16 semanas y a una poblacion comparable
+    (alto riesgo, sin antihipertensivos en el estudio original). Si falta una
+    variable de la rama necesaria, devuelve indeterminado; NUNCA inventa cortes.
+    """
+    contexto = contexto or {}; r = r or {}
+    eg = limpiar_numero(contexto.get("edad_gestacional"))
+    if eg is None or not (10 <= eg <= 16):
+        return {"aplicable":False, "resultado":"FUERA DE VENTANA", "predice_pe":None, "detalle":"Arbol Olano 2023 aplicable solo entre 10 y 16 semanas."}
+    ica = _v115_valor(r,"ca","ica")
+    its = _v115_valor(r,"its","itc")
+    ic = _v115_valor(r,"ic")
+    cte = _v115_valor(r,"cte")
+    ih = _v115_valor(r,"ih")
+    if ica is None:
+        return {"aplicable":True,"resultado":"INDETERMINADO","predice_pe":None,"faltantes":["ICA"],"detalle":"Falta ICA/CA, nodo raiz del arbol J48."}
+    ruta=[f"ICA={fmt(ica,2)}"]
+    if ica <= 1.45:
+        if its is None:
+            return {"aplicable":True,"resultado":"INDETERMINADO","predice_pe":None,"faltantes":["ITS"],"ruta":ruta,"detalle":"Falta ITS para continuar la rama ICA <=1,45."}
+        ruta.append(f"ITS={fmt(its,2)}")
+        if its <= 6.46:
+            return {"aplicable":True,"resultado":"NO PE SEGUN ARBOL","predice_pe":False,"ruta":ruta,"detalle":"ICA <=1,45 e ITS <=6,46."}
+        if ic is None:
+            return {"aplicable":True,"resultado":"INDETERMINADO","predice_pe":None,"faltantes":["IC"],"ruta":ruta,"detalle":"Falta IC para continuar la rama ITS >6,46."}
+        ruta.append(f"IC={fmt(ic,2)}")
+        if ic <= 5.20:
+            return {"aplicable":True,"resultado":"PE SEGUN ARBOL","predice_pe":True,"ruta":ruta,"detalle":"ICA <=1,45; ITS >6,46; IC <=5,20."}
+        if cte is None:
+            return {"aplicable":True,"resultado":"INDETERMINADO","predice_pe":None,"faltantes":["CTE"],"ruta":ruta,"detalle":"Falta CTE para continuar la rama IC >5,20."}
+        ruta.append(f"CTE={fmt(cte,2)}")
+        pred = cte <= 36.68
+        return {"aplicable":True,"resultado":"PE SEGUN ARBOL" if pred else "NO PE SEGUN ARBOL","predice_pe":pred,"ruta":ruta,
+                "detalle":("ICA <=1,45; ITS >6,46; IC >5,20; CTE <=36,68." if pred else "ICA <=1,45; ITS >6,46; IC >5,20; CTE >36,68.")}
+    else:
+        if ih is None:
+            return {"aplicable":True,"resultado":"INDETERMINADO","predice_pe":None,"faltantes":["IH"],"ruta":ruta,"detalle":"Falta IH para continuar la rama ICA >1,45."}
+        ruta.append(f"IH={fmt(ih,2)}")
+        if ih > 14.44:
+            return {"aplicable":True,"resultado":"NO PE SEGUN ARBOL","predice_pe":False,"ruta":ruta,"detalle":"ICA >1,45 e IH >14,44."}
+        if ic is None:
+            return {"aplicable":True,"resultado":"INDETERMINADO","predice_pe":None,"faltantes":["IC"],"ruta":ruta,"detalle":"Falta IC para continuar la rama IH <=14,44."}
+        ruta.append(f"IC={fmt(ic,2)}")
+        pred = ic > 5.21
+        return {"aplicable":True,"resultado":"PE SEGUN ARBOL" if pred else "NO PE SEGUN ARBOL","predice_pe":pred,"ruta":ruta,
+                "detalle":("ICA >1,45; IH <=14,44; IC >5,21." if pred else "ICA >1,45; IH <=14,44; IC <=5,21.")}
+
+
+def contexto_cohorte_olano_2023_v115(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Compara con valores publicados SIN convertir medianas/IC95 en puntos de corte."""
+    contexto=contexto or {}; r=r or {}; eg=limpiar_numero(contexto.get("edad_gestacional"))
+    if eg is None or not (10 <= eg <= 16): return []
+    tab=BASE_CONOCIMIENTO_HEMODINAMICA_MATERNA_V115["OLANO_2023_10_16_SEMANAS"]["tabla2"]
+    mapeo={"IC":"ic","ICA":"ca","IRV":"irv","CFT":"cft","CTS":"cts","IAC":"iac","EA":"ea","EES":"ees","AC":"ava","IV":"iv","IH":"ih","ITS":"its","CTE":"cte"}
+    out=[]
+    for var,key in mapeo.items():
+        v=_v115_valor(r,key)
+        if v is None or var not in tab: continue
+        if var=="CTS" and v <= 2: v=v*100.0
+        d=tab[var]; pe=d.get("PE",{}); no=d.get("NO_PE",{})
+        # Solo mostrar variables mas informativas o con tendencia/diferencia; no diagnosticar por solapamiento.
+        if var not in {"ICA","IRV","CFT","ITS","IH","IC"}: continue
+        pe_c=pe.get("mediana",pe.get("media")); no_c=no.get("mediana",no.get("media")); p=d.get("p")
+        out.append(f"{var} {fmt(v,2)}; cohorte 10-16 sem: PE {fmt(pe_c,2)} vs no PE {fmt(no_c,2)} (p={str(p).replace('.',',')}). Dato contextual, no punto de corte.")
+    return out
+
+
+# La curva de IC se conserva solo como ENVOLVENTE OPERATIVA para visualizacion.
+# Para RVS/TPVR se reemplaza el rango historico por los cortes de consenso AIPE/SIMP.
+_GEST_RVS_LOW = [800,800,800,800,800,800,800,800,800,800]
+_GEST_RVS_HIGH = [1300,1300,1300,1300,1300,1300,1300,1300,1300,1300]
+
+
+def referencia_hemodinamica_gestacional_v110(eg: Any, tipo_resistencia: str = "RVS") -> Optional[Dict[str, Any]]:
+    e=limpiar_numero(eg)
+    if e is None or e < 4 or e > 42: return None
+    ref={"ic_min":_interp_gest(e,_GEST_IC_LOW),"ic_max":_interp_gest(e,_GEST_IC_HIGH),
+         "ic_fuente":"envolvente operativa historica de la app; no constituye por si sola un punto de corte universal validado"}
+    if str(tipo_resistencia).upper()=="RVS":
+        ref.update({"res_min":800.0,"res_max":1300.0,"res_tipo":"RVS","res_unidad":"dyn.s.cm-5",
+                    "res_fuente":"AIPE/SIMP 2024: hiperdinamica <800; normodinamica 800-1300; hipodinamica >1300"})
+    else:
+        # IRV indexado: NO usar los cortes RVS del consenso. Se conserva una referencia operativa separada.
+        if e <= 13: lo,hi=900.0,1900.0
+        elif e <= 27: lo,hi=700.0,1700.0
+        else: lo,hi=600.0,1600.0
+        ref.update({"res_min":lo,"res_max":hi,"res_tipo":"IRV","res_unidad":"dyn.s.cm-5.m2",
+                    "res_fuente":"rango operativo indexado de la app; no equivalente a RVS/TPVR AIPE-SIMP"})
+    return ref
+
+
+def clasificacion_hemodinamica_materna_gestacional(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    contexto=contexto or {}; r=r or {}; eg=limpiar_numero(contexto.get("edad_gestacional")); ic=_v115_valor(r,"ic")
+    rvs=_v115_valor(r,"rvs"); irv=_v115_valor(r,"irv")
+    tipo="RVS" if rvs is not None else "IRV"; res=rvs if rvs is not None else irv
+    ref=referencia_hemodinamica_gestacional_v110(eg,tipo)
+    if ref is None or ic is None or res is None:
+        return {"aplicable":False,"edad_gestacional":eg,"ic_estado":"NO EVALUABLE","irv_estado":"NO EVALUABLE","res_estado":"NO EVALUABLE","res_tipo":tipo,"patron":"DATOS INSUFICIENTES","patron_principal":"DATOS INSUFICIENTES","diagnostico":"Faltan edad gestacional, IC o resistencia vascular valida.","rango":ref}
+    ic_estado="BAJO" if ic<ref["ic_min"] else ("AUMENTADO" if ic>ref["ic_max"] else "NORMAL")
+    res_estado="BAJO" if res<ref["res_min"] else ("AUMENTADO" if res>ref["res_max"] else "NORMAL")
+    if ic_estado=="NORMAL" and res_estado=="NORMAL": patron="NORMODINAMIA"
+    elif ic_estado=="BAJO" and res_estado=="AUMENTADO": patron="HIPODINAMIA"
+    elif ic_estado=="AUMENTADO" and res_estado=="BAJO": patron="HIPERDINAMIA"
+    elif ic_estado=="NORMAL" and res_estado=="AUMENTADO": patron=f"IC NORMAL CON {tipo} INADECUADAMENTE ALTA PARA EG"
+    elif ic_estado=="AUMENTADO" and res_estado=="NORMAL": patron=f"IC ALTO CON {tipo} NORMAL PARA EG"
+    elif ic_estado=="BAJO" and res_estado=="NORMAL": patron=f"IC BAJO CON {tipo} NORMAL PARA EG"
+    else: patron=f"PATRON MIXTO: IC {ic_estado} / {tipo} {res_estado}"
+    detalle_fuente=("RVS clasificada con cortes AIPE/SIMP 2024" if tipo=="RVS" else "IRV indexado clasificado con rango operativo separado; no se aplican cortes de RVS/TPVR")
+    return {"aplicable":True,"edad_gestacional":eg,"ic_estado":ic_estado,"irv_estado":res_estado,"res_estado":res_estado,"res_tipo":tipo,"res_valor":res,
+            "res_unidad":ref["res_unidad"],"patron":patron,"patron_principal":patron,"ic_fuera_rango":ic_estado!="NORMAL","irv_fuera_rango":res_estado!="NORMAL","res_fuera_rango":res_estado!="NORMAL",
+            "rango":ref,"fuente_regla_resistencia":ref.get("res_fuente"),"diagnostico":f"Hemodinamia materna por EG: {patron}. IC {fmt(ic,2)} ({ic_estado}); {tipo} {fmt(res,0)} ({res_estado}). {detalle_fuente}."}
+
+
+def estimar_subtipo_pe_temprana_tardia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """PE temprana/tardia: usa fenotipo + contexto; no inventa cortes para variables ML.
+    El arbol Olano 2023 predice PE general, NO subtipo, por lo que no se fuerza a temprana/tardia.
+    """
+    contexto=contexto or {}; r=r or {}; eg=limpiar_numero(contexto.get("edad_gestacional"))
+    if eg is None: return {"aplicable":False,"texto":"No calculable: falta edad gestacional.","temprana":None,"tardia":None}
+    if eg>=34: return {"aplicable":False,"texto":"EG >=34 semanas: PE temprana ya no es un desenlace futuro aplicable; se informa riesgo hemodinamico global y contexto de PE tardia.","temprana":"No aplicable por EG","tardia":"Evaluar con riesgo global actual"}
+    cg=clasificacion_hemodinamica_materna_gestacional(r,contexto); patron=str(cg.get("patron") or "")
+    crecimiento=normalizar_txt(contexto.get("crecimiento_fetal") or ""); doppler=normalizar_txt(contexto.get("doppler_uterino") or ""); imc=limpiar_numero(contexto.get("imc")); hdp=bool(contexto.get("hdp"))
+    t=l=0.0; ft=[]; fl=[]
+    if hdp: t+=0.75; l+=0.75
+    if patron=="HIPODINAMIA" or "INADECUADAMENTE ALTA" in patron: t+=2.0; ft.append("Fenotipo vasoconstrictor/hipodinamico para EG.")
+    if any(x in crecimiento for x in ["sga","rciu","fgr","iugr","restriccion","pequeno"]): t+=1.5; ft.append("Restriccion de crecimiento/SGA informada.")
+    if any(x in doppler for x in ["alter","aument","notch","incisura","patolog"]): t+=1.5; ft.append("Doppler uterino alterado/notching.")
+    if patron=="HIPERDINAMIA" or "IC ALTO" in patron: l+=1.5; fl.append("Fenotipo de alto flujo para EG.")
+    if imc is not None and imc>=30: l+=1.0; fl.append("IMC >=30, factor materno/metabolico.")
+    nota="El modelo Olano 2023 (10-16 sem) se usa para PE general y no se transforma artificialmente en clasificador temprana/tardia."
+    return {"aplicable":True,"temprana":_categoria_score_v110(t),"tardia":_categoria_score_v110(l),"puntaje_temprana":t,"puntaje_tardia":l,
+            "factores_temprana":ft or ["Sin activadores hemodinamicos especificos registrados."],"factores_tardia":fl or ["Sin activadores hemodinamicos especificos registrados."],
+            "texto":f"Analisis predictivo orientativo: PE temprana {_categoria_score_v110(t)}; PE tardia {_categoria_score_v110(l)}. {nota}"}
+
+
+def calcular_riesgo_preeclampsia(r: Dict[str, Any], contexto: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    contexto=contexto or {}; r=r or {}
+    if not contexto.get("embarazada",False): return {"aplicable":False,"puntaje":None,"categoria":"No aplicable","color":"gris","factores":[],"conducta":"No corresponde."}
+    cg=clasificacion_hemodinamica_materna_gestacional(r,contexto); patron=str(cg.get("patron") or ""); puntos=0.0; factores=[]
+    if patron=="HIPODINAMIA": puntos+=3.0; factores.append("IC bajo con resistencia vascular alta para EG.")
+    elif "INADECUADAMENTE ALTA" in patron: puntos+=2.0; factores.append("Resistencia vascular inadecuadamente alta para EG.")
+    elif patron=="HIPERDINAMIA" or "IC ALTO" in patron: puntos+=1.0; factores.append("Fenotipo de alto flujo para EG.")
+    if bool(contexto.get("hdp")): puntos+=1.0; factores.append("HDP/HTA obstetrica presente o sospechada.")
+    crec=normalizar_txt(contexto.get("crecimiento_fetal") or ""); dop=normalizar_txt(contexto.get("doppler_uterino") or ""); imc=limpiar_numero(contexto.get("imc"))
+    if any(x in crec for x in ["sga","rciu","fgr","iugr","restriccion","pequeno"]): puntos+=1.25; factores.append("RCF/SGA informado.")
+    if any(x in dop for x in ["alter","aument","notch","incisura","patolog"]): puntos+=1.25; factores.append("Doppler uterino alterado.")
+    if imc is not None and imc>=30: puntos+=0.5; factores.append("IMC >=30.")
+    arbol=evaluar_arbol_olano_2023_v115(r,contexto)
+    if arbol.get("aplicable") and arbol.get("predice_pe") is True:
+        puntos+=2.0; factores.append("Arbol J48 Olano 2023 (cortes publicados) clasifica el patron como PE en la ventana 10-16 semanas.")
+    elif arbol.get("aplicable") and arbol.get("predice_pe") is False:
+        # No restar riesgo: VPN publicado bajo (0,35), por lo que un resultado N no descarta PE.
+        factores.append("Arbol J48 Olano 2023 clasifica como no-PE; no reduce el riesgo a cero porque el VPN publicado fue 0,35.")
+    puntos=min(10.0,puntos); cat="RIESGO HEMODINAMICO ALTO DE PREECLAMPSIA" if puntos>=4 else ("RIESGO HEMODINAMICO INTERMEDIO/AUMENTADO DE PREECLAMPSIA" if puntos>=2 else "RIESGO HEMODINAMICO BAJO O NO ELEVADO")
+    color="rojo" if puntos>=4 else ("amarillo" if puntos>=2 else "verde"); sub=estimar_subtipo_pe_temprana_tardia(r,contexto)
+    contexto_coh=contexto_cohorte_olano_2023_v115(r,contexto)
+    return {"aplicable":True,"puntaje":puntos,"categoria":cat,"color":color,"factores":factores or ["Sin activadores mayores registrados."],
+            "conducta":"Integrar con PA, proteinuria/laboratorio, sintomas, Doppler, crecimiento fetal y obstetricia de alto riesgo.","fenotipo":patron,
+            "hemodinamia_gestacional":cg,"riesgo_pe_temprana_tardia":sub,"arbol_olano_2023":arbol,"contexto_cohorte_olano_2023":contexto_coh,
+            "fuentes_base_conocimiento":["Olano et al. Rev Argent Cardiol 2023","AIPE/SIMP Am J Perinatol 2024","reglas operativas de la app claramente diferenciadas de puntos de corte publicados"]}
+
+
+def crear_grafico_hemodinamia_materna_por_semanas_una_hoja_bytes(r: Dict[str, Any], contexto: Optional[Dict[str, Any]]=None) -> Optional[io.BytesIO]:
+    contexto=contexto or {}; cg=clasificacion_hemodinamica_materna_gestacional(r,contexto)
+    if not cg.get("aplicable"): return None
+    try:
+        import matplotlib.pyplot as plt, numpy as np, io as _io
+    except Exception: return None
+    eg=float(cg["edad_gestacional"]); ic=_v115_valor(r,"ic"); tipo=cg.get("res_tipo","RVS"); res=limpiar_numero(cg.get("res_valor"))
+    semanas=np.linspace(6,42,145); iclo=[]; ichi=[]; rlo=[]; rhi=[]
+    for s in semanas:
+        rr=referencia_hemodinamica_gestacional_v110(s,tipo); iclo.append(rr["ic_min"]); ichi.append(rr["ic_max"]); rlo.append(rr["res_min"]); rhi.append(rr["res_max"])
+    fig,ax1=plt.subplots(figsize=(11.6,4.1),dpi=170); ax2=ax1.twinx(); fig.patch.set_facecolor("white")
+    ax1.fill_between(semanas,iclo,ichi,alpha=.18,label="IC: envolvente operativa por EG")
+    if tipo=="RVS":
+        ax2.fill_between(semanas,rlo,rhi,alpha=.13,label="RVS 800-1300: normodinamia AIPE/SIMP")
+    else:
+        ax2.fill_between(semanas,rlo,rhi,alpha=.13,label="IRV: rango operativo indexado (no equivale a RVS)")
+    ax1.scatter([eg],[ic],s=150,zorder=8); ax2.scatter([eg],[res],s=135,marker="D",zorder=8)
+    ax1.annotate(f"IC {fmt(ic,2)} - {cg.get('ic_estado')}",(eg,ic),xytext=(8,16),textcoords="offset points",fontsize=8.5,fontweight="bold")
+    ax2.annotate(f"{tipo} {fmt(res,0)} - {cg.get('res_estado')}",(eg,res),xytext=(8,-24),textcoords="offset points",fontsize=8.5,fontweight="bold")
+    ax1.set_xlim(6,42); ax1.set_xlabel("Edad gestacional (semanas)",fontsize=9); ax1.set_ylabel("IC (L/min/m2)",fontsize=9); ax2.set_ylabel(f"{tipo} ({cg.get('res_unidad','')})",fontsize=9)
+    ax1.grid(True,alpha=.18); ax1.set_title(f"Hemodinamia materna por edad gestacional | EG {fmt(eg,0)} | {cg.get('patron')}",fontsize=10.5,fontweight="bold")
+    h1,l1=ax1.get_legend_handles_labels(); h2,l2=ax2.get_legend_handles_labels(); ax1.legend(h1+h2,l1+l2,loc="upper right",fontsize=7.2)
+    fig.text(0.5,0.005,"RVS: cortes de consenso AIPE/SIMP 2024. IC e IRV: referencias operativas separadas; no intercambiar RVS e IRV.",ha="center",fontsize=6.5)
+    fig.tight_layout(rect=[0,0.03,1,1]); buf=_io.BytesIO(); fig.savefig(buf,format="png",bbox_inches="tight",pad_inches=.06); plt.close(fig); buf.seek(0); return buf
+
+
+def conclusion_predictiva_pe_una_hoja(r: Dict[str, Any], contexto: Optional[Dict[str, Any]]=None) -> Dict[str,str]:
+    riesgo=calcular_riesgo_preeclampsia(r,contexto); sub=riesgo.get("riesgo_pe_temprana_tardia") or {}; cg=riesgo.get("hemodinamia_gestacional") or {}; arbol=riesgo.get("arbol_olano_2023") or {}
+    extra=""
+    if arbol.get("aplicable"):
+        extra=f" Modelo J48 10-16 sem: {arbol.get('resultado','indeterminado')}."
+    return {"general":str(riesgo.get("categoria") or "No calculable"),"temprana":str(sub.get("temprana") or "No calculable"),"tardia":str(sub.get("tardia") or "No calculable"),
+            "nota":str(sub.get("texto") or ""),"conclusion":f"{cg.get('patron','No clasificable')}. IC {cg.get('ic_estado','N/E')} y {cg.get('res_tipo','resistencia')} {cg.get('res_estado','N/E')} para EG. Riesgo general: {riesgo.get('categoria','N/C')}.{extra}"}
+
+# Agregar soporte visible de la nueva jerarquia de evidencia.
+try:
+    _txt_v115 = """
+Base de conocimiento hemodinamica materna V115:
+- AIPE/SIMP 2024: RVS/TPVR NO indexada <800 dyn.s.cm-5 = perfil hiperdinamico; 800-1300 = normodinamico; >1300 = hipodinamico. Estos cortes no se aplican a IRV/SVRI indexado.
+- Olano et al. 2023 (10-16 semanas): se incorporan los valores de Tabla 2 como contexto de cohorte, no como rangos de normalidad, y se reproduce el arbol J48 con sus cortes publicados: ICA 1,45; ITS 6,46; IC 5,20/5,21; CTE 36,68; IH 14,44.
+- Los cortes TPVR de poblaciones especificas (1400, 1340, 1355, 1006 y 1222 dyn.s.cm-5) se conservan como evidencia contextual ligada a poblacion, metodo y semana de estudio; no se convierten en umbrales universales.
+""".strip()
+    if _txt_v115 not in SOPORTE_BIBLIOGRAFICO_APP:
+        SOPORTE_BIBLIOGRAFICO_APP = SOPORTE_BIBLIOGRAFICO_APP.strip()+"\n\n"+_txt_v115
+except Exception:
+    pass
+
+# =========================================================
+# V114 - ASSETS PDF ROBUSTOS (LOGO / FIRMA / SELLO)
 # =========================================================
 def _resolver_asset_pdf_usuario(usuario_info: Optional[Dict[str, Any]], tipo: str) -> Optional[str]:
     """Resuelve logo/firma/sello con múltiples respaldos.
@@ -16075,7 +16376,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
 
     No embarazo: conserva el diseño ejecutivo general existente.
     """
-    from reportlab.platypus import SimpleDocTemplate, Spacer, Image, Table, TableStyle, KeepTogether
+    from reportlab.platypus import SimpleDocTemplate, Spacer, Image, Table, TableStyle, KeepTogether, KeepInFrame
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
     from reportlab.lib import colors
@@ -16187,7 +16488,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         story.append(Spacer(1, 2))
 
         # 6-7. FIRMA, SELLO Y LOGO INSTITUCIONAL
-        # V113: se dibujan en una banda inferior fija mediante callback de canvas.
+        # V114: se dibujan en una banda inferior fija mediante callback de canvas.
         # No se agregan como Flowables para evitar que ReportLab los desplace
         # fuera de la primera hoja cuando el contenido clínico ocupa más altura.
 
