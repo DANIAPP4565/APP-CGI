@@ -14878,6 +14878,36 @@ def _normalizar_pdf_generado_cgi(valor: Any, etiqueta: str) -> bytes:
     return valor
 
 
+# Generadores estables reservados exclusivamente para el procesamiento por lotes.
+# Se capturan antes de las redefiniciones posteriores de la interfaz para impedir
+# que una nueva versión visual rompa las descargas individuales ya operativas.
+_GENERAR_PDF_INTEGRADO_LOTE_ESTABLE = generar_pdf_integrado
+_GENERAR_PDF_UNA_HOJA_LOTE_ESTABLE = generar_pdf_resumido_una_hoja
+
+
+def _ejecutar_generador_pdf_lote_cgi(
+    generadores: List[Any], df: pd.DataFrame, contexto: Optional[Dict[str, Any]], etiqueta: str
+) -> Tuple[Optional[bytes], List[str]]:
+    """Prueba generadores equivalentes en orden y devuelve el primer PDF válido.
+
+    La lista permite conservar compatibilidad con versiones previas sin modificar
+    la generación individual normal de la aplicación.
+    """
+    errores: List[str] = []
+    vistos: set = set()
+    for generador in generadores:
+        if not callable(generador) or id(generador) in vistos:
+            continue
+        vistos.add(id(generador))
+        try:
+            pdf = _normalizar_pdf_generado_cgi(generador(df, contexto), etiqueta)
+            return bytes(pdf), errores
+        except Exception as exc:
+            nombre = getattr(generador, "__name__", "generador_pdf")
+            errores.append(f"{nombre}: {exc}")
+    return None, errores
+
+
 def _generar_pdfs_individuales_estudio_cgi(
     df: pd.DataFrame, contexto: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
@@ -14893,21 +14923,21 @@ def _generar_pdfs_individuales_estudio_cgi(
         "errores": {},
     }
 
-    try:
-        resultado["bytes_integrado"] = _normalizar_pdf_generado_cgi(
-            generar_pdf_integrado(df, contexto),
-            "Informe médico integrado",
-        )
-    except Exception as exc:
-        resultado["errores"]["integrado"] = str(exc)
+    pdf_integrado, errores_integrado = _ejecutar_generador_pdf_lote_cgi(
+        [generar_pdf_integrado, _GENERAR_PDF_INTEGRADO_LOTE_ESTABLE],
+        df, contexto, "Informe médico integrado",
+    )
+    resultado["bytes_integrado"] = pdf_integrado
+    if errores_integrado and not pdf_integrado:
+        resultado["errores"]["integrado"] = " | ".join(errores_integrado)
 
-    try:
-        resultado["bytes_una_hoja"] = _normalizar_pdf_generado_cgi(
-            generar_pdf_resumido_una_hoja(df, contexto),
-            "Informe de una hoja",
-        )
-    except Exception as exc:
-        resultado["errores"]["una_hoja"] = str(exc)
+    pdf_una_hoja, errores_una_hoja = _ejecutar_generador_pdf_lote_cgi(
+        [generar_pdf_resumido_una_hoja, _GENERAR_PDF_UNA_HOJA_LOTE_ESTABLE],
+        df, contexto, "Informe de una hoja",
+    )
+    resultado["bytes_una_hoja"] = pdf_una_hoja
+    if errores_una_hoja and not pdf_una_hoja:
+        resultado["errores"]["una_hoja"] = " | ".join(errores_una_hoja)
 
     resultado["cantidad_generada"] = sum(
         bool(resultado.get(k)) for k in ("bytes_integrado", "bytes_una_hoja")
@@ -15276,11 +15306,17 @@ def render_modulo_lotes_cgi(
                 exigir_curva=exigir_curva,
             )
         st.session_state["resultado_lote_cgi"] = resultado
+        # Copia explícita de los PDF individuales: evita que se pierdan al rerenderizar
+        # widgets, expanders o al recalcular el resumen del lote.
+        st.session_state["pdfs_individuales_lote_cgi"] = list(resultado.get("reportes") or [])
 
     resultado = st.session_state.get("resultado_lote_cgi")
     if not isinstance(resultado, dict):
         return
-    reportes = resultado.get("reportes") or []
+    reportes = st.session_state.get("pdfs_individuales_lote_cgi") or resultado.get("reportes") or []
+    # Reinyectar el manifiesto persistido para que ZIP, métricas y botones usen
+    # exactamente la misma colección de PDF individuales.
+    resultado["reportes"] = reportes
     errores = resultado.get("errores")
     c1, c2, c3, c4 = st.columns(4)
     total_pdf_individuales = sum(int(item.get("cantidad_pdfs") or 0) for item in reportes)
