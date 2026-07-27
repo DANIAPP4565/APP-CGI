@@ -14221,6 +14221,29 @@ def _nombre_unico_cgi(nombre: str, usados: set) -> str:
     return candidato
 
 
+MAX_DESCARGAS_INDIVIDUALES_LOTE_CGI = 24
+
+
+def _compactar_reportes_lote_para_sesion_cgi(reportes: List[Dict[str, Any]], max_individuales: int = MAX_DESCARGAS_INDIVIDUALES_LOTE_CGI) -> Tuple[List[Dict[str, Any]], bool]:
+    """Evita guardar cientos de PDFs duplicados en session_state.
+
+    Los ZIPs ya contienen todos los informes generados. Para lotes grandes se
+    conservan nombres, estado y errores, pero se quitan los bytes individuales
+    antes de persistir el resultado en Streamlit.
+    """
+    reportes = [dict(item) for item in (reportes or []) if isinstance(item, dict)]
+    if len(reportes) <= int(max_individuales):
+        return reportes, False
+    compactados: List[Dict[str, Any]] = []
+    for item in reportes:
+        copia = dict(item)
+        copia["bytes"] = None
+        copia["bytes_integrado"] = None
+        copia["bytes_una_hoja"] = None
+        compactados.append(copia)
+    return compactados, True
+
+
 def _paciente_desde_nombre_archivo_cgi(nombre_archivo: str) -> str:
     base = Path(str(nombre_archivo or "")).stem
     base = re.sub(r"[_-]+", " ", base)
@@ -15219,9 +15242,10 @@ def procesar_lote_cgi(
         timestamp_zip = datetime.now().strftime('%Y%m%d_%H%M%S')
         zip_integrados = _zip_por_tipo_lote("integrado")
         zip_una_hoja = _zip_por_tipo_lote("una_hoja")
+        reportes_sesion, reportes_compactados = _compactar_reportes_lote_para_sesion_cgi(reportes)
 
         return {
-            "reportes": reportes,
+            "reportes": reportes_sesion,
             "resumen": pd.DataFrame(resumen_rows),
             "errores": pd.DataFrame(errores_rows),
             "zip_bytes": zip_buffer.getvalue(),
@@ -15237,6 +15261,8 @@ def procesar_lote_cgi(
             "parejas_detectadas": sum(1 for g in grupos if g.get("pareado")),
             "pdf_individuales_generados": sum(int(item.get("cantidad_pdfs") or 0) for item in reportes),
             "estudios_con_ambos_formatos": sum(1 for item in reportes if int(item.get("cantidad_pdfs") or 0) == 2),
+            "descargas_individuales_compactadas": reportes_compactados,
+            "limite_descargas_individuales": MAX_DESCARGAS_INDIVIDUALES_LOTE_CGI,
         }
     finally:
         barra.empty()
@@ -15338,6 +15364,12 @@ def render_modulo_lotes_cgi(
             "Cuando un formato falla, el otro se conserva y se muestra el motivo específico."
         )
         st.markdown("#### Descarga por lotes")
+        if resultado.get("descargas_individuales_compactadas"):
+            st.info(
+                "Lote grande: para evitar que Streamlit se quede sin memoria, las descargas individuales "
+                f"no se guardan en la sesiÃ³n cuando hay mÃ¡s de {resultado.get('limite_descargas_individuales', MAX_DESCARGAS_INDIVIDUALES_LOTE_CGI)} estudios. "
+                "Todos los PDF generados estÃ¡n incluidos en los ZIP."
+            )
         zc1, zc2, zc3 = st.columns(3)
         with zc1:
             st.download_button(
@@ -15367,40 +15399,54 @@ def render_modulo_lotes_cgi(
                 use_container_width=True,
             )
 
-        with st.expander("Descargas individuales por paciente", expanded=True):
-            for i, item in enumerate(reportes, start=1):
-                fuentes = " + ".join(item.get("archivos_origen") or [])
-                st.markdown(
-                    f"**{i}. {item.get('paciente') or 'Paciente'}**  \n"
-                    f"Fuentes integradas: {fuentes}"
-                )
-                errores_item = dict(item.get("errores_generacion_pdf") or {})
-                col_int, col_1h = st.columns(2)
-                with col_int:
-                    if item.get("bytes_integrado"):
-                        st.download_button(
-                            "🧾 Descargar informe médico integrado",
-                            data=item.get("bytes_integrado"),
-                            file_name=item.get("nombre_integrado") or f"Informe_CGI_integrado_{i}.pdf",
-                            mime="application/pdf",
-                            key=f"download_integrado_cgi_{i}",
-                            use_container_width=True,
-                        )
-                    else:
-                        st.error("Informe integrado no generado: " + errores_item.get("integrado", "error no especificado"))
-                with col_1h:
-                    if item.get("bytes_una_hoja"):
-                        st.download_button(
-                            "📄 Descargar informe de una hoja",
-                            data=item.get("bytes_una_hoja"),
-                            file_name=item.get("nombre_una_hoja") or f"Informe_CGI_una_hoja_{i}.pdf",
-                            mime="application/pdf",
-                            key=f"download_una_hoja_cgi_{i}",
-                            use_container_width=True,
-                        )
-                    else:
-                        st.error("Informe de una hoja no generado: " + errores_item.get("una_hoja", "error no especificado"))
-                st.divider()
+        if not resultado.get("descargas_individuales_compactadas"):
+            with st.expander("Descargas individuales por paciente", expanded=True):
+                for i, item in enumerate(reportes, start=1):
+                    fuentes = " + ".join(item.get("archivos_origen") or [])
+                    st.markdown(
+                        f"**{i}. {item.get('paciente') or 'Paciente'}**  \n"
+                        f"Fuentes integradas: {fuentes}"
+                    )
+                    errores_item = dict(item.get("errores_generacion_pdf") or {})
+                    col_int, col_1h = st.columns(2)
+                    with col_int:
+                        if item.get("bytes_integrado"):
+                            st.download_button(
+                                "🧾 Descargar informe médico integrado",
+                                data=item.get("bytes_integrado"),
+                                file_name=item.get("nombre_integrado") or f"Informe_CGI_integrado_{i}.pdf",
+                                mime="application/pdf",
+                                key=f"download_integrado_cgi_{i}",
+                                use_container_width=True,
+                            )
+                        else:
+                            st.error("Informe integrado no generado: " + errores_item.get("integrado", "error no especificado"))
+                    with col_1h:
+                        if item.get("bytes_una_hoja"):
+                            st.download_button(
+                                "📄 Descargar informe de una hoja",
+                                data=item.get("bytes_una_hoja"),
+                                file_name=item.get("nombre_una_hoja") or f"Informe_CGI_una_hoja_{i}.pdf",
+                                mime="application/pdf",
+                                key=f"download_una_hoja_cgi_{i}",
+                                use_container_width=True,
+                            )
+                        else:
+                            st.error("Informe de una hoja no generado: " + errores_item.get("una_hoja", "error no especificado"))
+                    st.divider()
+        else:
+            with st.expander("Listado de estudios incluidos en los ZIP", expanded=False):
+                vista_reportes = []
+                for i, item in enumerate(reportes, start=1):
+                    vista_reportes.append({
+                        "Nro": i,
+                        "Paciente": item.get("paciente") or "Paciente",
+                        "Fuentes": " + ".join(item.get("archivos_origen") or []),
+                        "Informe integrado": item.get("nombre_integrado") or "NO GENERADO",
+                        "Informe una hoja": item.get("nombre_una_hoja") or "NO GENERADO",
+                        "PDF generados": item.get("cantidad_pdfs") or 0,
+                    })
+                st.dataframe(pd.DataFrame(vista_reportes), use_container_width=True, hide_index=True)
     elif resultado.get("zip_bytes"):
         st.warning("No se generaron informes válidos. El ZIP contiene el resumen de errores por pareja.")
         st.download_button(
