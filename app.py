@@ -22,7 +22,7 @@ st.set_page_config(
 )
 
 AUTOR_APP = "Ricardo Daniel Olano - Especialista en Cardiología e Hipertensión Arterial"
-BUILD_APP = "CGI-DOMINIOS-V109-METRICAS-20260724"
+BUILD_APP = "CGI-LOTES-PDF-INDIVIDUALES-FIX-20260727"
 TITULO_MODULO_NO_EMBARAZADA = "MODULO DE EVALUACION HEMODINAMICA NO INVASIVA POR CARDIOGRAFIA DE IMPEDANCIA"
 
 
@@ -14856,6 +14856,65 @@ def _seleccionar_mejor_curva_grupo_cgi(curvas: List[Dict[str, Any]]) -> Optional
     return max(validas, key=lambda c: float((c.get("metadata") or {}).get("score") or 0.0))
 
 
+def _normalizar_pdf_generado_cgi(valor: Any, etiqueta: str) -> bytes:
+    """Valida y normaliza el resultado de un generador PDF.
+
+    Evita registrar como informe individual un objeto vacío, texto, memoria no
+    volcada o bytes que no correspondan a un PDF real.
+    """
+    if valor is None:
+        raise ValueError(f"{etiqueta}: el generador devolvió None.")
+    if isinstance(valor, bytearray):
+        valor = bytes(valor)
+    elif isinstance(valor, memoryview):
+        valor = valor.tobytes()
+    elif isinstance(valor, str):
+        # FPDF 1.x puede devolver str latin-1; se conserva compatibilidad.
+        valor = valor.encode("latin-1", errors="replace")
+    if not isinstance(valor, bytes):
+        raise TypeError(f"{etiqueta}: tipo de salida no válido ({type(valor).__name__}).")
+    if len(valor) < 100 or not valor.lstrip().startswith(b"%PDF"):
+        raise ValueError(f"{etiqueta}: la salida no es un PDF válido ({len(valor)} bytes).")
+    return valor
+
+
+def _generar_pdfs_individuales_estudio_cgi(
+    df: pd.DataFrame, contexto: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Genera cada formato de manera independiente.
+
+    Una falla del informe de una hoja ya no elimina el informe médico integrado,
+    ni viceversa. Devuelve los bytes válidos y un diagnóstico específico por
+    formato para mostrarlo en pantalla y en el resumen del lote.
+    """
+    resultado: Dict[str, Any] = {
+        "bytes_integrado": None,
+        "bytes_una_hoja": None,
+        "errores": {},
+    }
+
+    try:
+        resultado["bytes_integrado"] = _normalizar_pdf_generado_cgi(
+            generar_pdf_integrado(df, contexto),
+            "Informe médico integrado",
+        )
+    except Exception as exc:
+        resultado["errores"]["integrado"] = str(exc)
+
+    try:
+        resultado["bytes_una_hoja"] = _normalizar_pdf_generado_cgi(
+            generar_pdf_resumido_una_hoja(df, contexto),
+            "Informe de una hoja",
+        )
+    except Exception as exc:
+        resultado["errores"]["una_hoja"] = str(exc)
+
+    resultado["cantidad_generada"] = sum(
+        bool(resultado.get(k)) for k in ("bytes_integrado", "bytes_una_hoja")
+    )
+    return resultado
+
+
 def procesar_lote_cgi(
     archivos: List[Any], usuario_info: Dict[str, Any], lectura_rapida: bool = True,
     guardar_historial: bool = True, incluir_originales: bool = False,
@@ -14957,35 +15016,46 @@ def procesar_lote_cgi(
                     contexto = _contexto_embarazo_automatico_lote_cgi(df)
                     informe_txt = generar_informe_texto(df, contexto)
 
-                    # Generar SIEMPRE las dos alternativas de informe para cada paciente:
-                    # 1) informe médico integrado completo; 2) informe ejecutivo de una hoja.
-                    pdf_integrado = generar_pdf_integrado(df, contexto)
-                    pdf_una_hoja = generar_pdf_resumido_una_hoja(df, contexto)
-                    if not pdf_integrado:
-                        raise ValueError("El generador del informe médico integrado devolvió un PDF vacío.")
-                    if not pdf_una_hoja:
-                        raise ValueError("El generador del informe de una hoja devolvió un PDF vacío.")
+                    # Generar los dos formatos de manera INDEPENDIENTE.
+                    # Antes, una excepción en uno de los generadores descartaba también el
+                    # otro PDF ya válido y el estudio desaparecía de las descargas individuales.
+                    generados = _generar_pdfs_individuales_estudio_cgi(df, contexto)
+                    pdf_integrado = generados.get("bytes_integrado")
+                    pdf_una_hoja = generados.get("bytes_una_hoja")
+                    errores_pdf = dict(generados.get("errores") or {})
+                    if not pdf_integrado and not pdf_una_hoja:
+                        detalle_pdf = " | ".join(f"{k}: {v}" for k, v in errores_pdf.items())
+                        raise ValueError(
+                            "No se pudo generar ningún PDF individual para el estudio. "
+                            + (detalle_pdf or "Los generadores devolvieron resultados vacíos.")
+                        )
 
                     nombre_integrado = _nombre_unico_cgi(nombre_archivo_pdf_medico_integrado(r), usados)
                     nombre_una_hoja = _nombre_unico_cgi(nombre_archivo_pdf_una_hoja_lote(r), usados)
-                    reportes.append({
+                    reporte_item = {
                         # Campos legacy para compatibilidad con código previo.
-                        "nombre": nombre_integrado,
-                        "bytes": pdf_integrado,
-                        # Nuevos campos explícitos por formato.
+                        "nombre": nombre_integrado if pdf_integrado else nombre_una_hoja,
+                        "bytes": pdf_integrado or pdf_una_hoja,
+                        # Campos explícitos por formato.
                         "nombre_integrado": nombre_integrado,
                         "bytes_integrado": pdf_integrado,
                         "nombre_una_hoja": nombre_una_hoja,
                         "bytes_una_hoja": pdf_una_hoja,
-                        "paciente": r.get("paciente"),
+                        "paciente": r.get("paciente") or _paciente_desde_nombre_archivo_cgi(nombres_grupo[0] if nombres_grupo else ""),
                         "origen": origen_compuesto,
                         "archivos_origen": nombres_grupo,
                         "pareja_complementaria": bool(grupo.get("pareado")),
                         "curva_ok": mejor_curva is not None,
-                    })
-                    # ZIP combinado: conserva ambas alternativas separadas en carpetas claras.
-                    zf.writestr(f"informes_medicos_integrados/{nombre_integrado}", pdf_integrado)
-                    zf.writestr(f"informes_una_hoja/{nombre_una_hoja}", pdf_una_hoja)
+                        "cantidad_pdfs": int(bool(pdf_integrado)) + int(bool(pdf_una_hoja)),
+                        "errores_generacion_pdf": errores_pdf,
+                    }
+                    reportes.append(reporte_item)
+
+                    # ZIP combinado: incorporar solamente los PDF realmente válidos.
+                    if pdf_integrado:
+                        zf.writestr(f"informes_medicos_integrados/{nombre_integrado}", pdf_integrado)
+                    if pdf_una_hoja:
+                        zf.writestr(f"informes_una_hoja/{nombre_una_hoja}", pdf_una_hoja)
 
                     if incluir_originales:
                         for cidx, comp in enumerate(componentes, start=1):
@@ -15027,10 +15097,13 @@ def procesar_lote_cgi(
                         "pdf_formato_4_hojas": cuatro.get("nombre") if cuatro else "",
                         "pdfs_integrados": len(componentes),
                         "pareja_complementaria": "SI" if grupo.get("pareado") else "NO - archivo sin pareja",
-                        "informe_medico_integrado": nombre_integrado,
-                        "informe_una_hoja": nombre_una_hoja,
-                        "informe_generado": nombre_integrado,
-                        "estado": "EXITOSO",
+                        "informe_medico_integrado": nombre_integrado if pdf_integrado else "NO GENERADO",
+                        "informe_una_hoja": nombre_una_hoja if pdf_una_hoja else "NO GENERADO",
+                        "informe_generado": nombre_integrado if pdf_integrado else nombre_una_hoja,
+                        "pdf_individuales_generados": int(bool(pdf_integrado)) + int(bool(pdf_una_hoja)),
+                        "estado": "EXITOSO" if pdf_integrado and pdf_una_hoja else "PARCIAL",
+                        "error_pdf_integrado": errores_pdf.get("integrado", ""),
+                        "error_pdf_una_hoja": errores_pdf.get("una_hoja", ""),
                         "curvas_digitalizadas": curvas_ok,
                         "curva_seleccionada_archivo": mejor_curva.get("archivo_origen") if mejor_curva else "",
                         "curva_pagina": ((mejor_curva or {}).get("metadata") or {}).get("pagina"),
@@ -15098,8 +15171,10 @@ def procesar_lote_cgi(
             with zipfile.ZipFile(salida, "w", compression=zipfile.ZIP_DEFLATED) as ztipo:
                 for item in reportes:
                     if tipo == "integrado":
-                        nombre_tipo = item.get("nombre_integrado") or item.get("nombre")
-                        bytes_tipo = item.get("bytes_integrado") or item.get("bytes")
+                        # No usar el campo legacy como respaldo: en resultados parciales
+                        # podría contener el PDF de una hoja y contaminar el ZIP integrado.
+                        nombre_tipo = item.get("nombre_integrado")
+                        bytes_tipo = item.get("bytes_integrado")
                     else:
                         nombre_tipo = item.get("nombre_una_hoja")
                         bytes_tipo = item.get("bytes_una_hoja")
@@ -15130,6 +15205,8 @@ def procesar_lote_cgi(
             "pdf_recibidos": len(archivos),
             "estudios_detectados": len(grupos),
             "parejas_detectadas": sum(1 for g in grupos if g.get("pareado")),
+            "pdf_individuales_generados": sum(int(item.get("cantidad_pdfs") or 0) for item in reportes),
+            "estudios_con_ambos_formatos": sum(1 for item in reportes if int(item.get("cantidad_pdfs") or 0) == 2),
         }
     finally:
         barra.empty()
@@ -15206,10 +15283,14 @@ def render_modulo_lotes_cgi(
     reportes = resultado.get("reportes") or []
     errores = resultado.get("errores")
     c1, c2, c3, c4 = st.columns(4)
+    total_pdf_individuales = sum(int(item.get("cantidad_pdfs") or 0) for item in reportes)
+    estudios_con_dos = sum(1 for item in reportes if int(item.get("cantidad_pdfs") or 0) == 2)
     c1.metric("PDF recibidos", resultado.get("pdf_recibidos", len(archivos_lote)))
-    c2.metric("Estudios integrados", resultado.get("estudios_detectados", len(reportes)))
-    c3.metric("Pacientes con 2 informes", len(reportes))
-    c4.metric("Errores", 0 if errores is None else len(errores))
+    c2.metric("Estudios con informe", len(reportes))
+    c3.metric("PDF individuales generados", total_pdf_individuales)
+    c4.metric("Errores completos", 0 if errores is None else len(errores))
+    if reportes:
+        st.caption(f"Estudios con ambos formatos: {estudios_con_dos}/{len(reportes)}")
     st.caption(
         f"Parejas detectadas: {resultado.get('parejas_detectadas', 0)} · "
         f"Historial actualizado: {resultado.get('historial_guardados', 0)}/{resultado.get('historial_total', 0)}"
@@ -15217,8 +15298,8 @@ def render_modulo_lotes_cgi(
 
     if reportes:
         st.success(
-            "Las parejas complementarias fueron integradas. Para cada paciente están disponibles "
-            "el informe médico integrado y el informe de una hoja; también puede descargarlos por lotes."
+            "El lote fue procesado y los PDF individuales válidos quedaron disponibles por paciente. "
+            "Cuando un formato falla, el otro se conserva y se muestra el motivo específico."
         )
         st.markdown("#### Descarga por lotes")
         zc1, zc2, zc3 = st.columns(3)
@@ -15257,25 +15338,32 @@ def render_modulo_lotes_cgi(
                     f"**{i}. {item.get('paciente') or 'Paciente'}**  \n"
                     f"Fuentes integradas: {fuentes}"
                 )
+                errores_item = dict(item.get("errores_generacion_pdf") or {})
                 col_int, col_1h = st.columns(2)
                 with col_int:
-                    st.download_button(
-                        "🧾 Descargar informe médico integrado",
-                        data=item.get("bytes_integrado") or item.get("bytes") or b"",
-                        file_name=item.get("nombre_integrado") or item.get("nombre") or f"Informe_CGI_integrado_{i}.pdf",
-                        mime="application/pdf",
-                        key=f"download_integrado_cgi_{i}_{abs(hash(item.get('nombre_integrado') or item.get('nombre','')))}",
-                        use_container_width=True,
-                    )
+                    if item.get("bytes_integrado"):
+                        st.download_button(
+                            "🧾 Descargar informe médico integrado",
+                            data=item.get("bytes_integrado"),
+                            file_name=item.get("nombre_integrado") or f"Informe_CGI_integrado_{i}.pdf",
+                            mime="application/pdf",
+                            key=f"download_integrado_cgi_{i}",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.error("Informe integrado no generado: " + errores_item.get("integrado", "error no especificado"))
                 with col_1h:
-                    st.download_button(
-                        "📄 Descargar informe de una hoja",
-                        data=item.get("bytes_una_hoja") or b"",
-                        file_name=item.get("nombre_una_hoja") or f"Informe_CGI_una_hoja_{i}.pdf",
-                        mime="application/pdf",
-                        key=f"download_una_hoja_cgi_{i}_{abs(hash(item.get('nombre_una_hoja','')))}",
-                        use_container_width=True,
-                    )
+                    if item.get("bytes_una_hoja"):
+                        st.download_button(
+                            "📄 Descargar informe de una hoja",
+                            data=item.get("bytes_una_hoja"),
+                            file_name=item.get("nombre_una_hoja") or f"Informe_CGI_una_hoja_{i}.pdf",
+                            mime="application/pdf",
+                            key=f"download_una_hoja_cgi_{i}",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.error("Informe de una hoja no generado: " + errores_item.get("una_hoja", "error no especificado"))
                 st.divider()
     elif resultado.get("zip_bytes"):
         st.warning("No se generaron informes válidos. El ZIP contiene el resumen de errores por pareja.")
