@@ -22,7 +22,7 @@ st.set_page_config(
 )
 
 AUTOR_APP = "Ricardo Daniel Olano - Especialista en Cardiología e Hipertensión Arterial"
-BUILD_APP = "CGI-LOTES-PDF-INDIVIDUALES-FIX-20260727"
+BUILD_APP = "CGI-INFORME-COMPLETO-SIN-FE-WEISSLER-20260804"
 TITULO_MODULO_NO_EMBARAZADA = "MODULO DE EVALUACION HEMODINAMICA NO INVASIVA POR CARDIOGRAFIA DE IMPEDANCIA"
 
 
@@ -12428,13 +12428,12 @@ def _zlogic_parse_page4_adicionales(text4: str) -> Tuple[Dict[str, Any], Dict[st
         basal["CFTnr"] = limpiar_numero(cftnr)
     # Pares ACOSTADO/PARADO de acoplamiento VA.
     _zlogic_set_pair(basal, parado, "EA", _zlogic_find_line_values(text4, r"^\s*EA\b"))
-    # Preferir EES Capan si está presente; si no, EES Weissler.
+    # EES y AC se importan exclusivamente por método Capan.
+    # Se retira por completo el uso de Weissler en el informe y como respaldo del parser.
     vals_ees_capan = _zlogic_find_line_values(text4, r"EES\s*\(\s*Capan\s*\)")
-    vals_ees_weiss = _zlogic_find_line_values(text4, r"EES\s*\(\s*Weissler\s*\)")
-    _zlogic_set_pair(basal, parado, "EES", vals_ees_capan or vals_ees_weiss)
+    _zlogic_set_pair(basal, parado, "EES", vals_ees_capan)
     vals_ac_capan = _zlogic_find_line_values(text4, r"AC\s*\(\s*Capan\s*\)")
-    vals_ac_weiss = _zlogic_find_line_values(text4, r"AC\s*\(\s*Weissler\s*\)")
-    _zlogic_set_pair(basal, parado, "EA/EES", vals_ac_capan or vals_ac_weiss)
+    _zlogic_set_pair(basal, parado, "EA/EES", vals_ac_capan)
     return basal, parado
 
 
@@ -14695,14 +14694,14 @@ def nombre_archivo_pdf_medico_integrado(r: Dict[str, Any]) -> str:
 
 
 def nombre_archivo_pdf_una_hoja_lote(r: Dict[str, Any]) -> str:
-    """Nombre del informe ejecutivo de una hoja para uso individual y por lotes.
+    """Nombre del INFORME COMPLETO de una hoja para uso individual y por lotes.
 
     Mantiene la misma identificación clínica del informe integrado y agrega un
     sufijo inequívoco para que ambos archivos puedan coexistir en la descarga.
     """
     nombre_integrado = nombre_archivo_pdf_medico_integrado(r)
     p = Path(nombre_integrado)
-    return f"{p.stem}, INFORME UNA HOJA.pdf"
+    return f"{p.stem}, INFORME COMPLETO.pdf"
 
 
 def _normalizar_stem_pareja_cgi(nombre_archivo: str) -> str:
@@ -15283,7 +15282,7 @@ def render_modulo_lotes_cgi(
     st.caption(
         "Importe hasta 100 PDF. La app detecta automáticamente cada pareja complementaria "
         "(archivo terminado en 1 + archivo base sin 1), integra ambos documentos y genera "
-        "dos alternativas por paciente: informe médico integrado e informe de una hoja."
+        "dos alternativas por paciente: informe médico integrado e INFORME COMPLETO de una hoja."
     )
     archivos_lote = list(archivos_lote or [])
     if len(archivos_lote) > 100:
@@ -15322,7 +15321,7 @@ def render_modulo_lotes_cgi(
         disabled=not bool(archivos_lote),
         key="btn_procesar_lote_cgi",
     ):
-        with st.spinner("Agrupando parejas, integrando datos y generando informe médico integrado + informe de una hoja por paciente..."):
+        with st.spinner("Agrupando parejas, integrando datos y generando informe médico integrado + INFORME COMPLETO por paciente..."):
             resultado = procesar_lote_cgi(
                 archivos_lote,
                 usuario_info,
@@ -15382,9 +15381,9 @@ def render_modulo_lotes_cgi(
             )
         with zc2:
             st.download_button(
-                "📄 ZIP · Informes de una hoja",
+                "📄 ZIP · INFORMES COMPLETOS",
                 data=resultado.get("zip_una_hoja_bytes") or b"",
-                file_name=resultado.get("zip_una_hoja_nombre") or "Informes_CGI_UNA_HOJA.zip",
+                file_name=resultado.get("zip_una_hoja_nombre") or "Informes_CGI_COMPLETOS.zip",
                 mime="application/zip",
                 key="download_zip_una_hoja_lote_cgi",
                 use_container_width=True,
@@ -15424,15 +15423,15 @@ def render_modulo_lotes_cgi(
                     with col_1h:
                         if item.get("bytes_una_hoja"):
                             st.download_button(
-                                "📄 Descargar informe de una hoja",
+                                "📄 Descargar INFORME COMPLETO",
                                 data=item.get("bytes_una_hoja"),
-                                file_name=item.get("nombre_una_hoja") or f"Informe_CGI_una_hoja_{i}.pdf",
+                                file_name=item.get("nombre_una_hoja") or f"Informe_CGI_COMPLETO_{i}.pdf",
                                 mime="application/pdf",
                                 key=f"download_una_hoja_cgi_{i}",
                                 use_container_width=True,
                             )
                         else:
-                            st.error("Informe de una hoja no generado: " + errores_item.get("una_hoja", "error no especificado"))
+                            st.error("INFORME COMPLETO no generado: " + errores_item.get("una_hoja", "error no especificado"))
                     st.divider()
         else:
             with st.expander("Listado de estudios incluidos en los ZIP", expanded=False):
@@ -15443,7 +15442,7 @@ def render_modulo_lotes_cgi(
                         "Paciente": item.get("paciente") or "Paciente",
                         "Fuentes": " + ".join(item.get("archivos_origen") or []),
                         "Informe integrado": item.get("nombre_integrado") or "NO GENERADO",
-                        "Informe una hoja": item.get("nombre_una_hoja") or "NO GENERADO",
+                        "INFORME COMPLETO": item.get("nombre_una_hoja") or "NO GENERADO",
                         "PDF generados": item.get("cantidad_pdfs") or 0,
                     })
                 st.dataframe(pd.DataFrame(vista_reportes), use_container_width=True, hide_index=True)
@@ -16660,7 +16659,7 @@ def _footer_materno_con_assets_factory(usuario_info: Optional[Dict[str, Any]] = 
 
 
 def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[Dict[str, Any]]=None) -> bytes:
-    """Informe ejecutivo real de una página.
+    """INFORME COMPLETO en una sola página.
 
     Embarazo: estructura fija solicitada:
       1) Datos del paciente
@@ -16712,7 +16711,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         # después del bloque de firma y sello, según la estructura solicitada.
         story += _paper_header_story_sin_logo_cgi(
             "INFORME HEMODINAMIA MATERNA",
-            "Informe ejecutivo de una hoja - hemodinamia por edad gestacional y análisis predictivo",
+            "INFORME COMPLETO - hemodinamia por edad gestacional y análisis predictivo",
         )
 
         # 1. DATOS DEL PACIENTE
@@ -16792,7 +16791,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
     else:
         # Informe no obstétrico: se conserva el diseño previo y su logo de cabecera.
         titulo = TITULO_MODULO_NO_EMBARAZADA
-        sub = "Informe ejecutivo de una hoja - dominios hemodinámicos integrados"
+        sub = "INFORME COMPLETO - dominios hemodinámicos integrados"
         story += _paper_header_story(titulo, sub)
         story.append(_paper_datos_paciente_table(r, contexto_embarazo, w))
         story.append(Spacer(1, 2))
@@ -18768,7 +18767,7 @@ nombre = re.sub(r'[\\/:*?"<>|\s]+', "_", str(r.get("paciente") or "paciente").st
 # BOTONES EXPLÍCITOS DE GENERACIÓN DE PDF
 # =========================================================
 # Se separa la acción de generar de la acción de descargar para que el usuario
-# vea claramente ambos informes: completo integrado y resumido de una hoja.
+# vea claramente ambos informes: integrado y COMPLETO de una hoja.
 
 st.subheader("Descarga de informes PDF")
 col_pdf1, col_pdf2 = st.columns(2)
@@ -18793,18 +18792,18 @@ with col_pdf1:
         )
 
 with col_pdf2:
-    if st.button("📄 Generar PDF resumido de una hoja", key="btn_generar_pdf_resumido"):
+    if st.button("📄 Generar INFORME COMPLETO", key="btn_generar_pdf_resumido"):
         try:
             st.session_state["pdf_resumido_bytes"] = generar_pdf_resumido_una_hoja(df_final, contexto_embarazo)
             st.session_state["pdf_resumido_nombre"] = nombre_archivo_pdf_una_hoja_lote(r)
-            st.success("PDF resumido de una hoja generado correctamente.")
+            st.success("INFORME COMPLETO generado correctamente.")
         except Exception as e:
             st.session_state.pop("pdf_resumido_bytes", None)
-            st.error(f"No se pudo generar el PDF resumido: {e}")
+            st.error(f"No se pudo generar el INFORME COMPLETO: {e}")
 
     if st.session_state.get("pdf_resumido_bytes"):
         st.download_button(
-            "📄 Descargar PDF informe de una hoja",
+            "📄 Descargar INFORME COMPLETO",
             data=st.session_state["pdf_resumido_bytes"],
             file_name=st.session_state.get("pdf_resumido_nombre", nombre_archivo_pdf_una_hoja_lote(r)),
             mime="application/pdf",
