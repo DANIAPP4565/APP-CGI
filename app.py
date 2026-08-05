@@ -17578,6 +17578,179 @@ def _estado_assets_pdf_cgi(usuario_info: Optional[Dict[str, Any]] = None) -> Dic
     }
 
 
+
+
+# =========================================================
+# V122 - CORRECCIÓN DEFINITIVA DE IMPORTACIÓN CA Y SEXO Z-LOGIC
+# - CA se obtiene exclusivamente de "Complacencia Arterial".
+# - Nunca se acepta FC=114, IAC u otra métrica como CA.
+# - Sexo: F = Femenino; M = Masculino, solo desde el campo Sexo.
+# - Aplicado a lectura individual y por lotes, sin alterar otros módulos.
+# =========================================================
+BUILD_APP = "CGI-CA-SEXO-ZLOGIC-CORREGIDO-20260805"
+
+
+def _extraer_ca_sexo_zlogic_bytes(pdf_bytes: bytes) -> Dict[str, Any]:
+    """Lee CA y sexo desde rótulos explícitos del PDF Z-Logic.
+
+    Devuelve:
+      sexo: "F" o "M"
+      ca_basal: Complacencia Arterial basal en mL/mmHg
+      ca_parado: Complacencia Arterial de pie, cuando existe tabla comparativa
+
+    No utiliza el rótulo "Índice de Complacencia Arterial" ni valores por posición
+    ordinal. Esto impide asignar FC=114 o IAC a CA.
+    """
+    resultado: Dict[str, Any] = {"sexo": None, "ca_basal": None, "ca_parado": None}
+    if not pdf_bytes:
+        return resultado
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            textos = [(p.extract_text(x_tolerance=2, y_tolerance=3) or "") for p in pdf.pages]
+    except Exception:
+        return resultado
+
+    texto_total = "\n".join(textos)
+
+    # Sexo: aceptar únicamente el campo explícito Sexo F / Sexo M.
+    msexo = re.search(r"\bSexo\s*[:=\-]?\s*([FM])\b", texto_total, flags=re.IGNORECASE)
+    if msexo:
+        resultado["sexo"] = msexo.group(1).upper()
+
+    candidatos_basal: List[float] = []
+    candidatos_parado: List[float] = []
+
+    for pagina in textos:
+        for linea in pagina.splitlines():
+            linea_limpia = re.sub(r"\s+", " ", str(linea)).strip()
+            if not linea_limpia:
+                continue
+            # Excluir explícitamente ICA indexada; el campo solicitado aquí es CA.
+            if re.search(r"[ÍI]ndice\s+de\s+Complacencia\s+Arterial", linea_limpia, flags=re.IGNORECASE):
+                continue
+            if not re.search(r"(?:^|\bCA\s+)Complacencia\s+Arterial\b|^Complacencia\s+Arterial\b", linea_limpia, flags=re.IGNORECASE):
+                continue
+
+            # Eliminar cualquier número previo al valor, aunque normalmente no existe.
+            resto = re.sub(
+                r"^\s*(?:CA\s+)?Complacencia\s+Arterial\s*[:=\-]?\s*",
+                "",
+                linea_limpia,
+                flags=re.IGNORECASE,
+            )
+            nums = [limpiar_numero(x) for x in re.findall(r"[-+]?\d+(?:[.,]\d+)?", resto)]
+            nums = [x for x in nums if x is not None and 0.20 <= x <= 8.00]
+            if nums:
+                candidatos_basal.append(nums[0])
+                if len(nums) >= 2:
+                    candidatos_parado.append(nums[1])
+
+    # En el formato de cuatro hojas, la tabla comparativa de la hoja 3 es la
+    # fuente más clara porque contiene CA basal y CA parado en la misma fila.
+    for pagina in textos:
+        for linea in pagina.splitlines():
+            linea_limpia = re.sub(r"\s+", " ", str(linea)).strip()
+            if re.search(r"^Complacencia\s+Arterial\b", linea_limpia, flags=re.IGNORECASE):
+                resto = re.sub(r"^Complacencia\s+Arterial\s*", "", linea_limpia, flags=re.IGNORECASE)
+                nums = [limpiar_numero(x) for x in re.findall(r"[-+]?\d+(?:[.,]\d+)?", resto)]
+                nums = [x for x in nums if x is not None and 0.20 <= x <= 8.00]
+                if nums:
+                    resultado["ca_basal"] = nums[0]
+                    if len(nums) >= 2:
+                        resultado["ca_parado"] = nums[1]
+                    break
+        if resultado["ca_basal"] is not None and resultado["ca_parado"] is not None:
+            break
+
+    if resultado["ca_basal"] is None and candidatos_basal:
+        resultado["ca_basal"] = candidatos_basal[0]
+    if resultado["ca_parado"] is None and candidatos_parado:
+        resultado["ca_parado"] = candidatos_parado[0]
+    return resultado
+
+
+def _sanitizar_ca_sexo_dataframe_zlogic(df: pd.DataFrame, pdf_bytes: bytes) -> pd.DataFrame:
+    """Corrige CA y sexo manteniendo intactas las demás columnas y filas."""
+    if df is None or not isinstance(df, pd.DataFrame):
+        return df
+    out = df.copy()
+    datos = _extraer_ca_sexo_zlogic_bytes(pdf_bytes)
+
+    sexo = datos.get("sexo")
+    if sexo in {"F", "M"}:
+        # Mantener ambas convenciones usadas históricamente por la app.
+        out["Sexo"] = sexo
+        out["sexo"] = sexo
+
+    ca_basal = limpiar_numero(datos.get("ca_basal"))
+    ca_parado = limpiar_numero(datos.get("ca_parado"))
+
+    # Si no existe CA explícita, eliminar únicamente valores imposibles que hayan
+    # sido capturados desde otra métrica. No inventar ni inferir CA.
+    for col in ["CA", "ca"]:
+        if col in out.columns:
+            out[col] = out[col].map(
+                lambda x: limpiar_numero(x) if rango_plausible("ca", limpiar_numero(x)) else None
+            )
+
+    if ca_basal is not None:
+        if "CA" not in out.columns:
+            out["CA"] = None
+        if "ca" not in out.columns:
+            out["ca"] = None
+
+        if len(out) == 1:
+            out.loc[out.index[0], ["CA", "ca"]] = ca_basal
+        else:
+            # Asignar según posición reconocida; si no existe, primera fila = basal.
+            indices_basal: List[Any] = []
+            indices_parado: List[Any] = []
+            for ix, fila in out.iterrows():
+                try:
+                    pos = detectar_posicion_fila(fila.to_dict())
+                except Exception:
+                    pos = ""
+                if str(pos).lower() in {"de_pie", "parado"}:
+                    indices_parado.append(ix)
+                else:
+                    indices_basal.append(ix)
+            if not indices_basal:
+                indices_basal = [out.index[0]]
+            for ix in indices_basal:
+                out.loc[ix, ["CA", "ca"]] = ca_basal
+            if ca_parado is not None:
+                for ix in indices_parado:
+                    out.loc[ix, ["CA", "ca"]] = ca_parado
+
+    out.attrs = {}
+    return out
+
+
+# Lectura individual: conservar el extractor vigente y sanear solo CA/sexo.
+_extraer_pdf_a_dataframe_v121_sin_sanitizar_ca = extraer_pdf_a_dataframe
+
+def extraer_pdf_a_dataframe(uploaded_file) -> pd.DataFrame:
+    try:
+        raw = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
+    except Exception:
+        raw = b""
+    try:
+        if hasattr(uploaded_file, "seek"):
+            uploaded_file.seek(0)
+    except Exception:
+        pass
+    df = _extraer_pdf_a_dataframe_v121_sin_sanitizar_ca(uploaded_file)
+    return _sanitizar_ca_sexo_dataframe_zlogic(df, raw)
+
+
+# Lectura por lotes: aplicar la misma regla luego de la lectura rápida/robusta.
+_leer_pdf_lote_cgi_v121_sin_sanitizar_ca = _leer_pdf_lote_cgi
+
+def _leer_pdf_lote_cgi(nombre_archivo: str, pdf_bytes: bytes, lectura_rapida: bool = True) -> pd.DataFrame:
+    df = _leer_pdf_lote_cgi_v121_sin_sanitizar_ca(nombre_archivo, pdf_bytes, lectura_rapida=lectura_rapida)
+    return _sanitizar_ca_sexo_dataframe_zlogic(df, pdf_bytes)
+
 with st.sidebar:
     st.success(f"Usuario: {usuario_actual.get('nombre', usuario_actual.get('usuario', ''))}")
     if usuario_actual.get("matricula"):
