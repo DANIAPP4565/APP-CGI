@@ -16789,43 +16789,152 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         # fuera de la primera hoja cuando el contenido clínico ocupa más altura.
 
     else:
-        # Informe no obstétrico: se conserva el diseño previo y su logo de cabecera.
-        titulo = TITULO_MODULO_NO_EMBARAZADA
-        sub = "INFORME COMPLETO - dominios hemodinámicos integrados"
+        # INFORME OFICIAL NO OBSTÉTRICO: plantilla gráfica profesional CGI.
+        # IMPORTANTE: este bloque se ejecuta exclusivamente cuando NO es embarazo;
+        # el informe obstétrico precedente queda sin modificaciones.
+        titulo = "INFORME PROFESIONAL - CARDIOGRAFÍA DE IMPEDANCIA (CGI)"
+        sub = "ZLogic (Exxer) | Fenotipo hemodinámico, dominios integrados y orientación terapéutica"
         story += _paper_header_story(titulo, sub)
+
+        # 1. Datos del paciente
+        story.append(_paper_paragraph("Datos del paciente", stl["PaperH"]))
         story.append(_paper_datos_paciente_table(r, contexto_embarazo, w))
         story.append(Spacer(1, 2))
 
+        # 2. Metodología: breve, trazable y utilizable como informe oficial.
         story.append(_paper_paragraph("Metodología del estudio", stl["PaperH"]))
+        metodologia_profesional = (
+            "Cardiografía de impedancia torácica realizada con sistema ZLogic (Exxer), mediante registro no invasivo "
+            "de las variaciones de bioimpedancia torácica sincronizadas con el ciclo cardíaco. El protocolo incluye "
+            "reposo previo, registro basal en decúbito supino y, cuando está disponible, evaluación en bipedestación. "
+            "Se utiliza el promedio de tres registros consecutivos de calidad aceptable por posición. La clasificación "
+            "del fenotipo se basa en el registro ACOSTADO/CINTA/SPOT/ESTUDIO BASAL; PARADO se interpreta únicamente "
+            "como respuesta ortostática."
+        )
+        story.append(_paper_paragraph(metodologia_profesional, stl["PaperSmall"]))
+        story.append(Spacer(1, 2))
+
+        # 3. Tabla de dominios solicitada.
+        def _val_local(*keys):
+            for key in keys:
+                v = limpiar_numero(rb.get(key))
+                if v is not None:
+                    return v
+            return None
+
+        ic = _val_local("ic")
+        irv = _val_local("irv")
+        iv = _val_local("iv")
+        ica = _val_local("ca")
+        iac = _val_local("iac")
+        ivs = _val_local("ivs", "ids")
+        cts = normalizar_cts_cgi(_val_local("cts"))
+        its = _val_local("its", "itc")
+        cft = _val_local("cft")
+        ac = _val_local("ava")
+
+        def _estado_rango(v, bajo, alto, bajo_txt="Disminuido", normal_txt="Dentro de rango", alto_txt="Elevado"):
+            if v is None:
+                return "No evaluable"
+            if v < bajo:
+                return bajo_txt
+            if v > alto:
+                return alto_txt
+            return normal_txt
+
+        sexo_local = rb.get("sexo") or r.get("sexo")
+        cft_bajo, cft_alto, cft_ref = referencia_cft_sexo(sexo_local, embarazo=False)
+        if cft_bajo is None or cft_alto is None:
+            cft_ref = "Según sexo y contexto clínico"
+            cft_estado = "Interpretación condicionada al sexo"
+        else:
+            cft_estado = _estado_rango(cft, cft_bajo, cft_alto, "Hipovolemia relativa", "Normovolemia", "Hipervolemia/congestión")
+
+        dominios_rows = [
+            ["Parámetro", "Resultado", "Referencia operativa", "Significado clínico"],
+            ["IC - Índice cardíaco", f"{fmt(ic,2)} L/min/m²", "2,5-4,0", _estado_rango(ic,2.5,4.0,"Flujo bajo","Flujo conservado","Flujo elevado")],
+            ["IRV - Resistencia vascular indexada", f"{fmt(irv,0)} dyn.s.cm-5.m²", "1200-2000", _estado_rango(irv,1200,2000,"Vasodilatación relativa","Resistencia adecuada","Vasoconstricción/poscarga elevada")],
+            ["IV - Índice de velocidad", f"{fmt(iv,1)} /1000/s", "35-60", _estado_rango(iv,35,60,"Velocidad contráctil reducida","Velocidad conservada","Velocidad aumentada")],
+            ["ICA/CA - Compliance arterial", f"{fmt(ica,2)} mL/mmHg", "1,0-3,0", clasificar_metrica_canonica("CA",ica)],
+            ["IAC - Índice de aceleración", f"{fmt(iac,1)} /100 s²", "70-150*", _estado_rango(iac,70,150,"Aceleración reducida","Aceleración conservada","Aceleración aumentada")],
+            ["IVS/IDS - Índice de volumen sistólico", f"{fmt(ivs,1)} mL/lat/m²", "35-65", _estado_rango(ivs,35,65,"Volumen sistólico bajo","Volumen sistólico conservado","Volumen sistólico elevado")],
+            ["CTS - PEP/LVET", fmt(cts,3), "0,30-0,50", clasificar_metrica_canonica("CTS",cts)],
+            ["ITS/ITC - Trabajo sistólico cardíaco", fmt(its,2), "Según equipo/sexo/SC", "Carga de trabajo miocárdico; interpretar con PA, IC y poscarga" if its is not None else "No evaluable"],
+            ["CFT - Fluidos torácicos", f"{fmt(cft,2)} 1/kΩ", cft_ref, cft_estado],
+            ["AC Capan - Ea/Ees", fmt(ac,2), "<1 óptimo; 1-1,3 subóptimo; >1,3 desacoplado", clasificar_metrica_canonica("EA/EES",ac)],
+        ]
+        story.append(_paper_paragraph("Tabla de dominios hemodinámicos", stl["PaperH"]))
+        story.append(_paper_table(dominios_rows, [w*.25, w*.19, w*.22, w*.34], header=True, compact=True))
         story.append(_paper_paragraph(
-            metodologia_una_hoja.replace("la paciente", "el/la paciente"),
+            "*El rango de IAC puede requerir ajuste por sexo y población. Las referencias impresas no sustituyen la interpretación clínica integrada ni la trazabilidad del equipo.",
             stl["PaperSmall"],
         ))
         story.append(Spacer(1, 2))
 
-        story.append(_paper_paragraph("E. Informe de dominios integrados resumido y didáctico", stl["PaperH"]))
-        story.append(_paper_dominios_integrados_table(rb, dfx, w))
-        story.append(Spacer(1, 3))
-        g = None
+        # 4. Matriz de fenotipo hemodinámico IC vs IRV, con punto real del paciente.
+        story.append(_paper_paragraph("Matriz de fenotipo hemodinámico basal (IC vs IRV)", stl["PaperH"]))
+        g_fenotipo = None
         try:
-            g = crear_grafico_hemodinamico_no_embarazo_una_hoja_bytes(rb, dfx)
+            g_fenotipo = crear_grafico_fenotipado_dinamico_bytes(rb, dfx)
         except Exception:
-            pass
-        if g:
-            story.append(Image(g, width=w, height=w*.38, kind="proportional"))
+            try:
+                g_fenotipo = crear_grafico_hemodinamico_no_embarazo_una_hoja_bytes(rb, dfx)
+            except Exception:
+                g_fenotipo = None
+        if g_fenotipo:
+            story.append(Image(g_fenotipo, width=w, height=w*.30, kind="proportional"))
+        else:
+            story.append(_paper_paragraph(
+                "No se pudo generar la matriz: se requieren IC e IRV indexado válidos del registro basal.",
+                stl["PaperSmall"],
+            ))
+        patron_final = clasificacion_dinamica_obligatoria(rb, None)
+        story.append(_paper_paragraph(
+            f"Fenotipo basal identificado: {patron_final}. El punto del paciente se clasifica con IC e IRV indexado; no se reemplaza IRV por RVS no indexada.",
+            stl["PaperSmall"],
+        ))
         story.append(Spacer(1, 2))
-        ac = limpiar_numero(rb.get("ava"))
-        cts = normalizar_cts_cgi(rb.get("cts"))
-        concl = (
-            f"Patrón basal: {clasificacion_dinamica_obligatoria(rb,None)}. "
-            f"AC Capan/EA-EES: {fmt(ac,2)}. IV: {fmt(rb.get('iv'),2)}. "
-            f"CTS: {fmt(cts,2)}. CFT: {fmt(rb.get('cft'),2)}."
+
+        # 5. Algoritmo secuencial de decisión terapéutica por dominios.
+        story.append(_paper_paragraph("Algoritmo de decisión terapéutica orientado por fenotipo", stl["PaperH"]))
+        pasos = []
+        if irv is not None and irv > 2000:
+            pasos.append(["1. Reducir poscarga", "IRV elevada", "Priorizar estrategia vasodilatadora según indicación clínica: IECA/ARA II, calcioantagonista o ajuste de otros vasodilatadores; revisar volumen y tolerancia."])
+        elif irv is not None and irv < 1200:
+            pasos.append(["1. Evitar vasodilatación excesiva", "IRV baja", "Revisar dosis vasodilatadoras, hipotensión, depleción de volumen y causas de estado hiperdinámico."])
+        else:
+            pasos.append(["1. Pos/carga vascular", "IRV en rango o no evaluable", "Mantener o ajustar según presión arterial, daño de órgano blanco y comorbilidades."])
+
+        contract_baja = ((iv is not None and iv < 35) or (iac is not None and iac < 70) or (cts is not None and cts > 0.50))
+        if contract_baja:
+            pasos.append(["2. Optimizar desempeño cardíaco", "IV/IAC/CTS sugieren contractilidad reducida", "Revisar beta-bloqueo, isquemia, frecuencia, función ventricular y necesidad de soporte específico; no indicar inotrópicos sin contexto de insuficiencia cardíaca aguda."])
+        else:
+            pasos.append(["2. Contractilidad", "Sin señal dominante de deterioro", "Conservar estrategia actual y reevaluar si persiste bajo flujo tras corregir resistencia y volumen."])
+
+        if cft_bajo is not None and cft is not None and cft > cft_alto:
+            pasos.append(["3. Corregir congestión", "CFT elevado", "Evaluar diurético, sodio, función renal, peso y signos clínicos de congestión."])
+        elif cft_bajo is not None and cft is not None and cft < cft_bajo:
+            pasos.append(["3. Corregir depleción", "CFT bajo", "Revisar diuréticos, ingesta, pérdidas y riesgo de hipovolemia antes de intensificar vasodilatación."])
+        else:
+            pasos.append(["3. Estado de volumen", "CFT compatible con euvolemia o no concluyente", "No modificar volumen solo por CGI; correlacionar con examen físico, peso, función renal y biomarcadores."])
+
+        pasos.append(["4. Reevaluación", "Después del ajuste", "Repetir CGI y presión arterial para verificar desplazamiento hacia normodinamia/eudinamia y documentar respuesta ortostática."])
+        algoritmo_rows = [["Paso", "Hallazgo", "Orientación por grupo terapéutico"]] + pasos
+        story.append(_paper_table(algoritmo_rows, [w*.18, w*.25, w*.57], header=True, compact=True))
+        story.append(Spacer(1, 2))
+
+        # 6. Conclusión médica integrada.
+        story.append(_paper_paragraph("Conclusiones médicas", stl["PaperH"]))
+        concl = _conclusion_clinica_paper(rb, contexto_embarazo) if callable(globals().get("_conclusion_clinica_paper")) else (
+            f"Fenotipo hemodinámico basal: {patron_final}. IC {fmt(ic,2)} L/min/m² e IRV {fmt(irv,0)} dyn.s.cm-5.m². "
+            f"Estado volumétrico: {cft_estado}. Acoplamiento ventrículo-arterial: {clasificar_metrica_canonica('EA/EES',ac)}."
         )
         story.append(_paper_paragraph(concl, stl["PaperSmall"]))
         story.append(_paper_paragraph(
-            "La referencia diagnóstica es ACOSTADO/CINTA/SPOT/ESTUDIO BASAL; PARADO se reserva para respuesta ortostática. Se informa IRV, índice de resistencia vascular indexado a superficie corporal. RVS es no indexada y no se utiliza como sustituto clínico del IRV.",
+            "La orientación terapéutica es fisiopatológica y no constituye prescripción automática. Debe integrarse con diagnóstico, presión arterial, función renal, electrolitos, fracción de eyección, comorbilidades, tratamiento previo, contraindicaciones y guías vigentes.",
             stl["PaperSmall"],
         ))
+
         usuario_info = st.session_state.get("usuario_actual", {})
         firma_sello = _paper_signature_table(w, usuario_info=usuario_info)
         if firma_sello:
@@ -16841,6 +16950,8 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         footer_cb = _footer_materno_con_assets_factory(usuario_info)
         doc.build(story, onFirstPage=footer_cb, onLaterPages=_paper_footer)
     else:
+        # Garantía de una sola hoja para el nuevo modelo profesional no obstétrico.
+        story = [KeepInFrame(w, doc.height, story, mode="shrink", mergeSpace=True)]
         doc.build(story, onFirstPage=_paper_footer, onLaterPages=_paper_footer)
     return b.getvalue()
 
