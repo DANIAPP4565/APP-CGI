@@ -728,6 +728,7 @@ VARIABLES_CGI: Dict[str, List[str]] = {
     "dni": ["dni", "documento", "doc", "identificacion", "id"],
     "obra_social": ["obra social", "obra_social", "cobertura", "prepaga", "mutual", "seguro medico", "seguro médico", "financiador"],
     "edad": ["edad", "age", "anos", "años", "año", "years", "yrs"],
+    "sexo": ["sexo", "sexo biologico", "sexo biológico", "sex", "genero", "género"],
     "fecha_nacimiento": ["fecha de nacimiento", "fecha nacimiento", "f nacimiento", "f. nacimiento", "fec nacimiento", "fecha nac", "fec nac", "nacimiento", "born", "birth date", "date of birth", "dob"],
     "fecha_estudio": ["fecha estudio", "fecha del estudio", "fecha de estudio", "study date", "fecha informe", "fecha del informe", "fecha examen", "fecha del examen", "fecha medicion", "fecha medición", "date"],
     # Se mantiene "fecha" como respaldo genérico; nunca debe pisar fecha de nacimiento.
@@ -1022,6 +1023,12 @@ def extraer_demografico(clave: str, linea: str, siguientes: List[str]) -> Option
             return e if 0 < e < 120 else None
         return None
 
+    if clave == "sexo":
+        m = re.search(r"(?:sexo(?:\s+biol[oó]gico)?|sex|g[eé]nero)\s*[:=\-]?\s*(femenino|femenina|mujer|female|masculino|masculina|hombre|male|[FM])\b", bloque, flags=re.IGNORECASE)
+        if not m:
+            return None
+        return normalizar_sexo_icg(m.group(1))
+
     if clave == "dni":
         m = re.search(r"(?:dni|documento|doc\.?|identificaci[oó]n|id)\s*[:=\-]?\s*([0-9.]{6,14})", bloque, flags=re.IGNORECASE)
         if m:
@@ -1265,6 +1272,12 @@ def aplicar_fallback_regex_global(lineas: List[str], filas: List[Dict[str, Any]]
                 if fecha:
                     agregar_si_util(filas, "FECHA_ESTUDIO", fecha, "fallback fecha estudio generica")
                     break
+    if "SEXO" not in ya:
+        m = re.search(r"(?:sexo(?:\s+biol[oó]gico)?|sex|g[eé]nero)\s*[:=\-]?\s*(femenino|femenina|mujer|female|masculino|masculina|hombre|male|[FM])\b", texto, flags=re.IGNORECASE)
+        if m:
+            sx = normalizar_sexo_icg(m.group(1))
+            if sx:
+                agregar_si_util(filas, "SEXO", sx, "fallback sexo")
     if "DNI" not in ya:
         m = re.search(r"(?:dni|documento|doc\.?|identificaci[oó]n)\s*[:=\-]?\s*([0-9.]{6,14})", texto, flags=re.IGNORECASE)
         if m:
@@ -1385,7 +1398,7 @@ def _parsear_bloque_lineas(lineas: List[str], archivo_origen: str, posicion_forz
         clave = claves_linea[0] if claves_linea else None
         if not clave:
             continue
-        if clave in ["paciente", "dni", "obra_social", "edad", "fecha", "fecha_estudio", "fecha_nacimiento"]:
+        if clave in ["paciente", "dni", "obra_social", "edad", "sexo", "fecha", "fecha_estudio", "fecha_nacimiento"]:
             val_demo = extraer_demografico(clave, linea, lineas[i + 1:i + 5])
             if es_valor_util(val_demo):
                 agregar_si_util(filas, clave.upper(), val_demo, linea)
@@ -1680,7 +1693,7 @@ def convertir_lineas_pdf_a_variables(registros: List[Dict[str, Any]]) -> pd.Data
         if not clave:
             continue
 
-        if clave in ["paciente", "dni", "obra_social", "edad", "fecha", "fecha_estudio", "fecha_nacimiento"]:
+        if clave in ["paciente", "dni", "obra_social", "edad", "sexo", "fecha", "fecha_estudio", "fecha_nacimiento"]:
             val_demo = extraer_demografico(clave, linea, lineas[i + 1:i + 5])
             if es_valor_util(val_demo):
                 agregar_si_util(filas, clave.upper(), val_demo, linea)
@@ -1916,6 +1929,7 @@ SINONIMOS_COLUMNAS: Dict[str, List[str]] = {
     "DNI": ["dni", "documento", "doc", "id"],
     "Obra_Social": ["obra social", "obra_social", "cobertura", "prepaga", "mutual", "seguro medico", "seguro médico", "financiador"],
     "Edad": ["edad", "age", "anos", "años", "years"],
+    "Sexo": ["sexo", "sexo biologico", "sexo biológico", "sex", "genero", "género"],
     "Fecha_Nacimiento": ["fecha de nacimiento", "fecha nacimiento", "f nacimiento", "f. nacimiento", "fec nacimiento", "fecha nac", "fec nac", "nacimiento", "dob", "birth date", "date of birth"],
     "Fecha_Estudio": ["fecha estudio", "fecha del estudio", "fecha de estudio", "fecha examen", "fecha del examen", "fecha medicion", "fecha medición", "study date", "fecha informe", "fecha del informe", "date"],
     "Fecha": ["fecha"],
@@ -1946,7 +1960,7 @@ SINONIMOS_COLUMNAS: Dict[str, List[str]] = {
 }
 
 ORDEN_VARIABLES_INFORME = [
-    "Paciente", "DNI", "Obra_Social", "Edad", "Fecha_Estudio", "Fecha_Nacimiento", "Diagnóstico", "Medicación", "Posición", "Texto_PDF", "PAS", "PAD", "FC", "IC", "IRV", "RVS", "CA", "CFT", "CFTnr",
+    "Paciente", "DNI", "Obra_Social", "Edad", "Sexo", "Fecha_Estudio", "Fecha_Nacimiento", "Diagnóstico", "Medicación", "Posición", "Texto_PDF", "PAS", "PAD", "FC", "IC", "IRV", "RVS", "CA", "CFT", "CFTnr",
     "IH", "IV", "IAC", "CTS", "EA", "EES", "EA/EES", "DS", "IDS", "Z0"
 ]
 
@@ -8661,8 +8675,13 @@ def _paper_datos_paciente_table(r: Dict[str, Any], contexto_embarazo: Optional[D
         ["Módulo", TITULO_MODULO_NO_EMBARAZADA, "", ""],
     ]
     if contexto_embarazo and contexto_embarazo.get("embarazada"):
+        # Se conserva sin cambios la estructura del informe obstétrico.
         eg = contexto_embarazo.get("edad_gestacional") or "No especificada"
         datos[3] = ["EG", f"{eg} semanas" if eg != "No especificada" else eg, "Módulo", "Hemodinamia materna"]
+    else:
+        sx = normalizar_sexo_icg(r.get("sexo"))
+        sexo_txt = "Femenino" if sx == "F" else ("Masculino" if sx == "M" else "No informado")
+        datos.insert(2, ["Sexo biológico", sexo_txt, "Referencia CFT", referencia_cft_sexo(sx, embarazo=False)[2]])
     return _paper_table(datos, col_widths=[ancho_total*0.16, ancho_total*0.34, ancho_total*0.18, ancho_total*0.32], header=False)
 
 
@@ -15943,7 +15962,16 @@ def extraer_resumen_integrado(df: pd.DataFrame) -> Dict[str, Any]:
             r[key] = None
     sexo = ultimo("Sexo")
     if es_valor_util(sexo):
-        r["sexo"] = str(sexo).strip().upper()
+        r["sexo"] = normalizar_sexo_icg(sexo) or str(sexo).strip().upper()
+
+    # ICA/CA debe tener magnitud de compliance arterial (mL/mmHg).
+    # Valores como 70-170 corresponden habitualmente a IAC y se descartan para evitar cruce de métricas.
+    ca_validada = limpiar_numero(r.get("ca"))
+    if ca_validada is None or not (0.20 <= ca_validada <= 8.00):
+        r["ca"] = None
+    else:
+        r["ca"] = ca_validada
+
     r["cts"] = normalizar_cts_cgi(r.get("cts"))
     ea, ees = limpiar_numero(r.get("ea")), limpiar_numero(r.get("ees"))
     if ea is not None and ees not in (None, 0):
@@ -16808,7 +16836,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         # INFORME OFICIAL NO OBSTÉTRICO: plantilla gráfica profesional CGI.
         # IMPORTANTE: este bloque se ejecuta exclusivamente cuando NO es embarazo;
         # el informe obstétrico precedente queda sin modificaciones.
-        titulo = "INFORME PROFESIONAL - CARDIOGRAFÍA DE IMPEDANCIA (CGI)"
+        titulo = "CARDIOGRAFÍA DE IMPEDANCIA (CGI)"
         sub = "ZLogic (Exxer) | Fenotipo hemodinámico, dominios integrados y orientación terapéutica"
         story += _paper_header_story(titulo, sub)
 
@@ -16841,7 +16869,10 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         ic = _val_local("ic")
         irv = _val_local("irv")
         iv = _val_local("iv")
-        ica = _val_local("ca")
+        ica_cruda = _val_local("ca")
+        # CA/ICA suele expresarse en mL/mmHg y debe permanecer en magnitud decimal.
+        # Un valor como 114 corresponde a otra métrica (habitualmente IAC), no a ICA.
+        ica = ica_cruda if ica_cruda is not None and 0.20 <= ica_cruda <= 8.00 else None
         iac = _val_local("iac")
         ivs = _val_local("ivs", "ids")
         cts = normalizar_cts_cgi(_val_local("cts"))
@@ -16871,7 +16902,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
             ["IC - Índice cardíaco", f"{fmt(ic,2)} L/min/m²", "2,5-4,0", _estado_rango(ic,2.5,4.0,"Flujo bajo","Flujo conservado","Flujo elevado")],
             ["IRV - Resistencia vascular indexada", f"{fmt(irv,0)} dyn.s.cm-5.m²", "1200-2000", _estado_rango(irv,1200,2000,"Vasodilatación relativa","Resistencia adecuada","Vasoconstricción/poscarga elevada")],
             ["IV - Índice de velocidad", f"{fmt(iv,1)} /1000/s", "35-60", _estado_rango(iv,35,60,"Velocidad contráctil reducida","Velocidad conservada","Velocidad aumentada")],
-            ["ICA/CA - Compliance arterial", f"{fmt(ica,2)} mL/mmHg", "Baja <1,00; normal 1,00-3,00; elevada >3,00", estado_ica_objetivo(ica)],
+            ["ICA/CA - Compliance arterial", (f"{fmt(ica,2)} mL/mmHg" if ica is not None else "NO INFORMADO"), "Baja <1,00; normal 1,00-3,00; elevada >3,00", (estado_ica_objetivo(ica) if ica is not None else "ICA NO INFORMADO: EL VALOR EXTRAÍDO NO CORRESPONDE A LA MAGNITUD DE COMPLIANCE ARTERIAL")],
             ["IAC - Índice de aceleración", f"{fmt(iac,1)} /100 s²", "70-150*", _estado_rango(iac,70,150,"Aceleración reducida","Aceleración conservada","Aceleración aumentada")],
             ["IVS/IDS - Índice de volumen sistólico", f"{fmt(ivs,1)} mL/lat/m²", "35-65", _estado_rango(ivs,35,65,"Volumen sistólico bajo","Volumen sistólico conservado","Volumen sistólico elevado")],
             ["CTS - PEP/LVET", fmt(cts,3), "0,30-0,50", clasificar_metrica_canonica("CTS",cts)],
@@ -19069,7 +19100,7 @@ def resumen_calidad_integracion(df: pd.DataFrame) -> Dict[str, Any]:
 # V120 - LENGUAJE OBJETIVO Y COHERENCIA ICA/CA
 # Aplicado a informes no obstétricos. No altera el módulo de embarazadas.
 # =========================================================
-BUILD_APP = "CGI-INFORME-OBJETIVO-ICA-COHERENTE-20260805"
+BUILD_APP = "CGI-ICA-ESTRICTA-SEXO-CFT-20260805"
 
 def clasificar_ica(valor: Any) -> str:
     return estado_ica_objetivo(valor)
