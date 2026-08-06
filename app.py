@@ -19286,3 +19286,176 @@ def diagnostico_ica(valor: Any) -> str:
         f"ICA/CA {fmt(v,2,' mL/mmHg')}: {estado_ica_objetivo(v)}. "
         "Referencia programada: baja <1,00; dentro de rango 1,00-3,00; elevada >3,00 mL/mmHg."
     )
+
+
+# =============================================================================
+# CORRECCIÓN FOCALIZADA (Sexo y CA) - Ricardo Daniel Olano
+# -----------------------------------------------------------------------------
+# Objetivo: garantizar que el SEXO del paciente y la COMPLACENCIA ARTERIAL (CA)
+# queden correctos en TODOS los formatos de informe.
+#
+# Motivo: en algunos PDF Z-Logic, pypdf (modo de lectura rápido) agrupa primero
+# todas las etiquetas y luego todos los valores en bloques separados (layout
+# "columnar"). La lectura por adyacencia etiqueta->valor entonces toma un número
+# equivocado para CA (p. ej. 114 o 5.0) y no reconoce el Sexo. pdfplumber, en
+# cambio, alinea etiqueta y valor.
+#
+# Esta corrección NO altera el DataFrame, la selección de filas ni ninguna otra
+# variable: solo re-extrae Sexo y CA del texto original del PDF (columna
+# Texto_PDF) y sobrescribe esas dos claves del resumen. Soporta layout inline
+# (pdfplumber) y columnar (pypdf). Si no logra extraer un valor confiable, deja
+# el resultado previo intacto.
+# =============================================================================
+
+def _fix_ca_columnar(txt: str) -> Optional[float]:
+    """Extrae CA (ml/mmHg) en layouts COLUMNARES alineando por posición el bloque
+    de etiquetas de nombre largo con el bloque de valores. Devuelve None si el
+    texto no es columnar (formato inline), para no interferir con ese caso."""
+    lineas = [l.strip() for l in re.split(r"[|\n\r]", str(txt)) if l.strip()]
+    canon = [
+        ("FC",  r"^(FC\s+)?Frecuencia\s+Card[ií]aca$"),
+        ("PA",  r"^(PA\s+)?(Sist[oó]lica\s*/\s*Diast[oó]lica.*|Presi[oó]n\s+Arterial\s+S/D.*)$"),
+        ("DS",  r"^(DS\s+)?Descarga\s+Sist[oó]lica$"),
+        ("IDS", r"^(IDS\s+)?Indice\s+de\s+Descarga\s+Sist[oó]lica$"),
+        ("VM",  r"^(VM\s+)?Volumen\s+Minuto$"),
+        ("IC",  r"^(IC\s+)?Indice\s+Card[ií]aco$"),
+        ("RVS", r"^(RVS\s+)?Resistencia\s+Vascular\s+Sist[eé]mica$"),
+        ("IRV", r"^(IRV\s+)?Indice\s+de\s+Res(?:istencia|\.)?\s+Vascular$"),
+        ("CA",  r"^(CA\s+)?Complacencia\s+Arterial$"),
+        ("IV",  r"^(IV\s+)?Indice\s+de\s+Velocidad$"),
+        ("IAC", r"^(IAC\s+)?Indice\s+de\s+Aceleraci[oó]n\s+Card[ií]aca$"),
+        ("CTS", r"^(CTS\s+)?Cociente\s+de\s+Tiempo\s+Sist[oó]lico.*$"),
+        ("ITC", r"^(ITC\s+)?Indice\s+de\s+Trabajo\s+Card[ií]aco$"),
+        ("CFT", r"^(CFT\s+)?Contenido\s+de\s+Fluidos\s+Tor[aá]cicos$"),
+    ]
+    def cual(linea: str) -> Optional[str]:
+        for nombre, pat in canon:
+            if re.match(pat, linea, flags=re.I):
+                return nombre
+        return None
+    def es_valor(l: str) -> bool:
+        return bool(
+            re.match(r"^[-+]?\d+(?:[.,]\d+)?$", l)
+            or re.match(r"^\d{2,3}\s*/\s*\d{2,3}\s*\(\s*\d{2,3}\s*\)$", l)
+            or re.match(r"^\d{2,3}\s*/\s*\d{2,3}$", l)
+            or re.match(r"^\d+\s*%\s*\(\s*\d+\s*/\s*\d+\s*\)$", l)
+        )
+    n = len(lineas)
+    i = 0
+    corrida = None
+    fin = None
+    while i < n:
+        if cual(lineas[i]):
+            j = i
+            seq = []
+            while j < n and cual(lineas[j]):
+                seq.append(cual(lineas[j]))
+                j += 1
+            if len(seq) >= 5:
+                corrida = seq
+                fin = j
+                break
+            i = j
+        else:
+            i += 1
+    if not corrida or "CA" not in corrida:
+        return None
+    k = fin
+    saltos = 0
+    while k < n and not es_valor(lineas[k]):
+        saltos += 1
+        if saltos > 3:
+            return None
+        k += 1
+    valores = []
+    while k < n and es_valor(lineas[k]):
+        valores.append(lineas[k])
+        k += 1
+    if len(valores) < len(corrida):
+        return None
+    idx = corrida.index("CA")
+    m = re.search(r"[-+]?\d+(?:[.,]\d+)?", valores[idx])
+    if not m:
+        return None
+    try:
+        v = float(m.group(0).replace(",", "."))
+    except Exception:
+        return None
+    return v if 0.15 <= v <= 8.5 else None
+
+
+def _fix_ca_confiable(txt: str) -> Optional[float]:
+    """CA (ml/mmHg) confiable para cualquier layout Z-Logic."""
+    v = _fix_ca_columnar(txt)
+    if v is not None:
+        return v
+    for m in re.finditer(r"Complacencia\s+Arterial\s*[:\-]?\s*([0-9]+[.,][0-9]+)", str(txt), flags=re.I):
+        ini = m.start()
+        prev = str(txt)[max(0, ini - 12):ini]
+        if re.search(r"Indice\s+de\s*$", prev, flags=re.I):
+            continue  # excluir "Indice de Complacencia Arterial" (ICA, ml/mmHg.m2)
+        try:
+            val = float(m.group(1).replace(",", "."))
+        except Exception:
+            continue
+        if 0.15 <= val <= 8.5:
+            return val
+    return None
+
+
+def _fix_sexo_confiable(txt: str) -> Optional[str]:
+    m = re.search(r"Sexo\s*[:\-]?\s*(femenino|femenina|mujer|masculino|masculina|hombre|[MF])\b",
+                  str(txt), flags=re.I)
+    if not m:
+        return None
+    return normalizar_sexo_icg(m.group(1))
+
+
+def _fix_texto_basal_para_sexo_ca(df: "pd.DataFrame") -> str:
+    """Concatena el texto original del PDF de las filas BASALES (referencia
+    diagnóstica) para que CA corresponda al valor basal, no al de PARADO."""
+    try:
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return ""
+        col_txt = None
+        for c in df.columns:
+            if str(c).strip().lower() in ("texto_pdf", "texto pdf", "texto"):
+                col_txt = c
+                break
+        if col_txt is None:
+            return ""
+        base = None
+        try:
+            base = _seleccionar_basal_df_final(df)
+        except Exception:
+            base = None
+        partes = []
+        if base is not None and isinstance(base, pd.DataFrame) and not base.empty and col_txt in base.columns:
+            partes = [str(x) for x in base[col_txt].tolist() if es_valor_util(x)]
+        if not partes:
+            partes = [str(x) for x in df[col_txt].tolist() if es_valor_util(x)]
+        return "\n".join(partes)
+    except Exception:
+        return ""
+
+
+_extraer_resumen_integrado_pre_fix_sexo_ca = extraer_resumen_integrado
+
+
+def extraer_resumen_integrado(df: "pd.DataFrame") -> Dict[str, Any]:
+    """Envoltorio final: corrige exclusivamente Sexo y CA del resumen, sin tocar
+    la selección de filas ni ninguna otra variable."""
+    r = _extraer_resumen_integrado_pre_fix_sexo_ca(df)
+    try:
+        r = dict(r or {})
+        txt = _fix_texto_basal_para_sexo_ca(df)
+        if txt:
+            sx = _fix_sexo_confiable(txt)
+            if sx is not None:
+                r["sexo"] = sx
+            ca = _fix_ca_confiable(txt)
+            if ca is not None:
+                r["ca"] = ca
+    except Exception:
+        pass
+    return r
