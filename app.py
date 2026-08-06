@@ -22,7 +22,7 @@ st.set_page_config(
 )
 
 AUTOR_APP = "Ricardo Daniel Olano - Especialista en Cardiología e Hipertensión Arterial"
-BUILD_APP = "CGI-INFORME-COMPLETO-SIN-FE-WEISSLER-20260804"
+BUILD_APP = "CGI-SEXO-ITC-CORREGIDO-20260805"
 TITULO_MODULO_NO_EMBARAZADA = "MODULO DE EVALUACION HEMODINAMICA NO INVASIVA POR CARDIOGRAFIA DE IMPEDANCIA"
 
 
@@ -658,6 +658,7 @@ def rango_plausible(clave: str, valor: Any) -> bool:
                 "iv": (0, 200),
         "iac": (0, 800),
         "cts": (0.05, 100),
+        "itc": (0.1, 50.0),
         "ea": (0.1, 10),
         "ees": (0.1, 20),
         "ava": (0.1, 5),
@@ -749,6 +750,7 @@ VARIABLES_CGI: Dict[str, List[str]] = {
     "iv": ["indice de velocidad", "velocity index", " iv "],
     "iac": ["indice de aceleracion", "índice de aceleración", "indice aceleracion", "índice aceleración", "aceleracion de contractilidad", "aceleración de contractilidad", "iac", "aci", "acceleration index", "acceleration contractility index", "acceleration", "aceleracion", "aceleración"],
     "ih": ["indice de heather", "índice de heather", "heather", "ih", "hi"],
+    "itc": ["itc", "indice de trabajo cardiaco", "índice de trabajo cardíaco", "indice trabajo cardiaco", "índice trabajo cardíaco", "cardiac work index", "lcwi", "lvwi", "its"],
     "cts": ["cts", "coeficiente tiempos sistolicos", "coeficiente de tiempos sistolicos", "coeficiente de tiempos sistólicos", "relacion tiempos sistolicos", "relación tiempos sistólicos", "relacion de tiempos sistolicos", "relación de tiempos sistólicos", "relacion sistolica", "relación sistólica", "pep/lvet", "pep / lvet", "pep / lvet ratio", "pep/tevi", "pep / tevi", "cts", "str", "systolic time ratio", "systolic ratio", "tiempos sistolicos"],
 
     "ea": ["elastancia arterial", " ea "],
@@ -1133,7 +1135,7 @@ def extraer_contexto_clinico_pdf(lineas: List[str]) -> Dict[str, Any]:
 
 CLAVES_NUMERICAS = [
     "pas_pad", "fc", "vm", "ic", "irv", "rvs", "ca", "cftnr", "cft", "ih", "iv", "iac", "cts",
-    "ea", "ees", "ava", "ids", "ds", "z0"
+    "itc", "ea", "ees", "ava", "ids", "ds", "z0"
 ]
 
 # Patrones más tolerantes para etiquetas exportadas por Z-Logic/CGI.
@@ -1142,6 +1144,7 @@ PATRONES_CLAVE = {
     "cft": r"(?:\bcft\b|\btfc\b|contenido\s+(?:de\s+)?fluidos?\s+tor[aá]cicos?|thoracic\s+fluid(?:\s+content)?)",
     "iac": r"(?:\biac\b|\baci\b|[ií]ndice\s+(?:de\s+)?aceleraci[oó]n|aceleraci[oó]n\s+(?:de\s+)?contractilidad|acceleration\s+(?:contractility\s+)?index)",
     "cts": r"(?:\bcts\b|\bstr\b|pep\s*/\s*lvet|pep\s*/\s*tevi|relaci[oó]n\s+(?:de\s+)?tiempos?\s+sist[oó]licos?|systolic\s+time\s+ratio)",
+    "itc": r"(?:\bitc\b|[ií]ndice\s+(?:de\s+)?trabajo\s+card[ií]aco|cardiac\s+work\s+index|\blcwi\b|\blvwi\b)",
     "fc": r"(?:frecuencia\s+card[ií]aca|frecuencia\s+cardiaca|heart\s+rate|\bhr\b|\bfc\b)",
     "vm": r"(?:\bvm\b|volumen\s+minuto|cardiac\s+output|\bco\b)",
     # IC estricto: NO incluir ITC/índice de trabajo cardíaco.
@@ -1167,7 +1170,7 @@ def claves_en_linea_robusto(linea: str) -> List[str]:
     bloquea_ic_por_itc = es_linea_itc_no_ic(txt)
     halladas = []
     # Orden intencional: CFTnr antes que CFT para no confundir ambos.
-    orden = ["cftnr", "cft", "ih", "iac", "cts", "pas_pad", "fc", "vm", "ic", "irv", "rvs", "ca", "iv", "ea", "ees", "ava", "ids", "ds", "z0"]
+    orden = ["cftnr", "cft", "ih", "iac", "cts", "itc", "pas_pad", "fc", "vm", "ic", "irv", "rvs", "ca", "iv", "ea", "ees", "ava", "ids", "ds", "z0"]
     for clave in orden:
         if clave == "ic" and (bloquea_ic_por_itc or not es_etiqueta_ic_explicita(txt)):
             continue
@@ -1278,6 +1281,17 @@ def aplicar_fallback_regex_global(lineas: List[str], filas: List[Dict[str, Any]]
             sx = normalizar_sexo_icg(m.group(1))
             if sx:
                 agregar_si_util(filas, "SEXO", sx, "fallback sexo")
+    if "ITC" not in ya:
+        patrones_itc = [
+            r"(?:\bITC\b|[ÍI]ndice\s+(?:de\s+)?Trabajo\s+Card[íi]aco|Cardiac\s+Work\s+Index|\bLCWI\b|\bLVWI\b)\s*[:=\-–—]?\s*([-+]?\d+(?:[.,]\d+)?)",
+        ]
+        for pat_itc in patrones_itc:
+            m_itc = re.search(pat_itc, texto, flags=re.IGNORECASE)
+            if m_itc:
+                v_itc = limpiar_numero(m_itc.group(1))
+                if rango_plausible("itc", v_itc):
+                    agregar_si_util(filas, "ITC", v_itc, "fallback ITC explícito")
+                    break
     if "DNI" not in ya:
         m = re.search(r"(?:dni|documento|doc\.?|identificaci[oó]n)\s*[:=\-]?\s*([0-9.]{6,14})", texto, flags=re.IGNORECASE)
         if m:
@@ -18646,6 +18660,233 @@ def limpiar_patrones_prohibidos(texto: Any) -> str:
     return t
 
 
+
+# =============================================================================
+# CORRECCIÓN FOCALIZADA (Sexo, CA/ICA e ITC) - Ricardo Daniel Olano - 2026-08-05
+# -----------------------------------------------------------------------------
+# Garantiza que en TODOS los formatos de informe se importen correctamente:
+#   * Sexo del paciente.
+#   * CA (Complacencia Arterial, ml/mmHg) y su índice ICA (ml/mmHg.m2).
+#   * ITC (Índice de Trabajo Cardíaco/sistólico).
+# Motivo: en el modo de lectura rápido (pypdf) las etiquetas y los valores se
+# agrupan en bloques separados (layout columnar); la lectura por adyacencia toma
+# números equivocados o no reconoce el dato. Estas variables se re-extraen del
+# texto original del PDF (columna Texto_PDF) alineando por posición el bloque
+# columnar, o de forma inline, y se re-afirman en el resumen. No se altera la
+# selección de filas ni ninguna otra variable numérica.
+# =============================================================================
+
+_FIX_CANON_COLUMNAR = [
+    ("FC",  r"^(FC\s+)?Frecuencia\s+Card[ií]aca$"),
+    ("PA",  r"^(PA\s+)?(Sist[oó]lica\s*/\s*Diast[oó]lica.*|Presi[oó]n\s+Arterial\s+S/D.*)$"),
+    ("DS",  r"^(DS\s+)?Descarga\s+Sist[oó]lica$"),
+    ("IDS", r"^(IDS\s+)?Indice\s+de\s+Descarga\s+Sist[oó]lica$"),
+    ("VM",  r"^(VM\s+)?Volumen\s+Minuto$"),
+    ("IC",  r"^(IC\s+)?Indice\s+Card[ií]aco$"),
+    ("RVS", r"^(RVS\s+)?Resistencia\s+Vascular\s+Sist[eé]mica$"),
+    ("IRV", r"^(IRV\s+)?Indice\s+de\s+Res(?:istencia|\.)?\s+Vascular$"),
+    ("CA",  r"^(CA\s+)?Complacencia\s+Arterial$"),
+    ("IV",  r"^(IV\s+)?Indice\s+de\s+Velocidad$"),
+    ("IAC", r"^(IAC\s+)?Indice\s+de\s+Aceleraci[oó]n\s+Card[ií]aca$"),
+    ("CTS", r"^(CTS\s+)?Cociente\s+de\s+Tiempo\s+Sist[oó]lico.*$"),
+    ("ITC", r"^(ITC\s+)?Indice\s+de\s+Trabajo\s+Card[ií]aco$"),
+    ("CFT", r"^(CFT\s+)?Contenido\s+de\s+Fluidos\s+Tor[aá]cicos$"),
+]
+
+
+def _fix_valor_columnar(txt: str, objetivo: str) -> Optional[float]:
+    """Devuelve el valor alineado por posición para el parámetro `objetivo` en un
+    layout columnar (bloque de etiquetas seguido de bloque de valores). Devuelve
+    None si el texto no es columnar."""
+    lineas = [l.strip() for l in re.split(r"[|\n\r]", str(txt)) if l.strip()]
+    def cual(linea: str) -> Optional[str]:
+        for nombre, pat in _FIX_CANON_COLUMNAR:
+            if re.match(pat, linea, flags=re.I):
+                return nombre
+        return None
+    def es_valor(l: str) -> bool:
+        return bool(
+            re.match(r"^[-+]?\d+(?:[.,]\d+)?$", l)
+            or re.match(r"^\d{2,3}\s*/\s*\d{2,3}\s*\(\s*\d{2,3}\s*\)$", l)
+            or re.match(r"^\d{2,3}\s*/\s*\d{2,3}$", l)
+            or re.match(r"^\d+\s*%\s*\(\s*\d+\s*/\s*\d+\s*\)$", l)
+        )
+    n = len(lineas); i = 0; corrida = None; fin = None
+    while i < n:
+        if cual(lineas[i]):
+            j = i; seq = []
+            while j < n and cual(lineas[j]):
+                seq.append(cual(lineas[j])); j += 1
+            if len(seq) >= 5:
+                corrida = seq; fin = j; break
+            i = j
+        else:
+            i += 1
+    if not corrida or objetivo not in corrida:
+        return None
+    k = fin; saltos = 0
+    while k < n and not es_valor(lineas[k]):
+        saltos += 1
+        if saltos > 3:
+            return None
+        k += 1
+    valores = []
+    while k < n and es_valor(lineas[k]):
+        valores.append(lineas[k]); k += 1
+    if len(valores) < len(corrida):
+        return None
+    idx = corrida.index(objetivo)
+    m = re.search(r"[-+]?\d+(?:[.,]\d+)?", valores[idx])
+    if not m:
+        return None
+    try:
+        return float(m.group(0).replace(",", "."))
+    except Exception:
+        return None
+
+
+def _fix_ca_confiable(txt: str) -> Optional[float]:
+    v = _fix_valor_columnar(txt, "CA")
+    if v is not None and 0.15 <= v <= 8.5:
+        return v
+    for m in re.finditer(r"Complacencia\s+Arterial\s*[:\-]?\s*([0-9]+[.,][0-9]+)", str(txt), flags=re.I):
+        ini = m.start(); prev = str(txt)[max(0, ini - 12):ini]
+        if re.search(r"Indice\s+de\s*$", prev, flags=re.I):
+            continue
+        try:
+            val = float(m.group(1).replace(",", "."))
+        except Exception:
+            continue
+        if 0.15 <= val <= 8.5:
+            return val
+    return None
+
+
+def _fix_ica_confiable(txt: str) -> Optional[float]:
+    for m in re.finditer(r"Indice\s+de\s+Complacencia\s+Arterial\s*[:\-]?\s*([0-9]+[.,][0-9]+)",
+                         str(txt), flags=re.I):
+        try:
+            v = float(m.group(1).replace(",", "."))
+        except Exception:
+            continue
+        if 0.05 <= v <= 5.0:
+            return v
+    return None
+
+
+def _fix_itc_confiable(txt: str) -> Optional[float]:
+    v = _fix_valor_columnar(txt, "ITC")
+    if v is not None and 0.1 <= v <= 50.0:
+        return v
+    for m in re.finditer(r"(?:ITC\s+)?Indice\s+de\s+Trabajo\s+Card[ií]aco\s*[:\-]?\s*([0-9]+(?:[.,][0-9]+)?)",
+                         str(txt), flags=re.I):
+        try:
+            v = float(m.group(1).replace(",", "."))
+        except Exception:
+            continue
+        if 0.1 <= v <= 50.0:
+            return v
+    return None
+
+
+def _fix_sexo_confiable(txt: str) -> Optional[str]:
+    m = re.search(r"Sexo\s*[:\-]?\s*(femenino|femenina|mujer|masculino|masculina|hombre|[MF])\b",
+                  str(txt), flags=re.I)
+    if not m:
+        return None
+    return normalizar_sexo_icg(m.group(1))
+
+
+def _fix_texto_basal(df: "pd.DataFrame") -> str:
+    """Texto original del PDF de las filas BASALES (referencia diagnóstica)."""
+    try:
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return ""
+        col_txt = None
+        for c in df.columns:
+            if str(c).strip().lower() in ("texto_pdf", "texto pdf", "texto"):
+                col_txt = c; break
+        if col_txt is None:
+            return ""
+        base = None
+        try:
+            base = _seleccionar_basal_df_final(df)
+        except Exception:
+            base = None
+        partes = []
+        if base is not None and isinstance(base, pd.DataFrame) and not base.empty and col_txt in base.columns:
+            partes = [str(x) for x in base[col_txt].tolist() if es_valor_util(x)]
+        if not partes:
+            partes = [str(x) for x in df[col_txt].tolist() if es_valor_util(x)]
+        return "\n".join(partes)
+    except Exception:
+        return ""
+
+
+_SEXO_ACTUAL_CGI: Optional[str] = None
+
+
+def _fix_aplicar_sexo_ca_itc(destino: Dict[str, Any], txt: str) -> None:
+    """Re-afirma sexo, CA, ICA e ITC sobre un dict de resumen a partir del texto."""
+    if not txt:
+        return
+    sx = _fix_sexo_confiable(txt)
+    if sx is not None:
+        destino["sexo"] = sx
+    ca = _fix_ca_confiable(txt)
+    if ca is not None:
+        destino["ca"] = ca
+    ica = _fix_ica_confiable(txt)
+    destino["ica"] = ica
+    itc = _fix_itc_confiable(txt)
+    if itc is not None:
+        destino["itc"] = itc
+        destino["its"] = itc
+
+
+_extraer_resumen_integrado_pre_fix_final = extraer_resumen_integrado
+
+
+def extraer_resumen_integrado(df: "pd.DataFrame") -> Dict[str, Any]:
+    global _SEXO_ACTUAL_CGI
+    r = _extraer_resumen_integrado_pre_fix_final(df)
+    try:
+        r = dict(r or {})
+        _fix_aplicar_sexo_ca_itc(r, _fix_texto_basal(df))
+        _SEXO_ACTUAL_CGI = normalizar_sexo_icg(r.get("sexo"))
+    except Exception:
+        pass
+    return r
+
+
+_resumen_acostado_cinta_para_patron_pre_fix_final = resumen_acostado_cinta_para_patron
+
+
+def resumen_acostado_cinta_para_patron(df, r_default=None):
+    out = _resumen_acostado_cinta_para_patron_pre_fix_final(df, r_default)
+    try:
+        out = dict(out or {})
+        _fix_aplicar_sexo_ca_itc(out, _fix_texto_basal(df))
+    except Exception:
+        pass
+    return out
+
+
+# Respaldo centralizado de sexo para clasificaciones dependientes de sexo
+# (CFT/volemia e IAC/contractilidad). El sexo explícito siempre tiene prioridad.
+_referencia_cft_sexo_sin_respaldo = referencia_cft_sexo
+def referencia_cft_sexo(sexo: Any = None, embarazo: bool = False):
+    if not embarazo and normalizar_sexo_icg(sexo) is None and _SEXO_ACTUAL_CGI:
+        sexo = _SEXO_ACTUAL_CGI
+    return _referencia_cft_sexo_sin_respaldo(sexo, embarazo=embarazo)
+
+
+_referencia_iac_sexo_sin_respaldo = referencia_iac_sexo
+def referencia_iac_sexo(sexo: Any = None, embarazo: bool = False):
+    if not embarazo and normalizar_sexo_icg(sexo) is None and _SEXO_ACTUAL_CGI:
+        sexo = _SEXO_ACTUAL_CGI
+    return _referencia_iac_sexo_sin_respaldo(sexo, embarazo=embarazo)
+
 r = extraer_resumen_integrado(df_final)
 paciente_detectado = normalizar_nombre_paciente(r.get("paciente")) or ""
 if es_paciente_pdf_invalido(paciente_detectado):
@@ -19292,230 +19533,3 @@ def diagnostico_ica(valor: Any) -> str:
         f"ICA/CA {fmt(v,2,' mL/mmHg')}: {estado_ica_objetivo(v)}. "
         "Referencia programada: baja <1,00; dentro de rango 1,00-3,00; elevada >3,00 mL/mmHg."
     )
-
-
-# =============================================================================
-# CORRECCIÓN FOCALIZADA (Sexo, CA/ICA e ITC) - Ricardo Daniel Olano - 2026-08-05
-# -----------------------------------------------------------------------------
-# Garantiza que en TODOS los formatos de informe se importen correctamente:
-#   * Sexo del paciente.
-#   * CA (Complacencia Arterial, ml/mmHg) y su índice ICA (ml/mmHg.m2).
-#   * ITC (Índice de Trabajo Cardíaco/sistólico).
-# Motivo: en el modo de lectura rápido (pypdf) las etiquetas y los valores se
-# agrupan en bloques separados (layout columnar); la lectura por adyacencia toma
-# números equivocados o no reconoce el dato. Estas variables se re-extraen del
-# texto original del PDF (columna Texto_PDF) alineando por posición el bloque
-# columnar, o de forma inline, y se re-afirman en el resumen. No se altera la
-# selección de filas ni ninguna otra variable numérica.
-# =============================================================================
-
-_FIX_CANON_COLUMNAR = [
-    ("FC",  r"^(FC\s+)?Frecuencia\s+Card[ií]aca$"),
-    ("PA",  r"^(PA\s+)?(Sist[oó]lica\s*/\s*Diast[oó]lica.*|Presi[oó]n\s+Arterial\s+S/D.*)$"),
-    ("DS",  r"^(DS\s+)?Descarga\s+Sist[oó]lica$"),
-    ("IDS", r"^(IDS\s+)?Indice\s+de\s+Descarga\s+Sist[oó]lica$"),
-    ("VM",  r"^(VM\s+)?Volumen\s+Minuto$"),
-    ("IC",  r"^(IC\s+)?Indice\s+Card[ií]aco$"),
-    ("RVS", r"^(RVS\s+)?Resistencia\s+Vascular\s+Sist[eé]mica$"),
-    ("IRV", r"^(IRV\s+)?Indice\s+de\s+Res(?:istencia|\.)?\s+Vascular$"),
-    ("CA",  r"^(CA\s+)?Complacencia\s+Arterial$"),
-    ("IV",  r"^(IV\s+)?Indice\s+de\s+Velocidad$"),
-    ("IAC", r"^(IAC\s+)?Indice\s+de\s+Aceleraci[oó]n\s+Card[ií]aca$"),
-    ("CTS", r"^(CTS\s+)?Cociente\s+de\s+Tiempo\s+Sist[oó]lico.*$"),
-    ("ITC", r"^(ITC\s+)?Indice\s+de\s+Trabajo\s+Card[ií]aco$"),
-    ("CFT", r"^(CFT\s+)?Contenido\s+de\s+Fluidos\s+Tor[aá]cicos$"),
-]
-
-
-def _fix_valor_columnar(txt: str, objetivo: str) -> Optional[float]:
-    """Devuelve el valor alineado por posición para el parámetro `objetivo` en un
-    layout columnar (bloque de etiquetas seguido de bloque de valores). Devuelve
-    None si el texto no es columnar."""
-    lineas = [l.strip() for l in re.split(r"[|\n\r]", str(txt)) if l.strip()]
-    def cual(linea: str) -> Optional[str]:
-        for nombre, pat in _FIX_CANON_COLUMNAR:
-            if re.match(pat, linea, flags=re.I):
-                return nombre
-        return None
-    def es_valor(l: str) -> bool:
-        return bool(
-            re.match(r"^[-+]?\d+(?:[.,]\d+)?$", l)
-            or re.match(r"^\d{2,3}\s*/\s*\d{2,3}\s*\(\s*\d{2,3}\s*\)$", l)
-            or re.match(r"^\d{2,3}\s*/\s*\d{2,3}$", l)
-            or re.match(r"^\d+\s*%\s*\(\s*\d+\s*/\s*\d+\s*\)$", l)
-        )
-    n = len(lineas); i = 0; corrida = None; fin = None
-    while i < n:
-        if cual(lineas[i]):
-            j = i; seq = []
-            while j < n and cual(lineas[j]):
-                seq.append(cual(lineas[j])); j += 1
-            if len(seq) >= 5:
-                corrida = seq; fin = j; break
-            i = j
-        else:
-            i += 1
-    if not corrida or objetivo not in corrida:
-        return None
-    k = fin; saltos = 0
-    while k < n and not es_valor(lineas[k]):
-        saltos += 1
-        if saltos > 3:
-            return None
-        k += 1
-    valores = []
-    while k < n and es_valor(lineas[k]):
-        valores.append(lineas[k]); k += 1
-    if len(valores) < len(corrida):
-        return None
-    idx = corrida.index(objetivo)
-    m = re.search(r"[-+]?\d+(?:[.,]\d+)?", valores[idx])
-    if not m:
-        return None
-    try:
-        return float(m.group(0).replace(",", "."))
-    except Exception:
-        return None
-
-
-def _fix_ca_confiable(txt: str) -> Optional[float]:
-    v = _fix_valor_columnar(txt, "CA")
-    if v is not None and 0.15 <= v <= 8.5:
-        return v
-    for m in re.finditer(r"Complacencia\s+Arterial\s*[:\-]?\s*([0-9]+[.,][0-9]+)", str(txt), flags=re.I):
-        ini = m.start(); prev = str(txt)[max(0, ini - 12):ini]
-        if re.search(r"Indice\s+de\s*$", prev, flags=re.I):
-            continue
-        try:
-            val = float(m.group(1).replace(",", "."))
-        except Exception:
-            continue
-        if 0.15 <= val <= 8.5:
-            return val
-    return None
-
-
-def _fix_ica_confiable(txt: str) -> Optional[float]:
-    for m in re.finditer(r"Indice\s+de\s+Complacencia\s+Arterial\s*[:\-]?\s*([0-9]+[.,][0-9]+)",
-                         str(txt), flags=re.I):
-        try:
-            v = float(m.group(1).replace(",", "."))
-        except Exception:
-            continue
-        if 0.05 <= v <= 5.0:
-            return v
-    return None
-
-
-def _fix_itc_confiable(txt: str) -> Optional[float]:
-    v = _fix_valor_columnar(txt, "ITC")
-    if v is not None and 0.1 <= v <= 50.0:
-        return v
-    for m in re.finditer(r"(?:ITC\s+)?Indice\s+de\s+Trabajo\s+Card[ií]aco\s*[:\-]?\s*([0-9]+(?:[.,][0-9]+)?)",
-                         str(txt), flags=re.I):
-        try:
-            v = float(m.group(1).replace(",", "."))
-        except Exception:
-            continue
-        if 0.1 <= v <= 50.0:
-            return v
-    return None
-
-
-def _fix_sexo_confiable(txt: str) -> Optional[str]:
-    m = re.search(r"Sexo\s*[:\-]?\s*(femenino|femenina|mujer|masculino|masculina|hombre|[MF])\b",
-                  str(txt), flags=re.I)
-    if not m:
-        return None
-    return normalizar_sexo_icg(m.group(1))
-
-
-def _fix_texto_basal(df: "pd.DataFrame") -> str:
-    """Texto original del PDF de las filas BASALES (referencia diagnóstica)."""
-    try:
-        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-            return ""
-        col_txt = None
-        for c in df.columns:
-            if str(c).strip().lower() in ("texto_pdf", "texto pdf", "texto"):
-                col_txt = c; break
-        if col_txt is None:
-            return ""
-        base = None
-        try:
-            base = _seleccionar_basal_df_final(df)
-        except Exception:
-            base = None
-        partes = []
-        if base is not None and isinstance(base, pd.DataFrame) and not base.empty and col_txt in base.columns:
-            partes = [str(x) for x in base[col_txt].tolist() if es_valor_util(x)]
-        if not partes:
-            partes = [str(x) for x in df[col_txt].tolist() if es_valor_util(x)]
-        return "\n".join(partes)
-    except Exception:
-        return ""
-
-
-_SEXO_ACTUAL_CGI: Optional[str] = None
-
-
-def _fix_aplicar_sexo_ca_itc(destino: Dict[str, Any], txt: str) -> None:
-    """Re-afirma sexo, CA, ICA e ITC sobre un dict de resumen a partir del texto."""
-    if not txt:
-        return
-    sx = _fix_sexo_confiable(txt)
-    if sx is not None:
-        destino["sexo"] = sx
-    ca = _fix_ca_confiable(txt)
-    if ca is not None:
-        destino["ca"] = ca
-    ica = _fix_ica_confiable(txt)
-    destino["ica"] = ica
-    itc = _fix_itc_confiable(txt)
-    if itc is not None:
-        destino["itc"] = itc
-        destino["its"] = itc
-
-
-_extraer_resumen_integrado_pre_fix_final = extraer_resumen_integrado
-
-
-def extraer_resumen_integrado(df: "pd.DataFrame") -> Dict[str, Any]:
-    global _SEXO_ACTUAL_CGI
-    r = _extraer_resumen_integrado_pre_fix_final(df)
-    try:
-        r = dict(r or {})
-        _fix_aplicar_sexo_ca_itc(r, _fix_texto_basal(df))
-        _SEXO_ACTUAL_CGI = normalizar_sexo_icg(r.get("sexo"))
-    except Exception:
-        pass
-    return r
-
-
-_resumen_acostado_cinta_para_patron_pre_fix_final = resumen_acostado_cinta_para_patron
-
-
-def resumen_acostado_cinta_para_patron(df, r_default=None):
-    out = _resumen_acostado_cinta_para_patron_pre_fix_final(df, r_default)
-    try:
-        out = dict(out or {})
-        _fix_aplicar_sexo_ca_itc(out, _fix_texto_basal(df))
-    except Exception:
-        pass
-    return out
-
-
-# Respaldo centralizado de sexo para clasificaciones dependientes de sexo
-# (CFT/volemia e IAC/contractilidad). El sexo explícito siempre tiene prioridad.
-_referencia_cft_sexo_sin_respaldo = referencia_cft_sexo
-def referencia_cft_sexo(sexo: Any = None, embarazo: bool = False):
-    if not embarazo and normalizar_sexo_icg(sexo) is None and _SEXO_ACTUAL_CGI:
-        sexo = _SEXO_ACTUAL_CGI
-    return _referencia_cft_sexo_sin_respaldo(sexo, embarazo=embarazo)
-
-
-_referencia_iac_sexo_sin_respaldo = referencia_iac_sexo
-def referencia_iac_sexo(sexo: Any = None, embarazo: bool = False):
-    if not embarazo and normalizar_sexo_icg(sexo) is None and _SEXO_ACTUAL_CGI:
-        sexo = _SEXO_ACTUAL_CGI
-    return _referencia_iac_sexo_sin_respaldo(sexo, embarazo=embarazo)
