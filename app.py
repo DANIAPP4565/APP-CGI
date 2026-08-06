@@ -16873,6 +16873,12 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
         # CA/ICA suele expresarse en mL/mmHg y debe permanecer en magnitud decimal.
         # Un valor como 114 corresponde a otra métrica (habitualmente IAC), no a ICA.
         ica = ica_cruda if ica_cruda is not None and 0.20 <= ica_cruda <= 8.00 else None
+        # Índice de Complacencia Arterial (ml/mmHg.m2) importado del PDF (None si no viene impreso).
+        indice_ca = limpiar_numero(rb.get("ica")) if isinstance(rb, dict) else None
+        if indice_ca is None:
+            indice_ca = limpiar_numero(r.get("ica"))
+        if indice_ca is not None and not (0.05 <= indice_ca <= 5.0):
+            indice_ca = None
         iac = _val_local("iac")
         ivs = _val_local("ivs", "ids")
         cts = normalizar_cts_cgi(_val_local("cts"))
@@ -16902,7 +16908,7 @@ def generar_pdf_resumido_una_hoja(df: pd.DataFrame, contexto_embarazo: Optional[
             ["IC - Índice cardíaco", f"{fmt(ic,2)} L/min/m²", "2,5-4,0", _estado_rango(ic,2.5,4.0,"Flujo bajo","Flujo conservado","Flujo elevado")],
             ["IRV - Resistencia vascular indexada", f"{fmt(irv,0)} dyn.s.cm-5.m²", "1200-2000", _estado_rango(irv,1200,2000,"Vasodilatación relativa","Resistencia adecuada","Vasoconstricción/poscarga elevada")],
             ["IV - Índice de velocidad", f"{fmt(iv,1)} /1000/s", "35-60", _estado_rango(iv,35,60,"Velocidad contráctil reducida","Velocidad conservada","Velocidad aumentada")],
-            ["ICA/CA - Compliance arterial", (f"{fmt(ica,2)} mL/mmHg" if ica is not None else "NO INFORMADO"), "Baja <1,00; normal 1,00-3,00; elevada >3,00", (estado_ica_objetivo(ica) if ica is not None else "ICA NO INFORMADO: EL VALOR EXTRAÍDO NO CORRESPONDE A LA MAGNITUD DE COMPLIANCE ARTERIAL")],
+            ["ICA/CA - Compliance arterial", ((f"{fmt(ica,2)} mL/mmHg" + (f" (ICA {fmt(indice_ca,2)} mL/mmHg\u00b7m\u00b2)" if indice_ca is not None else "")) if ica is not None else "NO INFORMADO"), "Baja <1,00; normal 1,00-3,00; elevada >3,00", (estado_ica_objetivo(ica) if ica is not None else "ICA NO INFORMADO: EL VALOR EXTRAÍDO NO CORRESPONDE A LA MAGNITUD DE COMPLIANCE ARTERIAL")],
             ["IAC - Índice de aceleración", f"{fmt(iac,1)} /100 s²", "70-150*", _estado_rango(iac,70,150,"Aceleración reducida","Aceleración conservada","Aceleración aumentada")],
             ["IVS/IDS - Índice de volumen sistólico", f"{fmt(ivs,1)} mL/lat/m²", "35-65", _estado_rango(ivs,35,65,"Volumen sistólico bajo","Volumen sistólico conservado","Volumen sistólico elevado")],
             ["CTS - PEP/LVET", fmt(cts,3), "0,30-0,50", clasificar_metrica_canonica("CTS",cts)],
@@ -19439,12 +19445,34 @@ def _fix_texto_basal_para_sexo_ca(df: "pd.DataFrame") -> str:
         return ""
 
 
+def _fix_ica_confiable(txt: str) -> Optional[float]:
+    """ICA (Índice de Complacencia Arterial, ml/mmHg.m2) importado del PDF.
+
+    Requiere el rótulo 'Indice de Complacencia Arterial' (distinto de CA). Si el
+    PDF no imprime el índice, devuelve None (no se calcula a partir de CA)."""
+    for m in re.finditer(r"Indice\s+de\s+Complacencia\s+Arterial\s*[:\-]?\s*([0-9]+[.,][0-9]+)",
+                         str(txt), flags=re.I):
+        try:
+            v = float(m.group(1).replace(",", "."))
+        except Exception:
+            continue
+        if 0.05 <= v <= 5.0:
+            return v
+    return None
+
+
+# Sexo del paciente del último resumen calculado. Sirve de respaldo para que las
+# clasificaciones dependientes de sexo (CFT/volemia, IAC/contractilidad) usen el
+# sexo importado aunque el sitio de llamada no lo pase explícitamente.
+_SEXO_ACTUAL_CGI: Optional[str] = None
+
 _extraer_resumen_integrado_pre_fix_sexo_ca = extraer_resumen_integrado
 
 
 def extraer_resumen_integrado(df: "pd.DataFrame") -> Dict[str, Any]:
     """Envoltorio final: corrige exclusivamente Sexo y CA del resumen, sin tocar
     la selección de filas ni ninguna otra variable."""
+    global _SEXO_ACTUAL_CGI
     r = _extraer_resumen_integrado_pre_fix_sexo_ca(df)
     try:
         r = dict(r or {})
@@ -19456,6 +19484,27 @@ def extraer_resumen_integrado(df: "pd.DataFrame") -> Dict[str, Any]:
             ca = _fix_ca_confiable(txt)
             if ca is not None:
                 r["ca"] = ca
+            ica = _fix_ica_confiable(txt)
+            r["ica"] = ica  # índice importado (ml/mmHg.m2); None si el PDF no lo imprime
+        _SEXO_ACTUAL_CGI = normalizar_sexo_icg(r.get("sexo"))
     except Exception:
         pass
     return r
+
+
+# --- Respaldo centralizado de sexo para clasificaciones CFT/volemia e IAC/contractilidad ---
+# Todas las referencias por sexo pasan por referencia_cft_sexo y referencia_iac_sexo.
+# Si el sitio de llamada no aporta sexo válido (y no es contexto de embarazo), se usa
+# el sexo importado del último resumen. El sexo explícito SIEMPRE tiene prioridad.
+_referencia_cft_sexo_sin_respaldo = referencia_cft_sexo
+def referencia_cft_sexo(sexo: Any = None, embarazo: bool = False) -> Tuple[Optional[float], Optional[float], str]:
+    if not embarazo and normalizar_sexo_icg(sexo) is None and _SEXO_ACTUAL_CGI:
+        sexo = _SEXO_ACTUAL_CGI
+    return _referencia_cft_sexo_sin_respaldo(sexo, embarazo=embarazo)
+
+
+_referencia_iac_sexo_sin_respaldo = referencia_iac_sexo
+def referencia_iac_sexo(sexo: Any = None, embarazo: bool = False) -> Tuple[float, float, str]:
+    if not embarazo and normalizar_sexo_icg(sexo) is None and _SEXO_ACTUAL_CGI:
+        sexo = _SEXO_ACTUAL_CGI
+    return _referencia_iac_sexo_sin_respaldo(sexo, embarazo=embarazo)
